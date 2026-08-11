@@ -252,7 +252,7 @@ export function mountApp(root: HTMLElement): void {
       lastPhase = msg.phase;
       lastTempK = msg.tempK;
       lastN = msg.n;
-      renderer?.drawFrame(msg.specId);
+      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK, n: msg.n });
     }
   };
 }

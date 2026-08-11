@@ -2,11 +2,20 @@
 // this project draws exactly one sprite"). The grid's specId array is
 // mapped to RGBA through a small per-specId color LUT and blitted as a
 // single nearest-filtered texture; no per-cell geometry.
-import { EMPTY } from '../sim/grid';
+import { EMPTY, PhaseCode } from '../sim/grid';
+import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
+import { pressureKPa } from '../sim/pressure';
+
+export interface FrameData {
+  specId: Uint16Array;
+  phase: Uint8Array;
+  tempK: Float32Array;
+  n: Uint8Array;
+}
 
 export interface Renderer {
   setColorForSpec(specId: number, hex: string): void;
-  drawFrame(specIdGrid: Uint16Array): void;
+  drawFrame(frame: FrameData): void;
 }
 
 const VERTEX_SRC = `#version 300 es
@@ -64,6 +73,34 @@ function hexToRgba(hex: string): [number, number, number, number] {
 const BACKGROUND_RGBA: [number, number, number, number] = [12, 12, 16, 255];
 const MISSING_SPEC_RGBA: [number, number, number, number] = [255, 0, 255, 255];
 
+// Gas cells' alpha channel doubles as a pressure readout: a near-vacuum gas
+// cell is barely visible, full opacity is reached around 3 atm. Solids and
+// liquids don't carry a mole count (grid.n stays 0, see pressure.ts) so
+// they're left fully opaque regardless of this scale.
+const PRESSURE_ALPHA_MIN = 40;
+const PRESSURE_ALPHA_FULL_KPA = 3 * 101.325;
+
+// Temperature overlay: cells warmer than ambient tint red, cooler tint
+// blue, saturating at +-TEMP_OVERLAY_RANGE_K away from ambient.
+const TEMP_OVERLAY_RANGE_K = 300;
+const TEMP_OVERLAY_MAX_STRENGTH = 0.55;
+const HOT_RGB: [number, number, number] = [255, 40, 20];
+const COLD_RGB: [number, number, number] = [40, 120, 255];
+
+function applyTemperatureOverlay(rgba: [number, number, number, number], tempK: number): [number, number, number, number] {
+  const deviation = tempK - AMBIENT_TEMPERATURE_K;
+  if (deviation === 0) return rgba;
+  const frac = Math.max(-1, Math.min(1, deviation / TEMP_OVERLAY_RANGE_K));
+  const strength = Math.abs(frac) * TEMP_OVERLAY_MAX_STRENGTH;
+  const tint = frac > 0 ? HOT_RGB : COLD_RGB;
+  return [
+    rgba[0] + (tint[0] - rgba[0]) * strength,
+    rgba[1] + (tint[1] - rgba[1]) * strength,
+    rgba[2] + (tint[2] - rgba[2]) * strength,
+    rgba[3],
+  ];
+}
+
 export function createRenderer(canvas: HTMLCanvasElement, width: number, height: number): Renderer {
   const gl = canvas.getContext('webgl2');
   if (!gl) throw new Error('WebGL2 is not supported in this browser');
@@ -97,15 +134,32 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame(specIdGrid: Uint16Array): void {
+    drawFrame({ specId: specIdGrid, phase, tempK, n }: FrameData): void {
       for (let i = 0; i < specIdGrid.length; i++) {
         const specId = specIdGrid[i];
-        const rgba = specId === EMPTY ? BACKGROUND_RGBA : (colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA);
         const o = i * 4;
+        if (specId === EMPTY) {
+          pixelBuffer[o] = BACKGROUND_RGBA[0];
+          pixelBuffer[o + 1] = BACKGROUND_RGBA[1];
+          pixelBuffer[o + 2] = BACKGROUND_RGBA[2];
+          pixelBuffer[o + 3] = BACKGROUND_RGBA[3];
+          continue;
+        }
+
+        let rgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
+        rgba = applyTemperatureOverlay(rgba, tempK[i] as number);
+
+        let alpha = rgba[3];
+        if (phase[i] === PhaseCode.Gas) {
+          const pressure = pressureKPa(n[i] as number, tempK[i] as number);
+          const frac = Math.max(0, Math.min(1, pressure / PRESSURE_ALPHA_FULL_KPA));
+          alpha = PRESSURE_ALPHA_MIN + frac * (255 - PRESSURE_ALPHA_MIN);
+        }
+
         pixelBuffer[o] = rgba[0];
         pixelBuffer[o + 1] = rgba[1];
         pixelBuffer[o + 2] = rgba[2];
-        pixelBuffer[o + 3] = rgba[3];
+        pixelBuffer[o + 3] = alpha;
       }
 
       gl.bindTexture(gl.TEXTURE_2D, texture);
