@@ -1,133 +1,54 @@
 # Architecture
 
-This document describes how the codebase is built, as opposed to why — the design rationale and every
-resolved trade-off lives in [.grill/chem-ca-sim.md](.grill/chem-ca-sim.md). Read that first if you're
-asking "why not just hardcode X"; the answer is almost always already there. This document assumes you've
-read it and want to know where things live and how they fit together.
+This document describes how the codebase is built. `.grill/chem-ca-sim.md` is a historical design doc:
+it argued for a graph-based, general chemistry engine (element-level bond/valence search rather than a
+hand-written reaction table) and that engine was actually built and shipped as `src/chem` through M1-M6.
+In practice it produced unpredictable products, temperature runaways, and pressure weirdness once real
+usage exercised it, so it was deleted and replaced with the much simpler static species/reaction table
+described below. `.grill/chem-ca-sim.md` is kept for the historical rationale (and the parts of it that
+still apply — grid layout, movement, energy/conduction, gas pressure, tools — are all unaffected), but its
+"why not just hardcode X" answer for chemistry specifically no longer reflects what's actually built.
 
 ## Layers
 
-The project is planned as four layers, built in that order (see the doc's "Build order").
+| Layer | Directory | Depends on |
+|---|---|---|
+| Static species/reaction data | `src/sim/species-data.ts`, `src/sim/reactions.ts` | nothing |
+| Simulation grid/worker | `src/sim` | the static data files above |
+| Renderer | `src/render` | `src/sim` |
+| UI | `src/ui` | `src/sim`, `src/render` |
 
-| Layer | Directory | Status | Depends on |
-|---|---|---|---|
-| Chemistry core | `src/chem` | **Built (M1)** | nothing (zero runtime deps) |
-| Simulation grid/worker | `src/sim` | **Built (M2 grid/movement, M3 energy, M4 tools)** | `src/chem` |
-| Renderer | `src/render` | **Built (M2)** | `src/sim` |
-| UI | `src/ui` | **Built (M2 palette/brush, M4 full tool set + inspector)** | `src/sim`, `src/render` |
+There is no separate headless chemistry layer anymore — species and reaction data are plain arrays
+consumed directly by `src/sim`, in the same module tree as the grid/tick-loop code that uses them.
 
-The chemistry core is deliberately headless and side-effect-free so it can run inside a Web Worker
-untouched — it never imports anything from the other three layers, and nothing in it knows about frames,
-cells, or a grid.
+## `src/sim/species-data.ts` and `src/sim/reactions.ts`: the static chemistry data
 
-## `src/chem`: the chemistry core
-
-### Data model
-
-- **`Element`** (`elements.ts`) — static per-element constants: molar mass, electronegativity, covalent/
-  ionic radius, standard valences, common ion charges, atomization enthalpy. 15 elements in v1.
-- **`MoleculeGraph`** (`types.ts`) — the universal currency: `{ atoms: Atom[], bonds: Bond[] }`. An `Atom`
-  carries a local id, element, and formal charge. A `Bond` carries an order: `0` means "ionic contact"
-  (not a shared-electron bond, routes to lattice-energy treatment), `1-3` means covalent single/double/
-  triple. Nothing else in the system (grid cells, reactants, products) is anything other than a
-  `MoleculeGraph` plus, once interned, a computed `MoleculeProperties`.
-- **`MoleculeSpec`** (`types.ts`) — a `MoleculeGraph` plus its canonical key, a `specId`, and its computed
-  `MoleculeProperties`. Only `InternedPool` produces these.
-- **`ReactionCandidate` / `ReactionOutcome`** — what `partition-search.ts` and `reaction.ts` return: a set
-  of product graphs plus ΔH/ΔS/ΔG/bonds-broken, and (outcome) the derived Ea/probability and whether it
-  fired.
-
-### Module responsibilities
-
-- **`canonical.ts`** — turns a `MoleculeGraph` into a canonical string key, via iterative
-  Weisfeiler-Leman-style atom-invariant refinement followed by a canonical DFS traversal (brute-forced
-  over every atom as a candidate root — cheap at ≤~12 atoms). This key is what makes two differently-
-  labeled graphs of the same molecule collapse to one interned species. It assumes acyclic-ish graphs,
-  consistent with v1 having no rings.
-- **`bonds.ts`** — the only place that knows what bonds are *legal*: `bondCategory` (ionic vs. covalent
-  vs. illegal-metal-metal), `canFormBondOrder`, the curated bond-dissociation-energy table with a
-  Pauling-style fallback for untabulated pairs, and the VSEPR-lite geometry helpers used for dipole
-  estimation.
-- **`properties.ts` + `overrides.ts`** — `computeProperties(graph)` is a pure function producing every
-  physical property from bond-additivity/structural estimates, then `overrides.ts` lets curated measured
-  values win per-field. This is the only place ΔHf, S°, dipole, bp/mp, and density get computed; nothing
-  else re-derives them.
-- **`intern.ts`** — `InternedPool`: canonicalizes, dedups by canonical key, computes properties once per
-  distinct species, assigns a stable `specId`. This is the only stateful class in `src/chem`.
-- **`partition-search.ts`** — the algorithmic core; see the walkthrough below. Also owns its own
-  `(reactantKeys, tempBucket) -> ReactionCandidate` memoization cache, module-scoped.
-- **`kinetics.ts`** — two pure functions: `evansPolanyiEa` and `reactionProbability`. Deliberately not
-  merged into the partition-search cache (see "Two-tier caching" below).
-- **`dissolution.ts`** — the separate ionic-solid-to-aqueous-ions pathway; see below.
-- **`reaction.ts`** — orchestration: decides whether a pair routes to dissolution or general
-  partition-search, and (in the `attempt*` variants) fires probabilistically via an injected `rng` and
-  interns the results into the caller's `InternedPool`.
-- **`index.ts`** — the curated public surface. Future consumers (the M2 worker) should only import from
-  here, not reach into individual modules.
-
-### Algorithm walkthrough: `findBestPartition`
-
-Given reactants A and (optionally) B and a temperature T:
-
-1. **Combine.** A's and B's atoms are merged into one pool, with B's local atom ids offset so every atom
-   keeps a globally-unique, stable id through the whole search — this is what lets the bonds-broken
-   calculation later compare specific atom pairs against the original bonds, regardless of how the atoms
-   get regrouped.
-2. **Shape generation.** The combined atom multiset is partitioned by *per-element count* (not
-   individual atom identity) into up to 3 groups, via a bounded stars-and-bars recursion. Shapes are
-   pruned before any bonding work: heavy-atom cap (6), carbon cap (2), and a necessary-but-not-sufficient
-   valence-feasibility check (can this many atoms even form a connected structure).
-3. **Per-group bonding.** `enumerateBondGraphs` splits into two entirely different constructors depending
-   on composition:
-   - **Covalent** (all-nonmetal groups): a backtracking DFS that picks the next unsaturated atom and
-     tries bonding it to another under-saturated atom at increasing order, with one atom allowed to stay
-     exactly one valence unit short (a legal radical). A brand-new triple bond is only permitted between
-     two currently-fully-unbonded atoms, and once formed blocks either atom from accepting anything else
-     — without this, valence-5 nitrogen could stay triple-bonded to another N *and* pick up extra O=
-     substituents, which is unphysical.
-   - **Ionic** (mixed metal+nonmetal groups): tries every combination of each atom's `commonIonCharges`
-     and keeps only combinations that sum to zero net charge, then connects them with a minimal spanning
-     tree (exact topology doesn't matter here — nothing downstream depends on which specific ionic
-     contacts exist, only that the group is charge-balanced and connected).
-   - A single atom on its own can *also* just pick a different one of its own common ion charges (or
-     revert to neutral) without bonding to anything — this is how simple electron transfer between two
-     atoms in the same reaction gets represented.
-4. **Isomer selection.** Multi-atom groups (covalent or ionic) immediately collapse to their single
-   lowest-ΔHf realization, since their net charge contribution is fixed regardless of which isomer wins.
-   Single-atom groups keep *all* their charge-option candidates.
-5. **Charge-conserving cross-product.** The single-atom groups' candidate sets are cross-producted, and
-   only combinations whose total charge matches the original reactants' total charge survive. This is
-   what makes e.g. Na + H⁺ → Na⁺ + H come out right instead of two independently-"cheapest" but
-   charge-imbalanced choices.
-6. **Score and select.** ΔH/ΔS/ΔG are computed from each surviving combination's `computeProperties`
-   calls (reusing whatever override applies), and the lowest-ΔG combination wins, ties broken by fewest
-   bonds broken. For unimolecular calls, a single-product result whose formula matches the original
-   reactant is excluded from candidacy — otherwise a stable molecule "decomposing into itself" (ΔH=0)
-   would always beat any real, higher-energy fragmentation, defeating the point of modeling metastable
-   species at all.
-
-### Two-tier caching
-
-`findBestPartition` caches on `(sorted reactant canonical keys, T rounded to the nearest 50K)` — this is
-what the design doc means by "search cost is paid once per novel encounter". `reactionProbability` is
-**not** part of that cache; it's evaluated at the exact T every call. If probability were bucketed too,
-ignition behavior would visibly stair-step every 50K instead of responding smoothly to temperature — the
-split exists specifically to avoid that.
-
-### The dissolution split
-
-Solid ionic lattices are `MoleculeGraph`s containing order-0 bonds. `reaction.ts`'s `reactPair` checks for
-this (`isIonicSolid`) combined with the other reactant being water (`isWater`, by formula) and routes to
-`dissolution.ts` instead of `partition-search.ts` — dissolution isn't a bond-forming/breaking process in
-the same sense, so it gets its own energy model (Kapustinskii lattice energy + Born hydration enthalpy +
-an assumed dissolution entropy) rather than being forced through the covalent/ionic bonding DFS.
+- **`species-data.ts`** — `SPECIES: readonly SpeciesData[]`, a fixed, hand-curated array (34 entries: 15
+  pure elements in their standard state, 17 compounds, 2 aqueous dissolution products). Each entry is
+  plain data: formula/label, color, density, phase at STP, melting/boiling point, per-phase specific heat
+  and thermal conductivity, latent heats, and a `paintable` flag. `SpeciesId` is a plain `{name: index}`
+  map giving every entry a stable numeric id (array index) for the reaction table and tick loop to
+  reference. There is no interning, canonicalization, or estimation step — every value here is a real,
+  hand-picked physical constant, which is what guarantees a reaction can never produce a species with
+  made-up properties (the old engine's actual failure mode): only what's listed here can ever exist.
+  Every species — even ones that are gas-only in practice (H2, N2, O2, Cl2) — has nonzero specific heat
+  and thermal conductivity for *every* phase, not just the one it normally occupies; a zero divisor there
+  is what caused `temperatureOf` (`heat.ts`) to blow up to `Infinity`/`NaN` the one time this wasn't true.
+- **`reactions.ts`** — `REACTIONS: readonly ReactionRule[]`, a hand-authored list of `reactants ->
+  products` rules (reactant `SpeciesId` pair, product `SpeciesId` list, `deltaH` in kJ/mol, an optional
+  `minTempK` ignition threshold, and a flat per-tick `probability`). `findReaction(specA, specB)` is an
+  order-independent lookup used once per adjacent cell pair, replacing what used to be a full bond-graph
+  search call. The rule set mirrors every compound the old engine's curated override table knew about
+  (combustion, halogenation, metal oxidation, one acid-base neutralization, and NaCl/H2O dissolution),
+  just re-expressed directly as formulas instead of being *derived* by a search each tick. There is
+  deliberately no rule for `AgCl + H2O` — that's the NaCl-dissolves/AgCl-doesn't calibration point the old
+  `dissolution.ts` doc comment called out, preserved here by simple omission.
 
 ## Testing strategy
 
-Unit tests are colocated per module (`foo.ts`/`foo.test.ts`). Three suites test the *system*, not a
-single module — see the "Testing conventions" section of `CLAUDE.md` for what each one covers. The
-golden-reactions suite is the actual M1 acceptance artifact: it's what the design doc's build order means
-by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction table" premise.
+Unit tests are colocated per module (`foo.ts`/`foo.test.ts`) under `src/sim`. `react.test.ts` covers the
+reaction table end-to-end on the grid (dissolution firing, AgCl not dissolving, ignition threshold,
+probability gating, energy bookkeeping).
 
 ## `src/sim`: grid, movement, and energy
 
@@ -136,10 +57,15 @@ by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction t
   the live, per-cell runtime phase — it can differ from a species' `phaseAtSTP` once a cell has been
   heated or cooled, and both movement and conduction read/write it directly rather than re-deriving it
   from the species table each time.
-- **`species.ts`** — `SpeciesTable`: a specId-indexed cache over `InternedPool`, exposing `phaseOf`
-  (STP phase, used only to build the initial palette), `densityOf`, and `thermalOf` (a `ThermalProfile`:
-  melt/boil points in K, specific heat and thermal conductivity per phase, latent heats). `buildPalette`
-  builds the M2/M3 paint palette (15 elements + water).
+- **`species.ts`** — `SpeciesTable`: a thin, eager wrapper directly over `species-data.ts`'s `SPECIES`
+  array (no interning — specIds are just array indices), exposing `phaseOf`, `densityOf`, and `thermalOf`
+  (a `ThermalProfile`: melt/boil points in K, specific heat and thermal conductivity per phase, latent
+  heats), with wall specIds branching out to `walls.ts` exactly as before. Aqueous species (the two
+  dissolution-product ions) carry water's own thermal profile directly in their `species-data.ts` entry
+  rather than being derived at runtime — a grid cell of "dissolved Na+" is ~1cm3 of dilute solution, not
+  pure liquid ionic sodium, so its own bp/mp/heat-capacity would be physically meaningless. `buildPalette`
+  builds the paint palette from every `SPECIES` entry with `paintable: true`: the 15 elements, water, and
+  the two ionic solids `NaCl`/`AgCl`, so dissolution (see `react.ts`) has something to demo both ways.
 - **`movement.ts`** — `stepMovement`: bottom-up falling-sand scan with alternating horizontal parity,
   per the design doc. Reads `grid.phase[idx]` (not the species' nominal phase) so a cell that has melted
   or frozen this tick immediately obeys its new phase's movement rule.
@@ -150,37 +76,86 @@ by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction t
   seed a freshly painted cell's `U` (and therefore its initial phase) from an ambient target temperature.
   Conduction itself accumulates energy deltas from a single per-tick snapshot of temperatures (like
   `movement`'s `moved` buffer, but summed rather than swapped) so the result doesn't depend on scan order;
-  flux between two cells is clamped to at most what would equalize their temperatures, and conductivity is
-  used as a relative rate constant, not a literal transport calculation, since a cell has no defined
-  physical size in meters. Reaction enthalpy (`U += -deltaH`) is not wired in yet — reactions are a later
-  milestone.
+  each *pairwise* flux is clamped to at most what would equalize that pair's temperatures, and
+  conductivity is used as a relative rate constant, not a literal transport calculation, since a cell has
+  no defined physical size in meters. That per-pair clamp alone isn't enough for stability, though: a
+  tiny-heat-capacity cell (a low-density gas, especially) touching several neighbors at once can still
+  receive more total flux in one tick than its own capacity holds, and left unclamped that overshoot
+  compounds tick over tick into an exponential runaway (observed in practice climbing to `Infinity`/`NaN`
+  within a few hundred ticks). Two independent guards fix this: the final per-cell update clamps a single
+  tick's *net* temperature swing to `MAX_DELTA_T_PER_TICK` (2000K, generous but finite), and separately
+  clamps the result to an absolute `MAX_TEMP_K` ceiling (10000K, well above any real transition in the
+  species table) via the shared `clampEnergyToMaxTemp` helper — the same helper `react.ts` uses, since a
+  cell that keeps getting re-ignited by fresh reactant drifting back in tick after tick has no per-tick
+  rate limit otherwise and was independently observed climbing into the tens of millions of K over a real
+  play session.
 - **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
 - **`walls.ts`** (M4) — glass/steel/insulator as a small fixed table of synthetic pseudo-species, *not*
-  chemistry molecules: the v1 element set has no silicon (so glass/SiO2 can't be interned) and "steel"
-  isn't a single compound anyway. specIds are reserved in a disjoint range (`0xff00..0xff02`, below the
-  `EMPTY` sentinel `0xffff` and above anything `InternedPool` will ever assign), so `grid.specId` stays
-  one flat `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to
-  branch to the wall table instead of the pool. Walls never melt/vaporize in v1 — `meltK` is set absurdly
+  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry) and "steel" isn't a
+  single compound anyway. specIds are reserved in a disjoint range (`0xff00..0xff02`, below the `EMPTY`
+  sentinel `0xffff` and above the highest `species-data.ts` index), so `grid.specId` stays one flat
+  `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to branch to
+  the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 — `meltK` is set absurdly
   high so `heat.ts`'s existing plateau logic simply never triggers, rather than adding special-case code —
-  and `movement.ts` skips them outright (neither a mover nor something the mover can displace into).
+  and `movement.ts` skips them outright (neither a mover nor something the mover can displace into). Each
+  wall's `wallStrength` is a multiple of ambient pressure (glass 3x, insulator 5x, steel 10x), the unit
+  `pressure.ts`'s `stepWallBurst` (M6) compares against.
 - **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent liquid/gas cells in a
   radius, independent of `movement.ts`'s density-driven swaps. This is **stirring only**. The design doc
-  frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs, but that
-  requires a reaction step on the grid, and reactions aren't wired into the tick loop yet (see "What's
-  next" below) — so today the mixer just visibly speeds up two same-phase liquids/gases mixing by color.
-  Revisit once reactions land.
-- **`worker.ts`** — owns the `SimGrid` and `InternedPool`, runs the tick loop (`movement -> heat`, per the
-  design doc's `movement -> heat -> react` order — heat now includes an optional point heat source before
-  conduction), and talks to the main thread over `postMessage`. Paint messages carry only a `specId`; the
-  worker derives the painted cell's initial `U`/phase from ambient temperature via `heat.ts`. M4 adds:
-  `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x — implemented
-  as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling `TICK_MS`,
-  which would make the swap-probability-per-tick physics run at different real rates instead of different
-  simulated rates), `heat`/`clearHeat` (a persistent point power source in **watts, not target
-  temperature** — deliberately, so boiling a painted liquid still costs real simulated time instead of
-  snapping to a setpoint; see `heat.ts`'s `applyPointHeatSource`), and `stir`. Frame messages now also
-  carry `phase` and a derived `tempK` grid so the UI's hover inspector can look up a cell locally without a
-  worker round trip per hover.
+  frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs; now that
+  `react.ts` (M5) wires reactions into the tick loop, stirring genuinely helps interface-limited pairs meet
+  faster, but the mixer implementation itself is unchanged from M4.
+- **`pressure.ts`** (M5) — gas pressure per the design doc's Q11: `grid.n` (u8, already reserved since M2)
+  holds a nominal 0-255 "fullness" unit for gas cells, not literal moles — cells have no defined physical
+  size (same convention as `heat.ts`'s mass), and `MOLES_PER_UNIT` is calibrated so a freshly painted, full
+  gas cell (`n=255`) reads ~1 atm at ambient temperature. `pressureKPa` derives pressure via the ideal gas
+  law `P = nRT/V`. `stepPressure` runs two passes: an order-independent snapshot-delta pass (mirroring
+  `heat.ts`'s `exchangeEnergy`) that equalizes `n` between adjacent gas cells of the *same* species, and a
+  live-mutating expansion pass that lets a pressurized gas cell leak a share of its `n` (and a matching
+  share of its energy, to keep temperature continuous) into an adjacent empty cell — so gas actually
+  dilutes into a vacuum instead of only relocating via `movement.ts`'s whole-cell swaps. Different gas
+  species sharing a boundary don't exchange `n` here; only `movement.ts`'s swaps can displace one gas past
+  another.
+- **`react.ts`** (M5) — wires `reactions.ts`'s static rule table into the grid tick loop: every adjacent
+  non-empty, non-wall cell pair is visited exactly once per tick (each unordered pair checked from its
+  top-left cell, same scan `heat.ts` uses), looked up via `findReaction(specA, specB)`, checked against
+  the rule's optional `minTempK` at the average of the two cells' derived temperatures, and fires
+  probabilistically via the shared `rng` against the rule's flat `probability`. This is what makes
+  dissolution (`NaCl + H2O -> Na+(aq) + Cl-(aq)`, just another rule) actually happen on the grid. Product
+  placement: 1-2 products reuse the two reactant cells directly; a 3rd product needs an empty neighbor
+  cell (searched around both reactant cells) or the reaction doesn't fire that tick. Reaction enthalpy
+  (`deltaH`) is scaled off reactant A's own nominal parcel mass (`massA / molarMassA`, the same "cell is a
+  parcel" convention `heat.ts` uses) and, along with both cells' pre-reaction `U` and `n`, is split across
+  product cells proportional to each product's own nominal mass — each product's *own* thermal profile
+  then decides its real resulting phase, and only a product that lands as a gas keeps a share of `n`. The
+  resulting energy is passed through `heat.ts`'s `clampEnergyToMaxTemp` (see above) before being written,
+  so a cell that keeps getting re-ignited tick after tick can't climb unboundedly.
+- **`pressure.ts`'s `stepWallBurst`** (M6) — the design doc's Q11 payoff ("past wall strength the vessel
+  bursts"): a wall cell adjacent to a gas cell whose pressure exceeds `wallStrength * ambient pressure` is
+  destroyed outright (`grid.clearAt`), not weakened incrementally. Destroying it just clears the cell to
+  empty; the actual escape happens the *next* tick, when `stepPressure`'s existing expansion pass finds a
+  newly-empty neighbor and pushes gas through it — no separate "gas rushes out" code needed, since that
+  pass already handles gas-into-vacuum. This is also the whole of M6's "apparatus" story: per the design
+  doc, apparatus was never scripted geometry, just player-drawn wall cells with `walls.ts`'s existing
+  per-material Tm/conductivity/strength, so a heated flask + sloping tube + cool section already gets
+  distillation (separation by boiling point) for free from M3's conduction and M2's movement — bursting was
+  the one piece of physics in that story that didn't already exist.
+- **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> heat ->
+  pressure -> wallBurst -> react`, per the design doc's `movement -> heat -> react` order, with M5's gas
+  pressure diffusion and M6's wall bursting grouped alongside heat as energy/gas-state concerns, run just
+  before reactions so a reaction sees the tick's settled pressure and any wall destroyed this tick — heat
+  itself includes an optional point heat source before conduction), and talks to the main thread over
+  `postMessage`. Paint messages carry only a `specId`; the
+  worker derives the painted cell's initial `U`/phase from ambient temperature via `heat.ts`, and (M5) a
+  freshly painted gas cell starts "full" (`n=255`). M4 adds: `step` (advance exactly one tick while paused,
+  for single-stepping), `setSpeed` (0.25x-4x — implemented as a fractional tick accumulator so ticks stay
+  whole and deterministic rather than scaling `TICK_MS`, which would make the swap-probability-per-tick
+  physics run at different real rates instead of different simulated rates), `heat`/`clearHeat` (a
+  persistent point power source in **watts, not target temperature** — deliberately, so boiling a painted
+  liquid still costs real simulated time instead of snapping to a setpoint; see `heat.ts`'s
+  `applyPointHeatSource`), and `stir`. Frame messages carry `phase`, a derived `tempK` grid, and (M5) `n` so
+  the UI's hover inspector can look up a cell (including gas pressure) locally without a worker round trip
+  per hover.
 
 ## `src/render` and `src/ui`
 
@@ -193,15 +168,21 @@ by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction t
   controls. A hover inspector panel is always active regardless of the selected tool (shows formula/wall
   label, temperature in K, and phase for the cell under the cursor) — probe isn't a separate selectable
   tool since hovering is unambiguous and doesn't compete with a click-drag tool the way paint/erase would.
-  Gas pressure isn't shown yet (`n` is unused until M5).
+  (M5) A gas cell's inspector line also shows pressure in kPa, via `pressure.ts`'s `pressureKPa` over the
+  frame's `n`/`tempK`. Reaction products can be any species in `species-data.ts`'s `SPECIES` array,
+  including the non-`paintable` ones that never appear in the initial palette (e.g. the aqueous ions); the
+  inspector falls back to `spec N` for those since the main thread only ever learns palette/wall labels
+  from the worker, not the full static table.
 
 ## What's next (not yet built)
 
-Per the design doc's build order: gases/pressure/aqueous ions at the grid level (M5), then walls/
-apparatus/distillation (M6) — note `src/sim/walls.ts` already gives M6 physical wall cells with a
-`wallStrength` field to build on, but vessel-bursting-past-strength logic itself isn't implemented (that's
-gated on M5's gas pressure existing first). Reactions (`src/chem`'s `reactPair`/`attemptReaction`) are
-implemented in the chemistry core but not yet wired into the worker's tick loop — there's no dedicated
-milestone number for that wiring in the design doc's build order, so treat it as arriving alongside
-whichever of M5/M6 first needs visible reactions, not as already done. The mixer tool (`mixer.ts`) is
-stirring-only until that wiring exists.
+The static species/reaction table (`species-data.ts` + `reactions.ts`) replaced the earlier graph-search
+chemistry engine; everything else from the original M1-M6 build order (grid/movement, energy/conduction,
+tools, gas pressure, vessel bursting) is unaffected and still in place. Beyond that, what's left is the
+"deliberately deferred" list from the historical design doc — organic chemistry/C-C chains, catalysis,
+momentum/velocity fields, pumps/vacuum/pH meters/pipettes, WebGPU, a Rust/WASM port, and any
+objective/scoring/progression layer — none of which is scheduled for v1. The one explicitly-called-out
+convenience feature still missing is prefab apparatus stamps (beaker/flask/condenser as one-click wall
+shapes); these are pure convenience over player-drawn wall cells, not new physics, so nothing in `src/sim`
+depends on them existing. Growing the reaction table itself (more compounds, more rules) is now just data
+entry in `reactions.ts`/`species-data.ts` — no engine changes required.

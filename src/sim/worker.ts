@@ -1,22 +1,28 @@
-// Web Worker: owns the SimGrid and the chemistry pool, runs the tick loop,
-// and talks to the main thread over postMessage. No reactions yet (that's
-// a later milestone) -- this tick does movement then energy/conduction/
-// phase-change, per the design doc's tick order (movement -> heat -> react)
-// and M3 scope (energy: conduction, phase change). M4 adds tools (walls
-// reuse the plain paint/erase messages since SpeciesTable branches
-// transparently on wall specIds; burner/coolant inject watts; mixer stirs)
-// and time controls (single-step, speed multiplier).
-import { InternedPool } from '../chem';
-import { SimGrid } from './grid';
+// Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
+// thread over postMessage. Tick order follows the design doc's movement ->
+// heat -> react, with gas pressure diffusion (M5) grouped alongside heat as
+// another energy/gas-state concern, run just before reactions so a reaction
+// sees this tick's settled pressure. M4 added tools (walls reuse the plain
+// paint/erase messages since SpeciesTable branches transparently on wall
+// specIds; burner/coolant inject watts; mixer stirs) and time controls
+// (single-step, speed multiplier). M5 adds gas pressure (pressure.ts) and
+// wires the static reaction table into the grid (react.ts) -- this is what
+// makes an ionic solid painted next to water actually dissolve into aqueous
+// ions on-grid. M6 adds vessel bursting: stepWallBurst runs right after
+// stepPressure so a wall destroyed this tick leaves an empty cell that the
+// *next* tick's pressure-expansion pass can actually push gas into.
+import { PhaseCode, SimGrid } from './grid';
 import { AMBIENT_TEMPERATURE_K, applyPointHeatSource, energyForTemperature, massOf, stepConduction, temperatureOf } from './heat';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
+import { FULL_N, stepPressure, stepWallBurst } from './pressure';
+import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
-  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; tick: number };
+  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; n: Uint8Array; tick: number };
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number }
@@ -35,9 +41,8 @@ const TICK_DT_SECONDS = TICK_MS / 1000;
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 4;
 
-const pool = new InternedPool();
-const palette = buildPalette(pool);
-const species = new SpeciesTable(pool);
+const palette = buildPalette();
+const species = new SpeciesTable();
 const grid = new SimGrid(WIDTH, HEIGHT);
 const rng = mulberry32(12345);
 
@@ -76,6 +81,9 @@ function runOneTick(): void {
     applyPointHeatSource(grid, activeHeatSource.x, activeHeatSource.y, activeHeatSource.radius, activeHeatSource.watts, TICK_DT_SECONDS);
   }
   stepConduction(grid, species);
+  stepPressure(grid);
+  stepWallBurst(grid, species);
+  stepReactions(grid, species, rng);
 }
 
 function computeTempGrid(): Float32Array {
@@ -96,6 +104,7 @@ function postFrame(): void {
     specId: grid.specId.slice(),
     phase: grid.phase.slice(),
     tempK: computeTempGrid(),
+    n: grid.n.slice(),
     tick,
   });
 }
@@ -107,7 +116,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       const mass = massOf(species, msg.specId);
       const thermal = species.thermalOf(msg.specId);
       const { u, phase } = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
+      // A freshly painted gas cell starts "full" (n=255, ~1 atm at ambient
+      // T -- see pressure.ts); other phases don't use n.
+      const n = phase === PhaseCode.Gas ? FULL_N : 0;
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u, n));
       break;
     }
     case 'erase':

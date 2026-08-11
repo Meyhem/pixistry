@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { InternedPool } from '../chem';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import {
   AMBIENT_TEMPERATURE_K,
@@ -25,9 +24,8 @@ function totalEnergy(grid: SimGrid): number {
 
 describe('temperatureOf / energyForTemperature', () => {
   it('round-trips a temperature below the melting point back to itself, as solid', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
     const thermal = species.thermalOf(iron.specId);
     const mass = massOf(species, iron.specId);
@@ -42,9 +40,8 @@ describe('temperatureOf / energyForTemperature', () => {
   });
 
   it('paints water at ambient temperature as liquid', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const water = findEntry(palette, 'H2O');
     const thermal = species.thermalOf(water.specId);
     const mass = massOf(species, water.specId);
@@ -54,9 +51,8 @@ describe('temperatureOf / energyForTemperature', () => {
   });
 
   it('holds temperature flat across the melt plateau', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const water = findEntry(palette, 'H2O');
     const thermal = species.thermalOf(water.specId);
     const mass = massOf(species, water.specId);
@@ -76,9 +72,8 @@ describe('temperatureOf / energyForTemperature', () => {
   });
 
   it('boils into a gas once past the vaporization plateau', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const water = findEntry(palette, 'H2O');
     const thermal = species.thermalOf(water.specId);
     const mass = massOf(species, water.specId);
@@ -97,9 +92,8 @@ describe('temperatureOf / energyForTemperature', () => {
 
 describe('stepConduction', () => {
   it('moves energy from the hotter cell to the colder cell', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(2, 1);
@@ -115,9 +109,8 @@ describe('stepConduction', () => {
   });
 
   it('conserves total energy across a conduction step', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
     const water = findEntry(palette, 'H2O');
 
@@ -138,9 +131,8 @@ describe('stepConduction', () => {
   });
 
   it('never conducts through an empty (vacuum) cell', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 1);
@@ -157,9 +149,8 @@ describe('stepConduction', () => {
   });
 
   it('melts ice into liquid water once enough energy is conducted in', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const water = findEntry(palette, 'H2O');
     const iron = findEntry(palette, 'Fe');
 
@@ -178,8 +169,7 @@ describe('stepConduction', () => {
 
 describe('applyPointHeatSource', () => {
   it('adds energy (watts * dt) to every non-empty cell in radius', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 3);
@@ -191,8 +181,7 @@ describe('applyPointHeatSource', () => {
   });
 
   it('removes energy for negative watts (coolant), clamped at zero', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(1, 1);
@@ -212,8 +201,7 @@ describe('applyPointHeatSource', () => {
   });
 
   it('is a no-op for zero watts', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(1, 1);

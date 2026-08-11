@@ -1,5 +1,14 @@
 # Grill session: 2D cellular-automata chemistry lab sim
 
+> **Superseded 2026-08-11.** The graph-search chemistry engine this doc argues for (`src/chem`) was built
+> and shipped, then deleted the same day after real usage showed it produced unpredictable products,
+> temperature runaways, and pressure weirdness — it was replaced with a small hand-authored
+> `reactants -> products` table (`src/sim/species-data.ts` + `src/sim/reactions.ts`). This doc is kept for
+> historical rationale; the grid/movement/energy/pressure/tools sections still describe what's built, but
+> the chemistry-model sections below (and the "not a hand-written reaction table" goal) no longer reflect
+> the actual code. See [CLAUDE.md](../CLAUDE.md) and [ARCHITECTURE.md](../ARCHITECTURE.md) for current
+> state.
+
 Session date 2026-08-11. Topic: a 2D falling-sand-style scientific chemistry
 sandbox — lab bench view, no character, spawn/erase chemicals, observe reactions,
 temperature and pressure, phases of matter, later distillation and other apparatus.

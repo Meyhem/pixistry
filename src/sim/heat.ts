@@ -16,6 +16,28 @@ export const CELL_VOLUME_CM3 = 1;
 export const AMBIENT_TEMPERATURE_K = 298.15;
 
 const CONDUCTION_RATE = 0.02;
+// See stepConduction's final loop -- caps how far a single tick's summed
+// conduction flux can move a cell's own temperature, to stay finite even
+// when several neighbors push/pull a tiny-heat-capacity cell at once.
+const MAX_DELTA_T_PER_TICK = 2000;
+
+// Hard ceiling well above every real transition in the species table (the
+// hottest boiling point is carbon's ~5100K) -- a tiny-heat-capacity gas
+// cell that keeps getting re-ignited by react.ts on successive ticks (fresh
+// reactant drifting back in after each reaction) has no per-tick rate limit
+// the way conduction does above, so without an absolute cap its energy can
+// still climb into physically absurd territory over many ticks even though
+// no single step is individually unbounded.
+export const MAX_TEMP_K = 10000;
+
+/** Clamps u so its implied temperature never exceeds MAX_TEMP_K. Shared by
+ * stepConduction and react.ts's placeProducts -- the two write paths that
+ * can add unbounded-over-time energy to a cell. */
+export function clampEnergyToMaxTemp(thermal: ThermalProfile, massG: number, u: number): number {
+  if (massG <= 0) return u;
+  const maxU = energyForTemperature(thermal, massG, MAX_TEMP_K).u;
+  return Math.min(u, maxU);
+}
 
 interface EnergyLandmarks {
   uMeltStart: number;
@@ -167,11 +189,26 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
 
   for (let idx = 0; idx < grid.u.length; idx++) {
     if (grid.specId[idx] === EMPTY) continue;
-    const newU = (grid.u[idx] as number) + (deltaU[idx] as number);
+    const specId = grid.specId[idx] as number;
+    const mass = massOf(species, specId);
+    const thermal = species.thermalOf(specId);
+    const phase = grid.phase[idx] as PhaseCode;
+    const capacity = mass * heatCapacityFor(thermal, phase);
+
+    // Each pairwise flux above is clamped to half *that pair's* capacity
+    // gap, but a cell touching several neighbors at once (tiny-capacity gas
+    // cells sitting between several larger neighbors, especially) can still
+    // receive more total flux this tick than its own capacity holds -- left
+    // unclamped that overshoot compounds tick over tick into an exponential
+    // runaway (temperature and, downstream, pressure spiking to Infinity).
+    // Bounding a single tick's own temperature swing to a generous but
+    // finite MAX_DELTA_T_PER_TICK breaks that feedback loop without
+    // otherwise affecting normal (non-runaway) conduction.
+    const maxDelta = capacity * MAX_DELTA_T_PER_TICK;
+    const clampedDeltaU = Math.max(-maxDelta, Math.min(maxDelta, deltaU[idx] as number));
+    const newU = clampEnergyToMaxTemp(thermal, mass, Math.max(0, (grid.u[idx] as number) + clampedDeltaU));
     grid.u[idx] = newU;
 
-    const specId = grid.specId[idx] as number;
-    const { phase } = temperatureOf(species.thermalOf(specId), massOf(species, specId), newU);
-    grid.phase[idx] = phase;
+    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
   }
 }

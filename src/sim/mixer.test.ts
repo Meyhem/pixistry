@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { InternedPool } from '../chem';
 import { PhaseCode, SimGrid } from './grid';
 import { stirRegion } from './mixer';
 import { mulberry32 } from './rng';
@@ -23,8 +22,7 @@ function countBySpec(grid: SimGrid): Map<number, number> {
 
 describe('stirRegion', () => {
   it('conserves the count of each species', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const water = findEntry(palette, 'H2O');
     const hydrogen = findEntry(palette, 'H2');
 
@@ -40,8 +38,7 @@ describe('stirRegion', () => {
   });
 
   it('does not touch solids or walls', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(5, 5);
@@ -64,8 +61,7 @@ describe('stirRegion', () => {
   });
 
   it('actually moves some liquid cells over many pulses', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
+    const palette = buildPalette();
     const water = findEntry(palette, 'H2O');
     const hydrogen = findEntry(palette, 'H2');
 

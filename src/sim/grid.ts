@@ -42,16 +42,22 @@ export class SimGrid {
     return this.specId[idx] === EMPTY;
   }
 
-  set(x: number, y: number, specId: number, phase: PhaseCode, u = 0): void {
-    const idx = this.index(x, y);
-    this.specId[idx] = specId;
-    this.phase[idx] = phase;
-    this.u[idx] = u;
-    this.n[idx] = 0;
+  set(x: number, y: number, specId: number, phase: PhaseCode, u = 0, n = 0): void {
+    this.setAt(this.index(x, y), specId, phase, u, n);
   }
 
   clear(x: number, y: number): void {
-    const idx = this.index(x, y);
+    this.clearAt(this.index(x, y));
+  }
+
+  setAt(idx: number, specId: number, phase: PhaseCode, u = 0, n = 0): void {
+    this.specId[idx] = specId;
+    this.phase[idx] = phase;
+    this.u[idx] = u;
+    this.n[idx] = n;
+  }
+
+  clearAt(idx: number): void {
     this.specId[idx] = EMPTY;
     this.phase[idx] = PhaseCode.Empty;
     this.u[idx] = 0;

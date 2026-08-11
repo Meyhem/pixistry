@@ -1,11 +1,13 @@
 // M4 UI: the full v1 tool set (paint, erase, wall materials, burner,
 // coolant, probe, mixer) plus time controls (pause, single-step, speed
 // multiplier) and a hover inspector -- all plain DOM per the design doc's
-// "src/ui plain DOM/React panels", no framework.
+// "src/ui plain DOM/React panels", no framework. M5 adds a pressure
+// reading to the inspector for gas cells.
 import { createRenderer, type Renderer } from '../render/renderer';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
+import { pressureKPa } from '../sim/pressure';
 import { wallList } from '../sim/walls';
 
 const BRUSH_RADIUS = 2;
@@ -61,10 +63,11 @@ export function mountApp(root: HTMLElement): void {
   let activeButton: HTMLButtonElement | null = null;
   let isPointerDown = false;
 
-  // Label lookup for the probe: real species come from the palette (the
-  // full v1 tool set has no reactions wired in yet, so every specId that
-  // can ever appear on the grid is one of these), walls from the fixed
-  // wall table.
+  // Label lookup for the probe: palette species and walls. Reaction
+  // products (M5) can mint specIds beyond the initial palette -- the
+  // inspector falls back to `spec N` for those (see updateInspector); a
+  // real formula lookup would need the main thread to see the worker's
+  // InternedPool, which it deliberately doesn't.
   const labelBySpecId = new Map<number, string>();
   for (const wall of wallList()) labelBySpecId.set(wall.specId, wall.label);
 
@@ -73,6 +76,7 @@ export function mountApp(root: HTMLElement): void {
   let lastSpecId: Uint16Array | null = null;
   let lastPhase: Uint8Array | null = null;
   let lastTempK: Float32Array | null = null;
+  let lastN: Uint8Array | null = null;
 
   function setActive(button: HTMLButtonElement): void {
     activeButton?.classList.remove('active');
@@ -195,7 +199,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function updateInspector(x: number, y: number): void {
-    if (!lastSpecId || !lastPhase || !lastTempK || !renderer) return;
+    if (!lastSpecId || !lastPhase || !lastTempK || !lastN || !renderer) return;
     if (x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) return;
     const idx = y * gridWidth + x;
     const specId = lastSpecId[idx] as number;
@@ -205,8 +209,13 @@ export function mountApp(root: HTMLElement): void {
     }
     const label = labelBySpecId.get(specId) ?? `spec ${specId}`;
     const tempK = lastTempK[idx] as number;
-    const phase = PHASE_LABEL[lastPhase[idx] as number] ?? 'unknown';
-    inspector.textContent = `${label}  ${tempK.toFixed(1)} K  (${phase})`;
+    const phaseCode = lastPhase[idx] as number;
+    const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
+    // Pressure only means anything for a gas cell -- liquids/solids don't
+    // carry a mole count (grid.n stays 0), see pressure.ts.
+    const pressureSuffix =
+      phaseCode === PhaseCode.Gas ? `  ${pressureKPa(lastN[idx] as number, tempK).toFixed(1)} kPa` : '';
+    inspector.textContent = `${label}  ${tempK.toFixed(1)} K  (${phase})${pressureSuffix}`;
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -242,6 +251,7 @@ export function mountApp(root: HTMLElement): void {
       lastSpecId = msg.specId;
       lastPhase = msg.phase;
       lastTempK = msg.tempK;
+      lastN = msg.n;
       renderer?.drawFrame(msg.specId);
     }
   };

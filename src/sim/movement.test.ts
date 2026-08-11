@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { InternedPool } from '../chem';
 import { EMPTY, SimGrid } from './grid';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
@@ -21,9 +20,8 @@ function countNonEmpty(grid: SimGrid): number {
 
 describe('stepMovement', () => {
   it('a solid falls one row per tick through vacuum', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 5);
@@ -40,9 +38,8 @@ describe('stepMovement', () => {
   });
 
   it('a gas rises one row per tick through vacuum', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const hydrogen = findEntry(palette, 'H2');
 
     const grid = new SimGrid(3, 5);
@@ -56,9 +53,8 @@ describe('stepMovement', () => {
   });
 
   it('a dense solid sinks through a liquid', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
     const water = findEntry(palette, 'H2O');
     expect(species.densityOf(iron.specId)).toBeGreaterThan(species.densityOf(water.specId));
@@ -75,9 +71,8 @@ describe('stepMovement', () => {
   });
 
   it('conserves the number of occupied cells', () => {
-    const pool = new InternedPool();
-    const palette = buildPalette(pool);
-    const species = new SpeciesTable(pool);
+    const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
     const hydrogen = findEntry(palette, 'H2');
 
@@ -94,10 +89,9 @@ describe('stepMovement', () => {
   });
 
   it('is deterministic for a given seed', () => {
-    const pool = new InternedPool();
-    buildPalette(pool);
-    const species = new SpeciesTable(pool);
-    const palette = buildPalette(pool);
+    buildPalette();
+    const species = new SpeciesTable();
+    const palette = buildPalette();
     const iron = findEntry(palette, 'Fe');
     const hydrogen = findEntry(palette, 'H2');
 
@@ -115,8 +109,7 @@ describe('stepMovement', () => {
   });
 
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
-    const pool = new InternedPool();
-    const species = new SpeciesTable(pool);
+    const species = new SpeciesTable();
     const grid = new SimGrid(4, 4);
     const rng = mulberry32(5);
     stepMovement(grid, species, rng, 0);
