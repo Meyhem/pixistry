@@ -136,10 +136,44 @@ const CURATED: Record<string, OverrideFields> = {
   },
 };
 
-export const OVERRIDES: Record<string, OverrideFields> = {
-  ...standardStateZeroOverrides(),
-  ...CURATED,
+// Bond-additivity estimation has no notion of metallic or lattice cohesion --
+// a lone unbonded atom (how pure elements intern) estimates a near-zero bp,
+// which would put every metal in the vapor phase at room temperature. Real
+// measured mp/bp/density/color for each element's standard state, same
+// override mechanism as any other precision-sensitive species.
+const PURE_ELEMENTS: Record<string, OverrideFields> = {
+  H2: { meltingPointC: -259.1, boilingPointC: -252.9, density: 0.00009, phaseAtSTP: Phase.Gas, color: '#eaf6ff' },
+  N2: { meltingPointC: -210.0, boilingPointC: -195.8, density: 0.00125, phaseAtSTP: Phase.Gas, color: '#dfefff' },
+  O2: { meltingPointC: -218.3, boilingPointC: -183.0, density: 0.00143, phaseAtSTP: Phase.Gas, color: '#a8d8ff' },
+  Cl2: { meltingPointC: -101.5, boilingPointC: -34.0, density: 0.00321, phaseAtSTP: Phase.Gas, color: '#c8e070' },
+  C: { meltingPointC: 3550, boilingPointC: 4827, density: 2.26, phaseAtSTP: Phase.Solid, color: '#2b2b2b' },
+  Na: { meltingPointC: 97.8, boilingPointC: 883, density: 0.97, phaseAtSTP: Phase.Solid, color: '#c9c2d8' },
+  Mg: { meltingPointC: 650, boilingPointC: 1091, density: 1.74, phaseAtSTP: Phase.Solid, color: '#e0e0e0' },
+  Al: { meltingPointC: 660.3, boilingPointC: 2519, density: 2.70, phaseAtSTP: Phase.Solid, color: '#c8c8cc' },
+  S: { meltingPointC: 115.2, boilingPointC: 444.6, density: 2.07, phaseAtSTP: Phase.Solid, color: '#e8d84a' },
+  K: { meltingPointC: 63.5, boilingPointC: 759, density: 0.86, phaseAtSTP: Phase.Solid, color: '#c9b8d8' },
+  Ca: { meltingPointC: 842, boilingPointC: 1484, density: 1.55, phaseAtSTP: Phase.Solid, color: '#b9b9a8' },
+  Fe: { meltingPointC: 1538, boilingPointC: 2862, density: 7.87, phaseAtSTP: Phase.Solid, color: '#8a8a8a' },
+  Cu: { meltingPointC: 1085, boilingPointC: 2562, density: 8.96, phaseAtSTP: Phase.Solid, color: '#b5651d' },
+  Zn: { meltingPointC: 419.5, boilingPointC: 907, density: 7.13, phaseAtSTP: Phase.Solid, color: '#a0a8ac' },
+  Ag: { meltingPointC: 961.8, boilingPointC: 2162, density: 10.49, phaseAtSTP: Phase.Solid, color: '#d8d8dc' },
 };
+
+function mergeOverrides(...layers: Record<string, OverrideFields>[]): Record<string, OverrideFields> {
+  const result: Record<string, OverrideFields> = {};
+  for (const layer of layers) {
+    for (const [key, fields] of Object.entries(layer)) {
+      result[key] = { ...result[key], ...fields };
+    }
+  }
+  return result;
+}
+
+export const OVERRIDES: Record<string, OverrideFields> = mergeOverrides(
+  standardStateZeroOverrides(),
+  CURATED,
+  PURE_ELEMENTS,
+);
 
 export function applyOverrides(formula: string, estimated: MoleculeProperties): MoleculeProperties {
   const override = OVERRIDES[formula];

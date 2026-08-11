@@ -1,0 +1,64 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0b0b0d;
+  color: #e8e8e8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  width: min(90vw, 960px);
+}
+
+.palette-btn {
+  border: 2px solid #3a3a40;
+  background: var(--swatch, #444);
+  color: #111;
+  font-weight: 600;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.palette-btn.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px #fff2;
+}
+
+.erase-btn {
+  background: repeating-linear-gradient(45deg, #444, #444 4px, #333 4px, #333 8px);
+  color: #eee;
+  text-shadow: none;
+}
+
+.pause-btn {
+  margin-left: auto;
+  border: 2px solid #3a3a40;
+  background: #222;
+  color: #eee;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.sim-canvas {
+  width: min(90vw, 960px);
+  height: auto;
+  aspect-ratio: 160 / 100;
+  image-rendering: pixelated;
+  border: 2px solid #333;
+  touch-action: none;
+}
