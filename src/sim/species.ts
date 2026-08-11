@@ -5,6 +5,7 @@ import { ELEMENT_SYMBOLS, getElement, InternedPool } from '../chem';
 import type { ElementSymbol, MoleculeGraph } from '../chem';
 import { PhaseCode } from './grid';
 import { Phase } from '../chem';
+import { getWall, isWallSpecId, wallThermalProfile, WALL_PHASE } from './walls';
 
 export interface PaletteEntry {
   label: string;
@@ -109,16 +110,19 @@ export class SpeciesTable {
   }
 
   phaseOf(specId: number): PhaseCode {
+    if (isWallSpecId(specId)) return WALL_PHASE;
     this.ensure(specId);
     return this.phase[specId] as PhaseCode;
   }
 
   densityOf(specId: number): number {
+    if (isWallSpecId(specId)) return getWall(specId).density;
     this.ensure(specId);
     return this.density[specId] as number;
   }
 
   thermalOf(specId: number): ThermalProfile {
+    if (isWallSpecId(specId)) return wallThermalProfile(getWall(specId));
     this.ensure(specId);
     return this.thermal[specId] as ThermalProfile;
   }

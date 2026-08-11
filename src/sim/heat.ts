@@ -113,6 +113,40 @@ function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Arr
   deltaU[j] = (deltaU[j] as number) + flux;
 }
 
+/**
+ * Burner/coolant tool support (M4): injects (or removes, for negative
+ * watts) a fixed power into every non-empty cell within `radius` of
+ * (cx, cy), converted to joules via the tick's real duration. This is a
+ * deliberate design choice (see the M4 task notes): the tool models watts,
+ * not a target temperature, so energy accounting stays correct and boiling
+ * a painted liquid still takes real simulated time rather than snapping to
+ * a setpoint.
+ */
+export function applyPointHeatSource(
+  grid: SimGrid,
+  cx: number,
+  cy: number,
+  radius: number,
+  watts: number,
+  dtSeconds: number,
+): void {
+  const joulesPerCell = watts * dtSeconds;
+  if (joulesPerCell === 0) return;
+  const r2 = radius * radius;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = cx + dx;
+      const y = cy + dy;
+      if (!grid.inBounds(x, y)) continue;
+      const idx = grid.index(x, y);
+      if (grid.specId[idx] === EMPTY) continue;
+      const newU = (grid.u[idx] as number) + joulesPerCell;
+      grid.u[idx] = Math.max(0, newU);
+    }
+  }
+}
+
 /** One conduction + phase-change tick. Mutates grid.u and grid.phase in
  * place. Deltas are accumulated over the whole grid from a single snapshot
  * of temperatures, then applied, so the result doesn't depend on scan

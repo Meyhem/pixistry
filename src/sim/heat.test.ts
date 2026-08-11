@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { InternedPool } from '../chem';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
-import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf, stepConduction, temperatureOf } from './heat';
+import {
+  AMBIENT_TEMPERATURE_K,
+  applyPointHeatSource,
+  energyForTemperature,
+  massOf,
+  stepConduction,
+  temperatureOf,
+} from './heat';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 
 function findEntry(palette: PaletteEntry[], label: string): PaletteEntry {
@@ -166,5 +173,52 @@ describe('stepConduction', () => {
     for (let i = 0; i < 2000; i++) stepConduction(grid, species);
 
     expect(grid.phase[grid.index(0, 0)]).not.toBe(PhaseCode.Solid);
+  });
+});
+
+describe('applyPointHeatSource', () => {
+  it('adds energy (watts * dt) to every non-empty cell in radius', () => {
+    const pool = new InternedPool();
+    const palette = buildPalette(pool);
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 3);
+    grid.set(1, 1, iron.specId, PhaseCode.Solid, 100);
+
+    applyPointHeatSource(grid, 1, 1, 0, 500, 1 / 60);
+
+    expect(grid.u[grid.index(1, 1)] as number).toBeCloseTo(100 + 500 / 60, 5);
+  });
+
+  it('removes energy for negative watts (coolant), clamped at zero', () => {
+    const pool = new InternedPool();
+    const palette = buildPalette(pool);
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(1, 1);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 5);
+
+    applyPointHeatSource(grid, 0, 0, 0, -5000, 1);
+
+    expect(grid.u[0] as number).toBe(0);
+  });
+
+  it('never touches empty cells', () => {
+    const grid = new SimGrid(3, 3);
+    applyPointHeatSource(grid, 1, 1, 2, 500, 1);
+    for (let i = 0; i < grid.u.length; i++) {
+      expect(grid.u[i]).toBe(0);
+    }
+  });
+
+  it('is a no-op for zero watts', () => {
+    const pool = new InternedPool();
+    const palette = buildPalette(pool);
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(1, 1);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 123);
+    applyPointHeatSource(grid, 0, 0, 0, 0, 1);
+    expect(grid.u[0]).toBe(123);
   });
 });

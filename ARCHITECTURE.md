@@ -12,9 +12,9 @@ The project is planned as four layers, built in that order (see the doc's "Build
 | Layer | Directory | Status | Depends on |
 |---|---|---|---|
 | Chemistry core | `src/chem` | **Built (M1)** | nothing (zero runtime deps) |
-| Simulation grid/worker | `src/sim` | **Built (M2 grid/movement, M3 energy)** | `src/chem` |
+| Simulation grid/worker | `src/sim` | **Built (M2 grid/movement, M3 energy, M4 tools)** | `src/chem` |
 | Renderer | `src/render` | **Built (M2)** | `src/sim` |
-| UI | `src/ui` | **Built (M2 minimal palette/brush; full tool set is M4)** | `src/sim`, `src/render` |
+| UI | `src/ui` | **Built (M2 palette/brush, M4 full tool set + inspector)** | `src/sim`, `src/render` |
 
 The chemistry core is deliberately headless and side-effect-free so it can run inside a Web Worker
 untouched — it never imports anything from the other three layers, and nothing in it knows about frames,
@@ -155,24 +155,53 @@ by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction t
   physical size in meters. Reaction enthalpy (`U += -deltaH`) is not wired in yet — reactions are a later
   milestone.
 - **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
-- **`worker.ts`** — owns the `SimGrid` and `InternedPool`, runs the tick loop (`movement -> conduction`,
-  per the design doc's `movement -> heat -> react` order), and talks to the main thread over
-  `postMessage`. Paint messages carry only a `specId`; the worker derives the painted cell's initial
-  `U`/phase from ambient temperature via `heat.ts`, rather than the caller specifying a phase directly.
+- **`walls.ts`** (M4) — glass/steel/insulator as a small fixed table of synthetic pseudo-species, *not*
+  chemistry molecules: the v1 element set has no silicon (so glass/SiO2 can't be interned) and "steel"
+  isn't a single compound anyway. specIds are reserved in a disjoint range (`0xff00..0xff02`, below the
+  `EMPTY` sentinel `0xffff` and above anything `InternedPool` will ever assign), so `grid.specId` stays
+  one flat `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to
+  branch to the wall table instead of the pool. Walls never melt/vaporize in v1 — `meltK` is set absurdly
+  high so `heat.ts`'s existing plateau logic simply never triggers, rather than adding special-case code —
+  and `movement.ts` skips them outright (neither a mover nor something the mover can displace into).
+- **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent liquid/gas cells in a
+  radius, independent of `movement.ts`'s density-driven swaps. This is **stirring only**. The design doc
+  frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs, but that
+  requires a reaction step on the grid, and reactions aren't wired into the tick loop yet (see "What's
+  next" below) — so today the mixer just visibly speeds up two same-phase liquids/gases mixing by color.
+  Revisit once reactions land.
+- **`worker.ts`** — owns the `SimGrid` and `InternedPool`, runs the tick loop (`movement -> heat`, per the
+  design doc's `movement -> heat -> react` order — heat now includes an optional point heat source before
+  conduction), and talks to the main thread over `postMessage`. Paint messages carry only a `specId`; the
+  worker derives the painted cell's initial `U`/phase from ambient temperature via `heat.ts`. M4 adds:
+  `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x — implemented
+  as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling `TICK_MS`,
+  which would make the swap-probability-per-tick physics run at different real rates instead of different
+  simulated rates), `heat`/`clearHeat` (a persistent point power source in **watts, not target
+  temperature** — deliberately, so boiling a painted liquid still costs real simulated time instead of
+  snapping to a setpoint; see `heat.ts`'s `applyPointHeatSource`), and `stir`. Frame messages now also
+  carry `phase` and a derived `tempK` grid so the UI's hover inspector can look up a cell locally without a
+  worker round trip per hover.
 
 ## `src/render` and `src/ui`
 
 - **`render/renderer.ts`** — raw WebGL2: a single fullscreen quad, a per-specId color LUT, and a
   nearest-filtered texture blit of the frame's `specId` grid. No per-cell geometry (see the design doc's
   "PixiJS was dropped").
-- **`ui/app.ts`** — a minimal palette toolbar (one button per M2/M3 species), a circular paint/erase brush
-  driven by pointer events, and a pause toggle. The full v1 tool set (walls, burner, coolant, probe,
-  mixer) and a temperature/property inspector are M4.
+- **`ui/app.ts`** (M4) — the full v1 tool set as plain DOM (no framework, per the design doc): paint
+  (per-species), erase, wall materials, burner/coolant (armed on pointerdown, held while dragging, cleared
+  on pointerup — mirrors `worker.ts`'s persistent-source model), and mixer, plus pause/single-step/speed
+  controls. A hover inspector panel is always active regardless of the selected tool (shows formula/wall
+  label, temperature in K, and phase for the cell under the cursor) — probe isn't a separate selectable
+  tool since hovering is unambiguous and doesn't compete with a click-drag tool the way paint/erase would.
+  Gas pressure isn't shown yet (`n` is unused until M5).
 
 ## What's next (not yet built)
 
-Per the design doc's build order: tools/UI/inspector (M4), gases/pressure/aqueous ions at the grid level
-(M5), then walls/apparatus/distillation (M6). Reactions (`src/chem`'s `reactPair`/`attemptReaction`) are
+Per the design doc's build order: gases/pressure/aqueous ions at the grid level (M5), then walls/
+apparatus/distillation (M6) — note `src/sim/walls.ts` already gives M6 physical wall cells with a
+`wallStrength` field to build on, but vessel-bursting-past-strength logic itself isn't implemented (that's
+gated on M5's gas pressure existing first). Reactions (`src/chem`'s `reactPair`/`attemptReaction`) are
 implemented in the chemistry core but not yet wired into the worker's tick loop — there's no dedicated
 milestone number for that wiring in the design doc's build order, so treat it as arriving alongside
-whichever of M4/M5 first needs visible reactions, not as already done.
+whichever of M5/M6 first needs visible reactions, not as already done. The mixer tool (`mixer.ts`) is
+stirring-only until that wiring exists.

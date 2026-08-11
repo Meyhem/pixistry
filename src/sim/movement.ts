@@ -4,6 +4,7 @@
 // through a lighter one, etc. Swaps are probabilistic so mixing takes time.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import type { SpeciesTable } from './species';
+import { isWallSpecId } from './walls';
 
 type Rng = () => number;
 
@@ -20,6 +21,7 @@ function canDisplace(
 ): boolean {
   if (grid.isEmptyAt(targetIdx)) return true;
   const targetSpecId = grid.specId[targetIdx] as number;
+  if (isWallSpecId(targetSpecId)) return false;
   const fromDensity = species.densityOf(fromSpecId);
   const targetDensity = species.densityOf(targetSpecId);
   return direction === 'down' ? fromDensity > targetDensity : fromDensity < targetDensity;
@@ -140,6 +142,11 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       if (moved[idx] || grid.specId[idx] === EMPTY) continue;
 
       const specId = grid.specId[idx] as number;
+      // Walls never move: neither a mover nor moveable-into (blocked above
+      // in canDisplace). Skip immediately rather than treating them as an
+      // infinitely-dense solid, since that would still cost a canDisplace
+      // check every tick for no benefit.
+      if (isWallSpecId(specId)) continue;
       const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, rng, false);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, rng, true);
