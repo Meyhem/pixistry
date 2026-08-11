@@ -140,7 +140,7 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       if (moved[idx] || grid.specId[idx] === EMPTY) continue;
 
       const specId = grid.specId[idx] as number;
-      const phase = species.phaseOf(specId);
+      const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, rng, false);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, rng, true);
       else if (phase === PhaseCode.Gas) moveRising(grid, species, moved, x, y, idx, specId, rng);

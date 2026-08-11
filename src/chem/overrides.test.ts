@@ -18,6 +18,14 @@ function estimatedFixture(overrides: Partial<MoleculeProperties> = {}): Molecule
     netCharge: 0,
     color: '#000000',
     source: 'estimated',
+    specificHeatSolid: 1,
+    specificHeatLiquid: 1,
+    specificHeatGas: 1,
+    heatOfFusion: 1,
+    heatOfVaporization: 1,
+    thermalConductivitySolid: 1,
+    thermalConductivityLiquid: 1,
+    thermalConductivityGas: 1,
     ...overrides,
   };
 }

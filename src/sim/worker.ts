@@ -1,9 +1,11 @@
 // Web Worker: owns the SimGrid and the chemistry pool, runs the tick loop,
 // and talks to the main thread over postMessage. No reactions yet (that's
-// a later milestone) -- this tick only does movement, per the design doc's
-// M2 scope (grid, movement, density, render).
+// a later milestone) -- this tick does movement then energy/conduction/
+// phase-change, per the design doc's tick order (movement -> heat -> react)
+// and M3 scope (energy: conduction, phase change).
 import { InternedPool } from '../chem';
 import { SimGrid } from './grid';
+import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf, stepConduction } from './heat';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
@@ -13,7 +15,7 @@ export type WorkerToMainMessage =
   | { type: 'frame'; specId: Uint16Array; tick: number };
 
 export type MainToWorkerMessage =
-  | { type: 'paint'; x: number; y: number; radius: number; specId: number; phase: number }
+  | { type: 'paint'; x: number; y: number; radius: number; specId: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean };
 
@@ -50,9 +52,13 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
   switch (msg.type) {
-    case 'paint':
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, msg.phase));
+    case 'paint': {
+      const mass = massOf(species, msg.specId);
+      const thermal = species.thermalOf(msg.specId);
+      const { u, phase } = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
       break;
+    }
     case 'erase':
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.clear(px, py));
       break;
@@ -67,6 +73,7 @@ post({ type: 'ready', width: WIDTH, height: HEIGHT, palette });
 setInterval(() => {
   if (running) {
     stepMovement(grid, species, rng, tick++);
+    stepConduction(grid, species);
   }
   post({ type: 'frame', specId: grid.specId.slice(), tick }, []);
 }, TICK_MS);

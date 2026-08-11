@@ -40,6 +40,24 @@ const WATER_GRAPH: MoleculeGraph = {
   ],
 };
 
+/** Per-species thermal data needed by heat.ts, phase-independent parts
+ * (melt/boil points, K) plus phase-dependent parts (heat capacity,
+ * conductivity) that heat.ts picks between based on the cell's current
+ * phase. */
+export interface ThermalProfile {
+  meltK: number;
+  boilK: number;
+  specificHeatSolid: number;
+  specificHeatLiquid: number;
+  specificHeatGas: number;
+  heatOfFusion: number;
+  heatOfVaporization: number;
+  thermalConductivitySolid: number;
+  thermalConductivityLiquid: number;
+  thermalConductivityGas: number;
+  density: number;
+}
+
 function toPhaseCode(phase: Phase): PhaseCode {
   switch (phase) {
     case Phase.Solid:
@@ -59,17 +77,34 @@ function toPhaseCode(phase: Phase): PhaseCode {
  * is enough to avoid re-deriving phase/density from properties on every
  * cell, every tick, in the movement hot loop.
  */
+const CELSIUS_TO_KELVIN = 273.15;
+
 export class SpeciesTable {
   private phase: PhaseCode[] = [];
   private density: number[] = [];
+  private thermal: ThermalProfile[] = [];
 
   constructor(private readonly pool: InternedPool) {}
 
   private ensure(specId: number): void {
     while (this.phase.length <= specId) {
       const spec = this.pool.get(this.phase.length);
-      this.phase.push(toPhaseCode(spec.properties.phaseAtSTP));
-      this.density.push(spec.properties.density);
+      const p = spec.properties;
+      this.phase.push(toPhaseCode(p.phaseAtSTP));
+      this.density.push(p.density);
+      this.thermal.push({
+        meltK: p.meltingPointC + CELSIUS_TO_KELVIN,
+        boilK: p.boilingPointC + CELSIUS_TO_KELVIN,
+        specificHeatSolid: p.specificHeatSolid,
+        specificHeatLiquid: p.specificHeatLiquid,
+        specificHeatGas: p.specificHeatGas,
+        heatOfFusion: p.heatOfFusion,
+        heatOfVaporization: p.heatOfVaporization,
+        thermalConductivitySolid: p.thermalConductivitySolid,
+        thermalConductivityLiquid: p.thermalConductivityLiquid,
+        thermalConductivityGas: p.thermalConductivityGas,
+        density: p.density,
+      });
     }
   }
 
@@ -81,6 +116,11 @@ export class SpeciesTable {
   densityOf(specId: number): number {
     this.ensure(specId);
     return this.density[specId] as number;
+  }
+
+  thermalOf(specId: number): ThermalProfile {
+    this.ensure(specId);
+    return this.thermal[specId] as ThermalProfile;
   }
 }
 

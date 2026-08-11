@@ -35,6 +35,14 @@ const CURATED: Record<string, OverrideFields> = {
     density: 1.0,
     phaseAtSTP: Phase.Liquid,
     color: '#3a6ea5',
+    specificHeatSolid: 2.05,
+    specificHeatLiquid: 4.184,
+    specificHeatGas: 2.0,
+    heatOfFusion: 333.55,
+    heatOfVaporization: 2257,
+    thermalConductivitySolid: 2.18,
+    thermalConductivityLiquid: 0.6,
+    thermalConductivityGas: 0.016,
   },
   ClNa: {
     deltaHf: -411.2,
@@ -141,22 +149,81 @@ const CURATED: Record<string, OverrideFields> = {
 // which would put every metal in the vapor phase at room temperature. Real
 // measured mp/bp/density/color for each element's standard state, same
 // override mechanism as any other precision-sensitive species.
+// Specific heat (J/g/K), thermal conductivity (W/m/K, used as a relative
+// rate constant -- see src/sim/heat.ts) and latent heats (J/g) are real
+// measured values per element; the solid/liquid/gas split matters once
+// conduction and phase change are simulated (M3), same override mechanism
+// as mp/bp/density above.
 const PURE_ELEMENTS: Record<string, OverrideFields> = {
-  H2: { meltingPointC: -259.1, boilingPointC: -252.9, density: 0.00009, phaseAtSTP: Phase.Gas, color: '#eaf6ff' },
-  N2: { meltingPointC: -210.0, boilingPointC: -195.8, density: 0.00125, phaseAtSTP: Phase.Gas, color: '#dfefff' },
-  O2: { meltingPointC: -218.3, boilingPointC: -183.0, density: 0.00143, phaseAtSTP: Phase.Gas, color: '#a8d8ff' },
-  Cl2: { meltingPointC: -101.5, boilingPointC: -34.0, density: 0.00321, phaseAtSTP: Phase.Gas, color: '#c8e070' },
-  C: { meltingPointC: 3550, boilingPointC: 4827, density: 2.26, phaseAtSTP: Phase.Solid, color: '#2b2b2b' },
-  Na: { meltingPointC: 97.8, boilingPointC: 883, density: 0.97, phaseAtSTP: Phase.Solid, color: '#c9c2d8' },
-  Mg: { meltingPointC: 650, boilingPointC: 1091, density: 1.74, phaseAtSTP: Phase.Solid, color: '#e0e0e0' },
-  Al: { meltingPointC: 660.3, boilingPointC: 2519, density: 2.70, phaseAtSTP: Phase.Solid, color: '#c8c8cc' },
-  S: { meltingPointC: 115.2, boilingPointC: 444.6, density: 2.07, phaseAtSTP: Phase.Solid, color: '#e8d84a' },
-  K: { meltingPointC: 63.5, boilingPointC: 759, density: 0.86, phaseAtSTP: Phase.Solid, color: '#c9b8d8' },
-  Ca: { meltingPointC: 842, boilingPointC: 1484, density: 1.55, phaseAtSTP: Phase.Solid, color: '#b9b9a8' },
-  Fe: { meltingPointC: 1538, boilingPointC: 2862, density: 7.87, phaseAtSTP: Phase.Solid, color: '#8a8a8a' },
-  Cu: { meltingPointC: 1085, boilingPointC: 2562, density: 8.96, phaseAtSTP: Phase.Solid, color: '#b5651d' },
-  Zn: { meltingPointC: 419.5, boilingPointC: 907, density: 7.13, phaseAtSTP: Phase.Solid, color: '#a0a8ac' },
-  Ag: { meltingPointC: 961.8, boilingPointC: 2162, density: 10.49, phaseAtSTP: Phase.Solid, color: '#d8d8dc' },
+  H2: {
+    meltingPointC: -259.1, boilingPointC: -252.9, density: 0.00009, phaseAtSTP: Phase.Gas, color: '#eaf6ff',
+    specificHeatGas: 14.3, thermalConductivityGas: 0.18,
+  },
+  N2: {
+    meltingPointC: -210.0, boilingPointC: -195.8, density: 0.00125, phaseAtSTP: Phase.Gas, color: '#dfefff',
+    specificHeatGas: 1.04, thermalConductivityGas: 0.026,
+  },
+  O2: {
+    meltingPointC: -218.3, boilingPointC: -183.0, density: 0.00143, phaseAtSTP: Phase.Gas, color: '#a8d8ff',
+    specificHeatGas: 0.918, thermalConductivityGas: 0.026,
+  },
+  Cl2: {
+    meltingPointC: -101.5, boilingPointC: -34.0, density: 0.00321, phaseAtSTP: Phase.Gas, color: '#c8e070',
+    specificHeatGas: 0.478, thermalConductivityGas: 0.0089,
+  },
+  C: {
+    meltingPointC: 3550, boilingPointC: 4827, density: 2.26, phaseAtSTP: Phase.Solid, color: '#2b2b2b',
+    specificHeatSolid: 0.709, thermalConductivitySolid: 5.7,
+  },
+  Na: {
+    meltingPointC: 97.8, boilingPointC: 883, density: 0.97, phaseAtSTP: Phase.Solid, color: '#c9c2d8',
+    specificHeatSolid: 1.23, thermalConductivitySolid: 140, thermalConductivityLiquid: 87,
+    heatOfFusion: 113, heatOfVaporization: 3870,
+  },
+  Mg: {
+    meltingPointC: 650, boilingPointC: 1091, density: 1.74, phaseAtSTP: Phase.Solid, color: '#e0e0e0',
+    specificHeatSolid: 1.02, thermalConductivitySolid: 156, thermalConductivityLiquid: 78,
+    heatOfFusion: 349, heatOfVaporization: 5267,
+  },
+  Al: {
+    meltingPointC: 660.3, boilingPointC: 2519, density: 2.70, phaseAtSTP: Phase.Solid, color: '#c8c8cc',
+    specificHeatSolid: 0.897, thermalConductivitySolid: 237, thermalConductivityLiquid: 91,
+    heatOfFusion: 396, heatOfVaporization: 10500,
+  },
+  S: {
+    meltingPointC: 115.2, boilingPointC: 444.6, density: 2.07, phaseAtSTP: Phase.Solid, color: '#e8d84a',
+    specificHeatSolid: 0.71, thermalConductivitySolid: 0.205, heatOfFusion: 53,
+  },
+  K: {
+    meltingPointC: 63.5, boilingPointC: 759, density: 0.86, phaseAtSTP: Phase.Solid, color: '#c9b8d8',
+    specificHeatSolid: 0.757, thermalConductivitySolid: 102, thermalConductivityLiquid: 52,
+    heatOfFusion: 60, heatOfVaporization: 1967,
+  },
+  Ca: {
+    meltingPointC: 842, boilingPointC: 1484, density: 1.55, phaseAtSTP: Phase.Solid, color: '#b9b9a8',
+    specificHeatSolid: 0.647, thermalConductivitySolid: 200, thermalConductivityLiquid: 100,
+    heatOfFusion: 213, heatOfVaporization: 3765,
+  },
+  Fe: {
+    meltingPointC: 1538, boilingPointC: 2862, density: 7.87, phaseAtSTP: Phase.Solid, color: '#8a8a8a',
+    specificHeatSolid: 0.449, thermalConductivitySolid: 80, thermalConductivityLiquid: 33,
+    heatOfFusion: 247, heatOfVaporization: 6094,
+  },
+  Cu: {
+    meltingPointC: 1085, boilingPointC: 2562, density: 8.96, phaseAtSTP: Phase.Solid, color: '#b5651d',
+    specificHeatSolid: 0.385, thermalConductivitySolid: 401, thermalConductivityLiquid: 160,
+    heatOfFusion: 205, heatOfVaporization: 4720,
+  },
+  Zn: {
+    meltingPointC: 419.5, boilingPointC: 907, density: 7.13, phaseAtSTP: Phase.Solid, color: '#a0a8ac',
+    specificHeatSolid: 0.388, thermalConductivitySolid: 116, thermalConductivityLiquid: 60,
+    heatOfFusion: 112, heatOfVaporization: 1760,
+  },
+  Ag: {
+    meltingPointC: 961.8, boilingPointC: 2162, density: 10.49, phaseAtSTP: Phase.Solid, color: '#d8d8dc',
+    specificHeatSolid: 0.235, thermalConductivitySolid: 429, thermalConductivityLiquid: 180,
+    heatOfFusion: 105, heatOfVaporization: 2363,
+  },
 };
 
 function mergeOverrides(...layers: Record<string, OverrideFields>[]): Record<string, OverrideFields> {

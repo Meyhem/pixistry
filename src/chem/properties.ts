@@ -101,6 +101,50 @@ function estimateBoilingMelting(
   return { bpK, mpK };
 }
 
+const GAS_CONSTANT_R = 8.314; // J/(mol*K)
+
+// Molar heat capacities from equipartition / Dulong-Petit, converted to
+// per-gram at the end. These are the same class of "physically motivated
+// bulk estimate, overridden with precision where it matters" already used
+// throughout this file (see estimateEntropy above) -- not first-principles
+// statistical mechanics.
+function estimateHeatCapacitiesJPerMolK(atomCount: number): { solid: number; liquid: number; gas: number } {
+  const solid = 3 * GAS_CONSTANT_R * atomCount; // Dulong-Petit
+  const gasMolar =
+    atomCount === 1 ? 2.5 * GAS_CONSTANT_R : atomCount === 2 ? 3.5 * GAS_CONSTANT_R : 4 * GAS_CONSTANT_R;
+  // No general closed-form for liquids; empirically liquid Cp sits above the
+  // solid's (extra configurational/rotational freedom) -- a flat 1.4x bump,
+  // overridden per-species (e.g. water) where measured data exists.
+  const liquid = solid * 1.4;
+  return { solid, liquid, gas: gasMolar };
+}
+
+// Trouton's rule (DeltaSvap ~ 88 J/mol/K) for vaporization; an analogous but
+// smaller entropy-of-fusion rule (~20 J/mol/K, "Richard's rule"-ish) for
+// melting. Both are crude universal constants -- hydrogen-bonded liquids
+// like water deviate substantially and are overridden (see overrides.ts).
+const TROUTON_DELTA_S_VAP = 88; // J/(mol*K)
+const RICHARD_DELTA_S_FUS = 20; // J/(mol*K)
+
+function estimateLatentHeatsJPerMol(boilingPointK: number, meltingPointK: number): { fusion: number; vaporization: number } {
+  return {
+    fusion: Math.max(0, RICHARD_DELTA_S_FUS * meltingPointK),
+    vaporization: Math.max(0, TROUTON_DELTA_S_VAP * boilingPointK),
+  };
+}
+
+// Thermal conductivity has no clean bulk-additivity formula; this is a
+// coarse categorical estimate (metallic solids conduct far better than
+// anything else, gases barely at all) used by src/sim as a relative rate
+// constant, not a literal SI transport calculation -- see src/sim/heat.ts.
+function estimateThermalConductivity(graph: MoleculeGraph): { solid: number; liquid: number; gas: number } {
+  const allMetal = graph.atoms.length > 0 && graph.atoms.every((a) => getElement(a.element).isMetal);
+  const solid = allMetal ? 80 : 1.5;
+  const liquid = allMetal ? 30 : 0.5;
+  const gas = 0.025;
+  return { solid, liquid, gas };
+}
+
 function derivePhase(boilingPointC: number, meltingPointC: number): Phase {
   const roomTempC = 25;
   if (roomTempC < meltingPointC) return Phase.Solid;
@@ -240,6 +284,10 @@ export function computeProperties(graph: MoleculeGraph): MoleculeProperties {
   const isRadical = detectRadical(graph);
   const color = estimateColor(graph, dipoleMoment);
 
+  const heatCapacities = estimateHeatCapacitiesJPerMolK(graph.atoms.length);
+  const latentHeatsMolar = estimateLatentHeatsJPerMol(bpK, mpK);
+  const conductivity = estimateThermalConductivity(graph);
+
   const estimated: MoleculeProperties = {
     formula,
     molarMass,
@@ -254,6 +302,14 @@ export function computeProperties(graph: MoleculeGraph): MoleculeProperties {
     netCharge: chargeTotal,
     color,
     source: 'estimated',
+    specificHeatSolid: heatCapacities.solid / molarMass,
+    specificHeatLiquid: heatCapacities.liquid / molarMass,
+    specificHeatGas: heatCapacities.gas / molarMass,
+    heatOfFusion: latentHeatsMolar.fusion / molarMass,
+    heatOfVaporization: latentHeatsMolar.vaporization / molarMass,
+    thermalConductivitySolid: conductivity.solid,
+    thermalConductivityLiquid: conductivity.liquid,
+    thermalConductivityGas: conductivity.gas,
   };
 
   return applyOverrides(formula, estimated);

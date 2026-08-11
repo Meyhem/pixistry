@@ -59,6 +59,20 @@ export interface MoleculeProperties {
   netCharge: number;
   color: string; // hex
   source: 'estimated' | 'override';
+
+  // Thermal properties, per-phase since the same species behaves very
+  // differently as ice/water/steam. Specific heat in J/(g*K), latent heats
+  // in J/g, thermal conductivity in W/(m*K) (used as a relative rate
+  // constant by src/sim -- no physical cell size in meters is defined, see
+  // src/sim/heat.ts).
+  specificHeatSolid: number;
+  specificHeatLiquid: number;
+  specificHeatGas: number;
+  heatOfFusion: number; // J/g, solid -> liquid
+  heatOfVaporization: number; // J/g, liquid -> gas
+  thermalConductivitySolid: number;
+  thermalConductivityLiquid: number;
+  thermalConductivityGas: number;
 }
 
 export interface MoleculeSpec {

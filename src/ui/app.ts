@@ -89,7 +89,7 @@ export function mountApp(root: HTMLElement): void {
     if (erasing) {
       send({ type: 'erase', x, y, radius: BRUSH_RADIUS });
     } else if (selected) {
-      send({ type: 'paint', x, y, radius: BRUSH_RADIUS, specId: selected.specId, phase: selected.phase });
+      send({ type: 'paint', x, y, radius: BRUSH_RADIUS, specId: selected.specId });
     }
   }
 

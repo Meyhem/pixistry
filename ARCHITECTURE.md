@@ -7,15 +7,14 @@ read it and want to know where things live and how they fit together.
 
 ## Layers
 
-The project is planned as four layers, built in that order (see the doc's "Build order"). Only the first
-exists today.
+The project is planned as four layers, built in that order (see the doc's "Build order").
 
 | Layer | Directory | Status | Depends on |
 |---|---|---|---|
 | Chemistry core | `src/chem` | **Built (M1)** | nothing (zero runtime deps) |
-| Simulation grid/worker | `src/sim` | Not built | `src/chem` |
-| Renderer | `src/render` | Not built | `src/sim` |
-| UI | `src/ui` | Not built | `src/sim`, `src/render` |
+| Simulation grid/worker | `src/sim` | **Built (M2 grid/movement, M3 energy)** | `src/chem` |
+| Renderer | `src/render` | **Built (M2)** | `src/sim` |
+| UI | `src/ui` | **Built (M2 minimal palette/brush; full tool set is M4)** | `src/sim`, `src/render` |
 
 The chemistry core is deliberately headless and side-effect-free so it can run inside a Web Worker
 untouched — it never imports anything from the other three layers, and nothing in it knows about frames,
@@ -130,9 +129,50 @@ single module — see the "Testing conventions" section of `CLAUDE.md` for what 
 golden-reactions suite is the actual M1 acceptance artifact: it's what the design doc's build order means
 by treating M1 as a go/no-go gate on the whole "general chemistry, no reaction table" premise.
 
+## `src/sim`: grid, movement, and energy
+
+- **`grid.ts`** — `SimGrid`: flat typed arrays for `specId` (u16, `EMPTY` sentinel), `u` (f32, internal
+  energy in joules), `phase` (u8, `PhaseCode`), and `n` (u8, gas mole count, unused until M5). `phase` is
+  the live, per-cell runtime phase — it can differ from a species' `phaseAtSTP` once a cell has been
+  heated or cooled, and both movement and conduction read/write it directly rather than re-deriving it
+  from the species table each time.
+- **`species.ts`** — `SpeciesTable`: a specId-indexed cache over `InternedPool`, exposing `phaseOf`
+  (STP phase, used only to build the initial palette), `densityOf`, and `thermalOf` (a `ThermalProfile`:
+  melt/boil points in K, specific heat and thermal conductivity per phase, latent heats). `buildPalette`
+  builds the M2/M3 paint palette (15 elements + water).
+- **`movement.ts`** — `stepMovement`: bottom-up falling-sand scan with alternating horizontal parity,
+  per the design doc. Reads `grid.phase[idx]` (not the species' nominal phase) so a cell that has melted
+  or frozen this tick immediately obeys its new phase's movement rule.
+- **`heat.ts`** (M3) — `stepConduction`: internal energy `U` is the state variable; temperature is
+  *derived* piecewise via `temperatureOf`, with flat plateaus of width `mass * heatOfFusion` /
+  `mass * heatOfVaporization` around the melt/boil points, giving latent heat and phase change with no
+  per-species special-case code (see the design doc's Q9). `energyForTemperature` is the inverse, used to
+  seed a freshly painted cell's `U` (and therefore its initial phase) from an ambient target temperature.
+  Conduction itself accumulates energy deltas from a single per-tick snapshot of temperatures (like
+  `movement`'s `moved` buffer, but summed rather than swapped) so the result doesn't depend on scan order;
+  flux between two cells is clamped to at most what would equalize their temperatures, and conductivity is
+  used as a relative rate constant, not a literal transport calculation, since a cell has no defined
+  physical size in meters. Reaction enthalpy (`U += -deltaH`) is not wired in yet — reactions are a later
+  milestone.
+- **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
+- **`worker.ts`** — owns the `SimGrid` and `InternedPool`, runs the tick loop (`movement -> conduction`,
+  per the design doc's `movement -> heat -> react` order), and talks to the main thread over
+  `postMessage`. Paint messages carry only a `specId`; the worker derives the painted cell's initial
+  `U`/phase from ambient temperature via `heat.ts`, rather than the caller specifying a phase directly.
+
+## `src/render` and `src/ui`
+
+- **`render/renderer.ts`** — raw WebGL2: a single fullscreen quad, a per-specId color LUT, and a
+  nearest-filtered texture blit of the frame's `specId` grid. No per-cell geometry (see the design doc's
+  "PixiJS was dropped").
+- **`ui/app.ts`** — a minimal palette toolbar (one button per M2/M3 species), a circular paint/erase brush
+  driven by pointer events, and a pause toggle. The full v1 tool set (walls, burner, coolant, probe,
+  mixer) and a temperature/property inspector are M4.
+
 ## What's next (not yet built)
 
-Per the design doc's build order: grid + movement + density + rendering (M2), energy/conduction/phase
-change (M3), tools/UI/inspector (M4), gases/pressure/aqueous ions at the grid level (M5), then walls/
-apparatus/distillation (M6). None of that exists yet — don't assume a `src/sim` worker, a canvas, or any
-UI when reading this codebase today.
+Per the design doc's build order: tools/UI/inspector (M4), gases/pressure/aqueous ions at the grid level
+(M5), then walls/apparatus/distillation (M6). Reactions (`src/chem`'s `reactPair`/`attemptReaction`) are
+implemented in the chemistry core but not yet wired into the worker's tick loop — there's no dedicated
+milestone number for that wiring in the design doc's build order, so treat it as arriving alongside
+whichever of M4/M5 first needs visible reactions, not as already done.

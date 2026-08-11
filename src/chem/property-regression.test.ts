@@ -93,6 +93,14 @@ describe('property regression: override precedence', () => {
       netCharge: 0,
       color: '#000000',
       source: 'estimated',
+      specificHeatSolid: 1,
+      specificHeatLiquid: 1,
+      specificHeatGas: 1,
+      heatOfFusion: 1,
+      heatOfVaporization: 1,
+      thermalConductivitySolid: 1,
+      thermalConductivityLiquid: 1,
+      thermalConductivityGas: 1,
     };
     const originalEntry = OVERRIDES[fakeFormula];
     (OVERRIDES as Record<string, Partial<MoleculeProperties>>)[fakeFormula] = { deltaHf: -1 };
@@ -154,6 +162,18 @@ describe('property regression: sanity bounds on non-overridden emergent species'
       expect(props.standardEntropy).toBeGreaterThan(0);
       expect(props.meltingPointC).toBeLessThanOrEqual(props.boilingPointC);
       expect(props.color).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it('produces physically plausible thermal properties', () => {
+    const props = computeProperties(alCl3());
+    for (const cp of [props.specificHeatSolid, props.specificHeatLiquid, props.specificHeatGas]) {
+      expect(cp).toBeGreaterThan(0);
+    }
+    expect(props.heatOfFusion).toBeGreaterThanOrEqual(0);
+    expect(props.heatOfVaporization).toBeGreaterThan(0);
+    for (const k of [props.thermalConductivitySolid, props.thermalConductivityLiquid, props.thermalConductivityGas]) {
+      expect(k).toBeGreaterThan(0);
     }
   });
 });
