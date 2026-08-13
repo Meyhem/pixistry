@@ -3,6 +3,7 @@
 // whether a cell may displace its neighbour, so a denser gas can still sink
 // through a lighter one, etc. Swaps are probabilistic so mixing takes time.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { massOf, temperatureOf } from './heat';
 import type { SpeciesTable } from './species';
 import { isWallSpecId } from './walls';
 
@@ -12,9 +13,25 @@ const DIAGONAL_P = 0.7;
 const LIQUID_SPREAD_P = 0.4;
 const GAS_SPREAD_P = 0.5;
 
+/** Density for buoyancy purposes: species.densityOf's fixed table value for
+ * solid/liquid, but the cell's actual temperature-scaled gas density (see
+ * SpeciesTable.buoyantDensityOf) once it's actually boiled -- otherwise a
+ * gas-phase cell reports the same density as the liquid it just came from
+ * and can never rise through it. Only reads grid.u (via temperatureOf) when
+ * the cell is actually in Gas phase, since that's the only case where
+ * buoyantDensityOf's result differs from densityOf's. */
+function displaceDensity(grid: SimGrid, species: SpeciesTable, idx: number, specId: number, phase: PhaseCode): number {
+  if (phase !== PhaseCode.Gas) return species.densityOf(specId);
+  const mass = massOf(species, specId);
+  const thermal = species.thermalOf(specId);
+  const tempK = temperatureOf(thermal, mass, grid.u[idx] as number).tempK;
+  return species.buoyantDensityOf(specId, phase, tempK);
+}
+
 function canDisplace(
   grid: SimGrid,
   species: SpeciesTable,
+  fromIdx: number,
   fromSpecId: number,
   fromPhase: PhaseCode,
   targetIdx: number,
@@ -26,9 +43,10 @@ function canDisplace(
   // Density sorting is a liquid/gas thing -- two solid grains never swap
   // places by density, they just pile up static once resting, so a denser
   // solid can't tunnel through a lighter one underneath it.
-  if (fromPhase === PhaseCode.Solid && (grid.phase[targetIdx] as PhaseCode) === PhaseCode.Solid) return false;
-  const fromDensity = species.densityOf(fromSpecId);
-  const targetDensity = species.densityOf(targetSpecId);
+  const targetPhase = grid.phase[targetIdx] as PhaseCode;
+  if (fromPhase === PhaseCode.Solid && targetPhase === PhaseCode.Solid) return false;
+  const fromDensity = displaceDensity(grid, species, fromIdx, fromSpecId, fromPhase);
+  const targetDensity = displaceDensity(grid, species, targetIdx, targetSpecId, targetPhase);
   return direction === 'down' ? fromDensity > targetDensity : fromDensity < targetDensity;
 }
 
@@ -51,7 +69,7 @@ function moveFalling(
   const belowY = y + 1;
   if (grid.inBounds(x, belowY)) {
     const belowIdx = grid.index(x, belowY);
-    if (canDisplace(grid, species, specId, fromPhase, belowIdx, 'down')) {
+    if (canDisplace(grid, species, idx, specId, fromPhase, belowIdx, 'down')) {
       grid.swap(idx, belowIdx);
       moved[idx] = 1;
       moved[belowIdx] = 1;
@@ -63,7 +81,7 @@ function moveFalling(
       if (!grid.inBounds(nx, belowY)) continue;
       const nIdx = grid.index(nx, belowY);
       if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, specId, fromPhase, nIdx, 'down') && rng() < DIAGONAL_P) {
+      if (canDisplace(grid, species, idx, specId, fromPhase, nIdx, 'down') && rng() < DIAGONAL_P) {
         grid.swap(idx, nIdx);
         moved[idx] = 1;
         moved[nIdx] = 1;
@@ -100,7 +118,7 @@ function moveRising(
   const aboveY = y - 1;
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
-    if (canDisplace(grid, species, specId, PhaseCode.Gas, aboveIdx, 'up')) {
+    if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, aboveIdx, 'up')) {
       grid.swap(idx, aboveIdx);
       moved[idx] = 1;
       moved[aboveIdx] = 1;
@@ -112,7 +130,7 @@ function moveRising(
       if (!grid.inBounds(nx, aboveY)) continue;
       const nIdx = grid.index(nx, aboveY);
       if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, specId, PhaseCode.Gas, nIdx, 'up') && rng() < DIAGONAL_P) {
+      if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, nIdx, 'up') && rng() < DIAGONAL_P) {
         grid.swap(idx, nIdx);
         moved[idx] = 1;
         moved[nIdx] = 1;

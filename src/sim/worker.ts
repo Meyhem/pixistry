@@ -20,6 +20,7 @@ import {
   stepAmbient,
   stepConduction,
   stepRadiators,
+  stepRadiativeLoss,
   temperatureOf,
 } from './heat';
 import { stepMovement } from './movement';
@@ -96,7 +97,11 @@ function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
+  // Mutually exclusive per cell by construction (see exposedFaceCount):
+  // stepAmbient only touches cells with zero empty neighbors, stepRadiativeLoss
+  // only touches cells with at least one.
   stepAmbient(grid, species, TICK_DT_SECONDS);
+  stepRadiativeLoss(grid, species, TICK_DT_SECONDS);
   stepReactions(grid, species, rng);
 }
 

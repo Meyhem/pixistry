@@ -11,7 +11,7 @@
 // so each grid cell ends up as a crisp SUPERSAMPLE x SUPERSAMPLE block of
 // screen pixels with the border as its outer ring and the pure species
 // color in the middle.
-import { EMPTY } from '../sim/grid';
+import { EMPTY, PhaseCode } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
 
 export const SUPERSAMPLE = 3;
@@ -107,6 +107,18 @@ const COLD_STRONG_RGB: [number, number, number] = [20, 60, 220];
 // its own color. Kept weak (GLOW_MAX_STRENGTH) so it reads as a halo, not a
 // repaint.
 const GLOW_MAX_STRENGTH = 0.22;
+
+// Gas-phase wash: a cell's own species color is unchanged by phase in
+// colorLUT (there's no per-phase color data, same as density -- see
+// species.ts's buoyantDensityOf comment for why gas density needed its own
+// derivation but color didn't get one here), so without this, boiled water
+// rising through liquid water as steam was pixel-identical to the liquid it
+// came from -- visually invisible even once it could actually move.
+// Lightening toward white on Gas phase gives it a distinct, washed-out look
+// (steam/vapor rather than solid liquid color) using only the phase flag
+// already threaded through FrameData, no new per-species data.
+const GAS_LIGHTEN_STRENGTH = 0.45;
+const GAS_LIGHTEN_RGB: [number, number, number] = [255, 255, 255];
 
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
@@ -216,7 +228,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, tempK, radiatorRadius, radiatorTargetK }: FrameData): void {
+    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -233,6 +245,9 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
             baseRgba = BACKGROUND_RGBA;
           } else {
             baseRgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
+            if ((phaseGrid[i] as PhaseCode) === PhaseCode.Gas) {
+              baseRgba = tintTowards(baseRgba, GAS_LIGHTEN_RGB, GAS_LIGHTEN_STRENGTH);
+            }
             border = borderTint(tempK[i] as number);
           }
 

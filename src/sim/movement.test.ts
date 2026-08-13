@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
@@ -102,6 +103,32 @@ describe('stepMovement', () => {
 
     expect(grid.specId[grid.index(0, 1)]).toBe(SpeciesId.NaClAq);
     expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.H2O);
+  });
+
+  it('lets boiled water (steam) rise through the liquid water it just came from (regression)', () => {
+    // Before buoyantDensityOf existed, canDisplace compared densityOf's
+    // single fixed table value for both cells -- a gas-phase H2O cell
+    // reported the same density as the liquid water surrounding it, so
+    // `fromDensity < targetDensity` was always false and steam could never
+    // rise through its own liquid, just sat there looking identical to it.
+    const species = new SpeciesTable();
+    const thermal = species.thermalOf(SpeciesId.H2O);
+    const mass = massOf(species, SpeciesId.H2O);
+    const steam = energyForTemperature(thermal, mass, thermal.boilK + 50);
+    expect(steam.phase).toBe(PhaseCode.Gas);
+    const liquid = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
+    expect(liquid.phase).toBe(PhaseCode.Liquid);
+
+    const grid = new SimGrid(1, 2);
+    grid.set(0, 0, SpeciesId.H2O, liquid.phase, liquid.u);
+    grid.set(0, 1, SpeciesId.H2O, steam.phase, steam.u);
+    const rng = mulberry32(8);
+
+    stepMovement(grid, species, rng, 0);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.H2O);
+    expect(grid.phase[grid.index(0, 0)]).toBe(PhaseCode.Gas);
+    expect(grid.phase[grid.index(0, 1)]).toBe(PhaseCode.Liquid);
   });
 
   it('conserves the number of occupied cells', () => {

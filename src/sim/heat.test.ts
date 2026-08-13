@@ -5,7 +5,10 @@ import {
   applyPointHeatSource,
   energyForTemperature,
   massOf,
+  MAX_TEMP_K,
+  stepAmbient,
   stepConduction,
+  stepRadiativeLoss,
   stepRadiators,
   temperatureOf,
 } from './heat';
@@ -381,5 +384,171 @@ describe('stepRadiators', () => {
     stepRadiators(grid, species, 1);
 
     expect(grid.u[grid.index(0, 0)] as number).toBeCloseTo(atTarget.u, 3);
+  });
+});
+
+// A fully "buried" cell -- surrounded on all 4 sides by other matter, so it
+// has no direct line to vacuum -- is the only case stepAmbient still
+// touches; everything else routes through stepRadiativeLoss instead. See
+// exposedFaceCount in heat.ts.
+function buryInIron(palette: PaletteEntry[]): SimGrid {
+  const iron = findEntry(palette, 'Fe');
+  const grid = new SimGrid(3, 3);
+  for (let y = 0; y < 3; y++) {
+    for (let x = 0; x < 3; x++) {
+      if (x === 1 && y === 1) continue;
+      grid.set(x, y, iron.specId, PhaseCode.Solid, 100);
+    }
+  }
+  return grid;
+}
+
+describe('stepAmbient', () => {
+  it('drains latent heat gradually across the vaporization plateau on a buried cell, instead of resetting it every tick (regression)', () => {
+    // This is the original bug: stepAmbient used to snap u straight to
+    // energyForTemperature(targetK), which collapses back to the *bottom*
+    // of the melt/boil plateau (u -> T is many-to-one there) and silently
+    // destroyed up to a full latent heat's worth of accumulated energy in
+    // a single tick -- meaning a boiling cell could never finish
+    // vaporizing no matter how long it was heated.
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const water = findEntry(palette, 'H2O');
+    const thermal = species.thermalOf(water.specId);
+    const mass = massOf(species, water.specId);
+
+    const grid = buryInIron(palette);
+    const boilStart =
+      mass * thermal.specificHeatSolid * thermal.meltK +
+      mass * thermal.heatOfFusion +
+      mass * thermal.specificHeatLiquid * (thermal.boilK - thermal.meltK);
+    const halfwayU = boilStart + 0.5 * mass * thermal.heatOfVaporization;
+    grid.set(1, 1, water.specId, PhaseCode.Gas, halfwayU);
+    const idx = grid.index(1, 1);
+
+    stepAmbient(grid, species, 1 / 60);
+
+    const after = grid.u[idx] as number;
+    expect(temperatureOf(thermal, mass, after).tempK).toBeCloseTo(thermal.boilK, 5); // still pinned mid-plateau
+    const drained = halfwayU - after;
+    expect(drained).toBeGreaterThan(0); // still net cooling toward ambient
+    expect(drained).toBeLessThan(5); // not the ~1100J a full plateau-reset used to destroy in one tick
+  });
+
+  it('completes boiling under sustained heating instead of stalling forever at the boiling point (regression)', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const water = findEntry(palette, 'H2O');
+    const thermal = species.thermalOf(water.specId);
+    const mass = massOf(species, water.specId);
+
+    const grid = buryInIron(palette);
+    const ambient = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
+    grid.set(1, 1, water.specId, ambient.phase, ambient.u);
+    const idx = grid.index(1, 1);
+
+    for (let t = 0; t < 3000; t++) {
+      applyPointHeatSource(grid, species, 1, 1, 0, 400, 1200, 1 / 60);
+      stepAmbient(grid, species, 1 / 60);
+    }
+
+    expect(grid.phase[idx]).toBe(PhaseCode.Gas);
+    expect(temperatureOf(thermal, mass, grid.u[idx] as number).tempK).toBeGreaterThan(thermal.boilK);
+  });
+
+  it('leaves an exposed cell alone -- stepRadiativeLoss owns those instead', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const thermal = species.thermalOf(iron.specId);
+    const mass = massOf(species, iron.specId);
+
+    const grid = new SimGrid(1, 1);
+    const hot = energyForTemperature(thermal, mass, 900);
+    grid.set(0, 0, iron.specId, hot.phase, hot.u);
+    const before = grid.u[0]; // grid.u is Float32Array -- compare against its own stored (already-truncated) value, not the double hot.u
+
+    stepAmbient(grid, species, 1);
+
+    expect(grid.u[0]).toBe(before);
+  });
+});
+
+describe('stepRadiativeLoss', () => {
+  it('cools an exposed hot cell toward ambient', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const thermal = species.thermalOf(iron.specId);
+    const mass = massOf(species, iron.specId);
+
+    const grid = new SimGrid(1, 1);
+    const hot = energyForTemperature(thermal, mass, 900);
+    grid.set(0, 0, iron.specId, hot.phase, hot.u);
+
+    stepRadiativeLoss(grid, species, 1 / 60);
+
+    const newU = grid.u[0] as number;
+    expect(newU).toBeLessThan(hot.u);
+    expect(temperatureOf(thermal, mass, newU).tempK).toBeGreaterThan(AMBIENT_TEMPERATURE_K);
+  });
+
+  it('warms an exposed cold cell toward ambient', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const thermal = species.thermalOf(iron.specId);
+    const mass = massOf(species, iron.specId);
+
+    const grid = new SimGrid(1, 1);
+    const cold = energyForTemperature(thermal, mass, 100);
+    grid.set(0, 0, iron.specId, cold.phase, cold.u);
+
+    stepRadiativeLoss(grid, species, 1 / 60);
+
+    const newU = grid.u[0] as number;
+    expect(newU).toBeGreaterThan(cold.u);
+    expect(temperatureOf(thermal, mass, newU).tempK).toBeLessThan(AMBIENT_TEMPERATURE_K);
+  });
+
+  it('never overshoots past ambient in one tick even at the sim-wide max temperature', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const thermal = species.thermalOf(iron.specId);
+    const mass = massOf(species, iron.specId);
+    const targetU = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K).u;
+
+    const grid = new SimGrid(1, 1);
+    const extreme = energyForTemperature(thermal, mass, MAX_TEMP_K);
+    grid.set(0, 0, iron.specId, extreme.phase, extreme.u);
+
+    stepRadiativeLoss(grid, species, 1 / 60);
+
+    expect(grid.u[0] as number).toBeGreaterThanOrEqual(targetU - 1e-3);
+  });
+
+  it('does not touch empty cells', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 3);
+    stepRadiativeLoss(grid, species, 1);
+    for (let i = 0; i < grid.u.length; i++) expect(grid.u[i]).toBe(0);
+  });
+
+  it('leaves a fully buried cell alone, deferring to stepAmbient', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const thermal = species.thermalOf(iron.specId);
+    const mass = massOf(species, iron.specId);
+
+    const grid = buryInIron(palette);
+    const hot = energyForTemperature(thermal, mass, 900);
+    grid.set(1, 1, iron.specId, hot.phase, hot.u);
+    const before = grid.u[grid.index(1, 1)]; // grid.u is Float32Array -- compare against its own stored (already-truncated) value
+
+    stepRadiativeLoss(grid, species, 1);
+
+    expect(grid.u[grid.index(1, 1)]).toBe(before);
   });
 });

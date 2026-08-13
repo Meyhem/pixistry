@@ -291,15 +291,33 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
 }
 
 /**
- * Ambient equalization (M?): every occupied cell drifts toward
- * AMBIENT_TEMPERATURE_K at a flat rate capped by
- * AMBIENT_CONVERGENCE_K_PER_SEC, independent of conduction/radiators/
+ * Ambient equalization (M?): every FULLY BURIED occupied cell (see
+ * exposedFaceCount below -- one with no empty neighbor, so it has no direct
+ * line to vacuum) drifts toward AMBIENT_TEMPERATURE_K at a flat rate capped
+ * by AMBIENT_CONVERGENCE_K_PER_SEC, independent of conduction/radiators/
  * reactions -- so a cell that's cooled or heated away from room temperature
- * (painted hot, boiled, product of an exothermic reaction, ...) settles
- * back to ambient over real simulated time once nothing else is actively
- * driving its temperature, instead of holding whatever energy it last had
- * forever. Runs after stepConduction so it acts on that tick's settled
+ * (painted hot, boiled, product of an exothermic reaction, ...) still
+ * settles back to ambient over real simulated time even when it's deep
+ * inside a mass with no direct radiative path out, instead of holding
+ * whatever energy it last had forever. A cell with at least one empty
+ * neighbor is handled by stepRadiativeLoss instead (see below) -- the two
+ * are mutually exclusive per cell by construction, so there's no double
+ * counting. Runs after stepConduction so it acts on that tick's settled
  * temperature.
+ *
+ * This moves an energy DELTA derived from the capped temperature step,
+ * rather than snapping straight to energyForTemperature(targetK): u -> T is
+ * many-to-one on the melt/boil plateaus (every u in [uBoilStart, uBoilEnd]
+ * maps to the same boilK), so T -> u is not its inverse there. Snapping u to
+ * energyForTemperature(targetK) mid-plateau silently discarded (or, on the
+ * melt plateau while heating, silently manufactured) up to a full latent
+ * heat's worth of energy in one tick, which meant a boiling cell could
+ * never accumulate enough energy to actually finish vaporizing: every tick,
+ * stepAmbient reset it back to the bottom of the plateau. Deriving deltaU
+ * from the *current phase's own heat capacity* instead correctly drains (or
+ * adds) latent heat gradually while the temperature itself stays pinned at
+ * the plateau value, matching how every other write path in this file
+ * (conduction, radiators, reactions) already moves energy in deltas.
  */
 export function stepAmbient(grid: SimGrid, species: SpeciesTable, dtSeconds: number): void {
   const maxDeltaT = AMBIENT_CONVERGENCE_K_PER_SEC * dtSeconds;
@@ -307,9 +325,11 @@ export function stepAmbient(grid: SimGrid, species: SpeciesTable, dtSeconds: num
 
   for (let idx = 0; idx < grid.u.length; idx++) {
     if (grid.specId[idx] === EMPTY) continue;
+    if (exposedFaceCount(grid, idx) > 0) continue;
     const specId = grid.specId[idx] as number;
     const mass = massOf(species, specId);
     const thermal = species.thermalOf(specId);
+    const phase = grid.phase[idx] as PhaseCode;
     const currentU = grid.u[idx] as number;
     const { tempK } = temperatureOf(thermal, mass, currentU);
 
@@ -320,8 +340,94 @@ export function stepAmbient(grid: SimGrid, species: SpeciesTable, dtSeconds: num
         ? Math.max(AMBIENT_TEMPERATURE_K, tempK - maxDeltaT)
         : Math.min(AMBIENT_TEMPERATURE_K, tempK + maxDeltaT);
 
-    const { u: newU, phase } = energyForTemperature(thermal, mass, targetK);
+    const capacity = mass * heatCapacityFor(thermal, phase);
+    const newU = Math.max(0, currentU + capacity * (targetK - tempK));
     grid.u[idx] = newU;
-    grid.phase[idx] = phase;
+    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
+  }
+}
+
+/** Count of this cell's 4-connected neighbors (including grid edges) that
+ * are empty -- its direct "line of sight" to vacuum, in cells. Shared by
+ * stepAmbient (skips exposed cells) and stepRadiativeLoss (skips buried
+ * ones, and scales its flux by this count). A grid edge counts as exposed
+ * the same as an empty neighbor cell -- the sim has no walls at its
+ * boundary, so the edge of the play area radiates to vacuum too. */
+function exposedFaceCount(grid: SimGrid, idx: number): number {
+  const { width, height } = grid;
+  const x = idx % width;
+  const y = Math.floor(idx / width);
+  let count = 0;
+  count += x === 0 || grid.isEmptyAt(idx - 1) ? 1 : 0;
+  count += x === width - 1 || grid.isEmptyAt(idx + 1) ? 1 : 0;
+  count += y === 0 || grid.isEmptyAt(idx - width) ? 1 : 0;
+  count += y === height - 1 || grid.isEmptyAt(idx + width) ? 1 : 0;
+  return count;
+}
+
+// Effective (non-physical) radiative rate constant for stepRadiativeLoss.
+// A real Stefan-Boltzmann sigma (5.67e-8 W/(m^2*K^4)) applied to a
+// cell-sized "surface" would be imperceptibly slow at this sim's scale (a
+// nominal 1cm^3 parcel isn't a real radiating body), so this is picked --
+// the same way CONDUCTION_RATE above is a relative rate constant, not a
+// literal W/(m*K) transport calculation -- so a cell fully exposed to
+// vacuum near its boiling point visibly sheds heat over a few seconds
+// rather than instantly or imperceptibly.
+const RADIATIVE_RATE = 50;
+// Normalizes T^4 into a sane numeric range (T=10000K unnormalized would be
+// 1e16) the same way MAX_TEMP_K bounds T itself -- see this file's module
+// comment on the two runaway guards.
+const RADIATIVE_TEMP_SCALE = 1000;
+
+/**
+ * Radiative cooling (M?): every occupied cell with at least one empty
+ * neighbor (see exposedFaceCount) loses (or, if colder than ambient, gains)
+ * energy toward AMBIENT_TEMPERATURE_K at a rate that scales with both its
+ * exposed face count and (T/1000)^4 - (Tambient/1000)^4, i.e. a crude
+ * Stefan-Boltzmann law -- so a glowing-hot cell exposed to vacuum cools
+ * fast while a near-ambient one barely cools at all, unlike the flat
+ * per-cell rate stepAmbient used to apply uniformly to every cell
+ * regardless of exposure. A cell fully enclosed by other matter (zero
+ * exposed faces) has no direct radiative path to vacuum and is left to
+ * stepAmbient's flat convergence instead.
+ *
+ * The write is clamped so a single tick can never push a cell's energy past
+ * what AMBIENT_TEMPERATURE_K implies -- the same overshoot-prevention
+ * pattern applyPointHeatSource already uses for a low-heat-capacity cell
+ * under a strong radiator (see its comment): without the clamp, a
+ * near-MAX_TEMP_K cell's T^4 term is astronomically large and would swing
+ * the cell's energy negative or far past ambient in one step instead of
+ * settling there.
+ */
+export function stepRadiativeLoss(grid: SimGrid, species: SpeciesTable, dtSeconds: number): void {
+  if (dtSeconds <= 0) return;
+
+  for (let idx = 0; idx < grid.u.length; idx++) {
+    if (grid.specId[idx] === EMPTY) continue;
+    const faces = exposedFaceCount(grid, idx);
+    if (faces === 0) continue;
+
+    const specId = grid.specId[idx] as number;
+    const mass = massOf(species, specId);
+    const thermal = species.thermalOf(specId);
+    const currentU = grid.u[idx] as number;
+    const { tempK } = temperatureOf(thermal, mass, currentU);
+
+    if (tempK === AMBIENT_TEMPERATURE_K) continue;
+
+    const tNorm = tempK / RADIATIVE_TEMP_SCALE;
+    const aNorm = AMBIENT_TEMPERATURE_K / RADIATIVE_TEMP_SCALE;
+    // Positive when hotter than ambient (net radiative loss), negative when
+    // colder (net gain from the ambient background).
+    const flux = RADIATIVE_RATE * faces * (tNorm ** 4 - aNorm ** 4);
+    const joules = flux * dtSeconds;
+
+    const targetU = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K).u;
+    let newU = currentU - joules;
+    newU = flux > 0 ? Math.max(newU, targetU) : Math.min(newU, targetU);
+    newU = clampEnergyToMaxTemp(thermal, mass, Math.max(0, newU));
+
+    grid.u[idx] = newU;
+    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
   }
 }
