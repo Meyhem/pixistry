@@ -14,6 +14,7 @@
 // move them out from under the grab. They're overlaid back into the
 // rendered frame while held (see worker.ts) purely for display.
 import { PhaseCode, SimGrid } from './grid';
+import { forEachCellInRadius } from './geometry';
 import { isWallSpecId } from './walls';
 
 export interface HeldCell {
@@ -33,22 +34,15 @@ export interface GrabState {
 /** Removes every non-wall cell within `radius` of (cx, cy) from the grid and
  * returns them as a GrabState, offsets stored relative to the anchor. */
 export function grabPickUp(grid: SimGrid, cx: number, cy: number, radius: number): GrabState {
-  const r2 = radius * radius;
   const cells: HeldCell[] = [];
-  for (let oy = -radius; oy <= radius; oy++) {
-    for (let ox = -radius; ox <= radius; ox++) {
-      if (ox * ox + oy * oy > r2) continue;
-      const x = cx + ox;
-      const y = cy + oy;
-      if (!grid.inBounds(x, y)) continue;
-      const idx = grid.index(x, y);
-      if (grid.isEmptyAt(idx)) continue;
-      const specId = grid.specId[idx] as number;
-      if (isWallSpecId(specId)) continue;
-      cells.push({ ox, oy, specId, phase: grid.phase[idx] as PhaseCode, u: grid.u[idx] as number });
-      grid.clearAt(idx);
-    }
-  }
+  forEachCellInRadius(grid, cx, cy, radius, (x, y, ox, oy) => {
+    const idx = grid.index(x, y);
+    if (grid.isEmptyAt(idx)) return;
+    const specId = grid.specId[idx] as number;
+    if (isWallSpecId(specId)) return;
+    cells.push({ ox, oy, specId, phase: grid.phase[idx] as PhaseCode, u: grid.u[idx] as number });
+    grid.clearAt(idx);
+  });
   return { anchorX: cx, anchorY: cy, cells };
 }
 

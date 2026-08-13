@@ -16,6 +16,7 @@
 // mixer brush is held down, "every pixel in the brush is randomized every
 // tick" is now literal, not just per pointer-move event.
 import { PhaseCode, SimGrid } from './grid';
+import { forEachCellInRadius } from './geometry';
 import { isWallSpecId } from './walls';
 
 type Rng = () => number;
@@ -67,17 +68,10 @@ export function shuffleCells(grid: SimGrid, rng: Rng, indices: readonly number[]
  * in place.
  */
 export function stirRegion(grid: SimGrid, rng: Rng, cx: number, cy: number, radius: number): void {
-  const r2 = radius * radius;
   const indices: number[] = [];
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      if (dx * dx + dy * dy > r2) continue;
-      const x = cx + dx;
-      const y = cy + dy;
-      if (!grid.inBounds(x, y)) continue;
-      const idx = grid.index(x, y);
-      if (isStirrable(grid, idx)) indices.push(idx);
-    }
-  }
+  forEachCellInRadius(grid, cx, cy, radius, (x, y) => {
+    const idx = grid.index(x, y);
+    if (isStirrable(grid, idx)) indices.push(idx);
+  });
   shuffleCells(grid, rng, indices);
 }

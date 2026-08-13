@@ -11,6 +11,7 @@
 // Pixistry is just pixels of elements and compounds with a temperature
 // each -- there is no gas pressure model.
 import { EMPTY, SimGrid } from './grid';
+import { forEachCellInRadius, withinRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import type { FunnelFacing } from './apparatus-shapes';
 import { funnelShapeFor } from './apparatus-shapes';
@@ -160,16 +161,7 @@ function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void
 }
 
 function paintCircle(x: number, y: number, radius: number, apply: (px: number, py: number) => void): void {
-  const r2 = radius * radius;
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      if (dx * dx + dy * dy > r2) continue;
-      const px = x + dx;
-      const py = y + dy;
-      if (!grid.inBounds(px, py)) continue;
-      apply(px, py);
-    }
-  }
+  forEachCellInRadius(grid, x, y, radius, apply);
 }
 
 function runOneTick(): void {
@@ -323,23 +315,12 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // instance, not just whatever glass cells the brush touched -- the
       // only way to delete a placed funnel, since there's no dedicated
       // delete button (see side-panel.ts's Reset-only funnel edit panel).
-      funnels = funnels.filter((f) => {
-        const dx = f.anchorX - msg.x;
-        const dy = f.anchorY - msg.y;
-        return dx * dx + dy * dy > msg.radius * msg.radius;
-      });
+      funnels = funnels.filter((f) => !withinRadius(msg.x, msg.y, f.anchorX, f.anchorY, msg.radius));
       // Same convention for a tube: erasing any one of its knee points
       // deletes the whole instance (there's no dedicated delete button
       // here either), rather than leaving a stale tracked path behind
       // whenever the eraser only grazes a wall/lumen cell in its middle.
-      tubes = tubes.filter((t) => {
-        const hitKnee = t.points.some((p) => {
-          const dx = p.x - msg.x;
-          const dy = p.y - msg.y;
-          return dx * dx + dy * dy <= msg.radius * msg.radius;
-        });
-        return !hitKnee;
-      });
+      tubes = tubes.filter((t) => !t.points.some((p) => withinRadius(msg.x, msg.y, p.x, p.y, msg.radius)));
       break;
     case 'setRunning':
       running = msg.running;

@@ -10,6 +10,7 @@
 // relative rate constant between cells, not a literal W/(m*K) transport
 // calculation over a real distance.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { forEachCellInRadius } from './geometry';
 import { RADIATOR_WATTS } from './radiators';
 import type { SpeciesTable, ThermalProfile } from './species';
 import { GLASS_WALL_SPEC_ID } from './walls';
@@ -196,45 +197,38 @@ export function applyPointHeatSource(
 ): void {
   const joulesPerCell = Math.abs(watts) * dtSeconds;
   if (joulesPerCell === 0) return;
-  const r2 = radius * radius;
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      if (dx * dx + dy * dy > r2) continue;
-      const x = cx + dx;
-      const y = cy + dy;
-      if (!grid.inBounds(x, y)) continue;
-      const idx = grid.index(x, y);
-      const specId = grid.specId[idx];
-      if (specId === EMPTY) continue;
+  forEachCellInRadius(grid, cx, cy, radius, (x, y) => {
+    const idx = grid.index(x, y);
+    const specId = grid.specId[idx];
+    if (specId === EMPTY) return;
 
-      const mass = massOf(species, specId as number);
-      const thermal = species.thermalOf(specId as number);
-      const currentU = grid.u[idx] as number;
-      const { tempK } = temperatureOf(thermal, mass, currentU);
-      // A tolerance rather than exact equality: grid.u is Float32Array (see
-      // grid.ts), whose ~1.19e-7 relative precision means a cell seeded
-      // exactly at targetK can round-trip through energyForTemperature/
-      // temperatureOf up to ~1e-3 K off at the sim's largest temperatures
-      // (10000K) -- without slack that sliver would get (mis)diagnosed as
-      // "needs a full tick of heating/cooling" instead of "already at
-      // target". 0.01K is comfortably above that float32 noise floor while
-      // staying far below any real target gap the sim cares about.
-      if (Math.abs(tempK - targetK) < 0.01) continue;
+    const mass = massOf(species, specId as number);
+    const thermal = species.thermalOf(specId as number);
+    const currentU = grid.u[idx] as number;
+    const { tempK } = temperatureOf(thermal, mass, currentU);
+    // A tolerance rather than exact equality: grid.u is Float32Array (see
+    // grid.ts), whose ~1.19e-7 relative precision means a cell seeded
+    // exactly at targetK can round-trip through energyForTemperature/
+    // temperatureOf up to ~1e-3 K off at the sim's largest temperatures
+    // (10000K) -- without slack that sliver would get (mis)diagnosed as
+    // "needs a full tick of heating/cooling" instead of "already at
+    // target". 0.01K is comfortably above that float32 noise floor while
+    // staying far below any real target gap the sim cares about.
+    if (Math.abs(tempK - targetK) < 0.01) return;
 
-      // joulesPerCell is a fixed, mass-independent amount, so a
-      // small-heat-capacity cell (a gas, especially) can swing past the
-      // target in a single tick -- observed in practice as gas painted into
-      // a cold radiator overshooting down to (clamped) 0J, then next tick
-      // overshooting back up past the target into "hot" territory, forever
-      // oscillating instead of settling. Clamping the write to targetU (the
-      // energy that implies exactly targetK) makes the radiator a true
-      // thermostat: a cell approaches the target and stops there instead of
-      // ever crossing it.
-      const targetU = energyForTemperature(thermal, mass, targetK).u;
-      const newU = tempK < targetK ? Math.min(currentU + joulesPerCell, targetU) : Math.max(currentU - joulesPerCell, targetU);
-      grid.u[idx] = Math.max(0, newU);
-    }
-  }
+    // joulesPerCell is a fixed, mass-independent amount, so a
+    // small-heat-capacity cell (a gas, especially) can swing past the
+    // target in a single tick -- observed in practice as gas painted into
+    // a cold radiator overshooting down to (clamped) 0J, then next tick
+    // overshooting back up past the target into "hot" territory, forever
+    // oscillating instead of settling. Clamping the write to targetU (the
+    // energy that implies exactly targetK) makes the radiator a true
+    // thermostat: a cell approaches the target and stops there instead of
+    // ever crossing it.
+    const targetU = energyForTemperature(thermal, mass, targetK).u;
+    const newU = tempK < targetK ? Math.min(currentU + joulesPerCell, targetU) : Math.max(currentU - joulesPerCell, targetU);
+    grid.u[idx] = Math.max(0, newU);
+  });
 }
 
 /**
