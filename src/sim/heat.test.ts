@@ -172,31 +172,34 @@ describe('stepConduction', () => {
 describe('applyPointHeatSource', () => {
   it('adds energy (watts * dt) to every non-empty cell in radius', () => {
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 3);
     grid.set(1, 1, iron.specId, PhaseCode.Solid, 100);
 
-    applyPointHeatSource(grid, 1, 1, 0, 500, 1 / 60);
+    applyPointHeatSource(grid, species, 1, 1, 0, 500, 10000, 1 / 60);
 
     expect(grid.u[grid.index(1, 1)] as number).toBeCloseTo(100 + 500 / 60, 5);
   });
 
   it('removes energy for negative watts (coolant), clamped at zero', () => {
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(1, 1);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 5);
 
-    applyPointHeatSource(grid, 0, 0, 0, -5000, 1);
+    applyPointHeatSource(grid, species, 0, 0, 0, -5000, 0, 1);
 
     expect(grid.u[0] as number).toBe(0);
   });
 
   it('never touches empty cells', () => {
+    const species = new SpeciesTable();
     const grid = new SimGrid(3, 3);
-    applyPointHeatSource(grid, 1, 1, 2, 500, 1);
+    applyPointHeatSource(grid, species, 1, 1, 2, 500, 10000, 1);
     for (let i = 0; i < grid.u.length; i++) {
       expect(grid.u[i]).toBe(0);
     }
@@ -204,12 +207,47 @@ describe('applyPointHeatSource', () => {
 
   it('is a no-op for zero watts', () => {
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(1, 1);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 123);
-    applyPointHeatSource(grid, 0, 0, 0, 0, 1);
+    applyPointHeatSource(grid, species, 0, 0, 0, 0, 10000, 1);
     expect(grid.u[0]).toBe(123);
+  });
+
+  it('stops heating a cell once it reaches the target temperature', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const mass = massOf(species, iron.specId);
+    const thermal = species.thermalOf(iron.specId);
+
+    const targetK = 400;
+    const atTarget = energyForTemperature(thermal, mass, targetK);
+    const grid = new SimGrid(1, 1);
+    grid.set(0, 0, iron.specId, atTarget.phase, atTarget.u);
+
+    applyPointHeatSource(grid, species, 0, 0, 0, 500, targetK, 1);
+
+    expect(grid.u[0] as number).toBeCloseTo(atTarget.u, 3);
+  });
+
+  it('stops cooling a cell once it reaches the target temperature', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const mass = massOf(species, iron.specId);
+    const thermal = species.thermalOf(iron.specId);
+
+    const targetK = 250;
+    const atTarget = energyForTemperature(thermal, mass, targetK);
+    const grid = new SimGrid(1, 1);
+    grid.set(0, 0, iron.specId, atTarget.phase, atTarget.u);
+
+    applyPointHeatSource(grid, species, 0, 0, 0, -500, targetK, 1);
+
+    expect(grid.u[0] as number).toBeCloseTo(atTarget.u, 3);
   });
 });
 
@@ -223,13 +261,14 @@ describe('stepGlassRadiators', () => {
   it('heats cells within radius of a heater-glass cell', () => {
     const heater = findWall('heater-glass');
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 1);
     grid.set(1, 0, heater.specId, PhaseCode.Solid, 0);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
 
-    stepGlassRadiators(grid, 1, 1);
+    stepGlassRadiators(grid, species, 1, 10000, 0, 1);
 
     expect(grid.u[grid.index(0, 0)] as number).toBeGreaterThan(100);
   });
@@ -237,13 +276,14 @@ describe('stepGlassRadiators', () => {
   it('cools cells within radius of a cooler-glass cell', () => {
     const cooler = findWall('cooler-glass');
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 1);
     grid.set(1, 0, cooler.specId, PhaseCode.Solid, 0);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 1_000_000);
 
-    stepGlassRadiators(grid, 1, 1);
+    stepGlassRadiators(grid, species, 1, 10000, 0, 1);
 
     expect(grid.u[grid.index(0, 0)] as number).toBeLessThan(1_000_000);
   });
@@ -251,13 +291,14 @@ describe('stepGlassRadiators', () => {
   it('does not radiate from passive wall materials (glass/steel/insulator)', () => {
     const glass = findWall('glass');
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 1);
     grid.set(1, 0, glass.specId, PhaseCode.Solid, 0);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
 
-    stepGlassRadiators(grid, 1, 1);
+    stepGlassRadiators(grid, species, 1, 10000, 0, 1);
 
     expect(grid.u[grid.index(0, 0)] as number).toBe(100);
   });
@@ -265,14 +306,34 @@ describe('stepGlassRadiators', () => {
   it('is a no-op for a zero radiation radius', () => {
     const heater = findWall('heater-glass');
     const palette = buildPalette();
+    const species = new SpeciesTable();
     const iron = findEntry(palette, 'Fe');
 
     const grid = new SimGrid(3, 1);
     grid.set(1, 0, heater.specId, PhaseCode.Solid, 0);
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
 
-    stepGlassRadiators(grid, 0, 1);
+    stepGlassRadiators(grid, species, 0, 10000, 0, 1);
 
     expect(grid.u[grid.index(0, 0)] as number).toBe(100);
+  });
+
+  it('stops heating once cells in range reach the heater target temperature', () => {
+    const heater = findWall('heater-glass');
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+    const mass = massOf(species, iron.specId);
+    const thermal = species.thermalOf(iron.specId);
+
+    const targetK = 400;
+    const atTarget = energyForTemperature(thermal, mass, targetK);
+    const grid = new SimGrid(3, 1);
+    grid.set(1, 0, heater.specId, PhaseCode.Solid, 0);
+    grid.set(0, 0, iron.specId, atTarget.phase, atTarget.u);
+
+    stepGlassRadiators(grid, species, 1, targetK, 0, 1);
+
+    expect(grid.u[grid.index(0, 0)] as number).toBeCloseTo(atTarget.u, 3);
   });
 });

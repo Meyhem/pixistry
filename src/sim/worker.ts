@@ -10,7 +10,15 @@
 // gas pressure model.
 import { SimGrid } from './grid';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
-import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf, stepConduction, stepGlassRadiators, temperatureOf } from './heat';
+import {
+  AMBIENT_TEMPERATURE_K,
+  celsiusToKelvin,
+  energyForTemperature,
+  massOf,
+  stepConduction,
+  stepGlassRadiators,
+  temperatureOf,
+} from './heat';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
 import { stepReactions } from './react';
@@ -28,6 +36,7 @@ export type MainToWorkerMessage =
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
   | { type: 'setRadiationRadius'; radius: number }
+  | { type: 'setTargetTempC'; kind: 'heater' | 'cooler'; celsius: number }
   | { type: 'stir'; x: number; y: number; radius: number }
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
@@ -43,6 +52,11 @@ const MAX_SPEED = 4;
 // heater-glass/cooler-glass radiate at a sensible radius even before the
 // player has touched the side panel's slider.
 const DEFAULT_RADIATION_RADIUS = 3;
+// Matches the UI's own defaults (see app.ts's DEFAULT_HEATER_TARGET_C /
+// DEFAULT_COOLER_TARGET_C) so a freshly placed radiator has a sensible
+// setpoint before the player touches the side panel's target-temp slider.
+const DEFAULT_HEATER_TARGET_K = celsiusToKelvin(100);
+const DEFAULT_COOLER_TARGET_K = celsiusToKelvin(-20);
 
 const palette = buildPalette();
 const species = new SpeciesTable();
@@ -59,6 +73,12 @@ let tickAccumulator = 0;
 // stepGlassRadiators. A single shared value for all radiator cells,
 // player-adjustable via the side panel while a radiator tool is selected.
 let radiationRadius = DEFAULT_RADIATION_RADIUS;
+
+// Per-kind thermostat setpoints for stepGlassRadiators -- see heat.ts's
+// applyPointHeatSource: a radiator stops adding/removing energy once a
+// cell it's reaching is at or past its kind's target.
+let heaterTargetK = DEFAULT_HEATER_TARGET_K;
+let coolerTargetK = DEFAULT_COOLER_TARGET_K;
 
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
@@ -85,7 +105,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 
 function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
-  stepGlassRadiators(grid, radiationRadius, TICK_DT_SECONDS);
+  stepGlassRadiators(grid, species, radiationRadius, heaterTargetK, coolerTargetK, TICK_DT_SECONDS);
   stepConduction(grid, species);
   stepReactions(grid, species, rng);
 }
@@ -150,6 +170,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'setRadiationRadius':
       radiationRadius = msg.radius;
+      break;
+    case 'setTargetTempC':
+      if (msg.kind === 'heater') heaterTargetK = celsiusToKelvin(msg.celsius);
+      else coolerTargetK = celsiusToKelvin(msg.celsius);
       break;
     case 'stir':
       stirRegion(grid, rng, msg.x, msg.y, msg.radius);

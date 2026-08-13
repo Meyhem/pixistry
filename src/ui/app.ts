@@ -11,6 +11,7 @@ import { createRenderer, type Renderer } from '../render/renderer';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
+import { kelvinToCelsius } from '../sim/heat';
 import { getWall, wallList } from '../sim/walls';
 
 const DEFAULT_RADIUS = 2;
@@ -19,6 +20,14 @@ const MAX_RADIUS = 12;
 const DEFAULT_RADIATION_RADIUS = 3;
 const MIN_RADIATION_RADIUS = 1;
 const MAX_RADIATION_RADIUS = 15;
+// Matches the worker's own defaults (see worker.ts's DEFAULT_HEATER_TARGET_K
+// / DEFAULT_COOLER_TARGET_K) so the side panel's slider starts in sync with
+// what a freshly placed radiator is already doing.
+const DEFAULT_HEATER_TARGET_C = 100;
+const DEFAULT_COOLER_TARGET_C = -20;
+const MIN_TARGET_C = -250;
+const MAX_TARGET_C = 1500;
+const TARGET_STEP_C = 5;
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
 type Tool =
@@ -74,6 +83,8 @@ export function mountApp(root: HTMLElement): void {
   let speed = 1;
   let radius = DEFAULT_RADIUS;
   let radiationRadius = DEFAULT_RADIATION_RADIUS;
+  let heaterTargetC = DEFAULT_HEATER_TARGET_C;
+  let coolerTargetC = DEFAULT_COOLER_TARGET_C;
   let activeButton: HTMLButtonElement | null = null;
   let isPointerDown = false;
   let isGrabbing = false;
@@ -138,19 +149,22 @@ export function mountApp(root: HTMLElement): void {
     max: number,
     value: number,
     onChange: (value: number) => void,
+    step = 1,
+    unit = '',
   ): void {
     const wrap = document.createElement('div');
     wrap.className = 'setting';
     const labelEl = document.createElement('label');
-    labelEl.textContent = `${label}: ${value}`;
+    labelEl.textContent = `${label}: ${value}${unit}`;
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = String(min);
     slider.max = String(max);
+    slider.step = String(step);
     slider.value = String(value);
     slider.oninput = () => {
       const next = Number(slider.value);
-      labelEl.textContent = `${label}: ${next}`;
+      labelEl.textContent = `${label}: ${next}${unit}`;
       onChange(next);
     };
     wrap.appendChild(labelEl);
@@ -178,15 +192,30 @@ export function mountApp(root: HTMLElement): void {
     if (watts !== 0) {
       addSliderSetting('Radiation radius', MIN_RADIATION_RADIUS, MAX_RADIATION_RADIUS, radiationRadius, (value) => {
         radiationRadius = value;
+        renderer?.setRadiationRadius(value);
         send({ type: 'setRadiationRadius', radius: value });
       });
 
+      const isHeater = watts > 0;
+      addSliderSetting(
+        'Target temperature',
+        MIN_TARGET_C,
+        MAX_TARGET_C,
+        isHeater ? heaterTargetC : coolerTargetC,
+        (value) => {
+          if (isHeater) heaterTargetC = value;
+          else coolerTargetC = value;
+          send({ type: 'setTargetTempC', kind: isHeater ? 'heater' : 'cooler', celsius: value });
+        },
+        TARGET_STEP_C,
+        '°C',
+      );
+
       const hint = document.createElement('p');
       hint.className = 'setting-hint';
-      hint.textContent =
-        watts > 0
-          ? 'Placed glass radiates heat into nearby cells every tick.'
-          : 'Placed glass radiates cooling into nearby cells every tick.';
+      hint.textContent = isHeater
+        ? 'Placed glass heats nearby cells every tick, up to the target temperature.'
+        : 'Placed glass cools nearby cells every tick, down to the target temperature.';
       sidePanel.appendChild(hint);
     }
   }
@@ -287,10 +316,10 @@ export function mountApp(root: HTMLElement): void {
       return;
     }
     const label = labelBySpecId.get(specId) ?? `spec ${specId}`;
-    const tempK = lastTempK[idx] as number;
+    const tempC = kelvinToCelsius(lastTempK[idx] as number);
     const phaseCode = lastPhase[idx] as number;
     const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
-    inspector.textContent = `${label}  ${tempK.toFixed(1)} K  (${phase})`;
+    inspector.textContent = `${label}  ${tempC.toFixed(1)}°C  (${phase})`;
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -330,9 +359,8 @@ export function mountApp(root: HTMLElement): void {
     if (msg.type === 'ready') {
       gridWidth = msg.width;
       gridHeight = msg.height;
-      canvas.width = gridWidth;
-      canvas.height = gridHeight;
       renderer = createRenderer(canvas, gridWidth, gridHeight);
+      renderer.setRadiationRadius(radiationRadius);
       for (const entry of msg.palette) renderer.setColorForSpec(entry.specId, entry.color);
       for (const wall of wallList()) renderer.setColorForSpec(wall.specId, wall.color);
       buildToolbar(msg.palette);

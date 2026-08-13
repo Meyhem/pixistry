@@ -16,6 +16,19 @@ import { getWall, isWallSpecId } from './walls';
 export const CELL_VOLUME_CM3 = 1;
 export const AMBIENT_TEMPERATURE_K = 298.15;
 
+/** All display-facing temperature is Celsius (see app.ts); internal storage
+ * and every energy/conduction/phase-change calculation stays Kelvin, since
+ * they're absolute-temperature physics (and species melting/boiling points
+ * are authored in Kelvin) -- these two helpers are the only conversion
+ * points, used at the UI boundary. */
+export function celsiusToKelvin(celsius: number): number {
+  return celsius + 273.15;
+}
+
+export function kelvinToCelsius(kelvin: number): number {
+  return kelvin - 273.15;
+}
+
 const CONDUCTION_RATE = 0.02;
 // See stepConduction's final loop -- caps how far a single tick's summed
 // conduction flux can move a cell's own temperature, to stay finite even
@@ -139,18 +152,22 @@ function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Arr
 /**
  * Point heat source primitive (M4): injects (or removes, for negative
  * watts) a fixed power into every non-empty cell within `radius` of
- * (cx, cy), converted to joules via the tick's real duration. This is a
- * deliberate design choice (see the M4 task notes): watts, not a target
- * temperature, so energy accounting stays correct and boiling a painted
- * liquid still takes real simulated time rather than snapping to a
- * setpoint. Shared by stepGlassRadiators below, one call per radiator cell.
+ * (cx, cy), converted to joules via the tick's real duration -- watts, not
+ * a raw temperature snap, so energy accounting stays correct and boiling a
+ * painted liquid still takes real simulated time. `targetK` is a
+ * thermostat cutoff layered on top: a cell already at or past the target
+ * (hot enough for a heater, cold enough for a cooler) is skipped that
+ * tick, so the radiator settles at its setpoint instead of heating/cooling
+ * forever. Shared by stepGlassRadiators below, one call per radiator cell.
  */
 export function applyPointHeatSource(
   grid: SimGrid,
+  species: SpeciesTable,
   cx: number,
   cy: number,
   radius: number,
   watts: number,
+  targetK: number,
   dtSeconds: number,
 ): void {
   const joulesPerCell = watts * dtSeconds;
@@ -163,7 +180,14 @@ export function applyPointHeatSource(
       const y = cy + dy;
       if (!grid.inBounds(x, y)) continue;
       const idx = grid.index(x, y);
-      if (grid.specId[idx] === EMPTY) continue;
+      const specId = grid.specId[idx];
+      if (specId === EMPTY) continue;
+
+      const mass = massOf(species, specId as number);
+      const thermal = species.thermalOf(specId as number);
+      const { tempK } = temperatureOf(thermal, mass, grid.u[idx] as number);
+      if (joulesPerCell > 0 ? tempK >= targetK : tempK <= targetK) continue;
+
       const newU = (grid.u[idx] as number) + joulesPerCell;
       grid.u[idx] = Math.max(0, newU);
     }
@@ -173,23 +197,33 @@ export function applyPointHeatSource(
 /**
  * Heater-glass/cooler-glass tool support: every wall cell on the grid whose
  * material has a nonzero radiatorWatts (see walls.ts) radiates its fixed
- * wattage into cells within `radiationRadius` of itself, every tick --
+ * wattage into cells within `radiationRadius` of itself, every tick, until
+ * a warmed/cooled cell reaches that radiator kind's target temperature --
  * unlike the old burner/coolant tool, this is anchored to the placed glass
  * cells themselves rather than the cursor, so a radiator keeps working for
  * as long as it sits on the grid. `radiationRadius` is a single
  * player-configurable value shared by every radiator cell (both heater and
- * cooler), set via the UI's side panel.
+ * cooler); `heaterTargetK`/`coolerTargetK` are separate per-kind setpoints,
+ * all set via the UI's side panel.
  */
-export function stepGlassRadiators(grid: SimGrid, radiationRadius: number, dtSeconds: number): void {
+export function stepGlassRadiators(
+  grid: SimGrid,
+  species: SpeciesTable,
+  radiationRadius: number,
+  heaterTargetK: number,
+  coolerTargetK: number,
+  dtSeconds: number,
+): void {
   if (radiationRadius <= 0) return;
   for (let idx = 0; idx < grid.specId.length; idx++) {
     const specId = grid.specId[idx] as number;
     if (specId === EMPTY || !isWallSpecId(specId)) continue;
     const watts = getWall(specId).radiatorWatts;
     if (watts === 0) continue;
+    const targetK = watts > 0 ? heaterTargetK : coolerTargetK;
     const x = idx % grid.width;
     const y = Math.floor(idx / grid.width);
-    applyPointHeatSource(grid, x, y, radiationRadius, watts, dtSeconds);
+    applyPointHeatSource(grid, species, x, y, radiationRadius, watts, targetK, dtSeconds);
   }
 }
 

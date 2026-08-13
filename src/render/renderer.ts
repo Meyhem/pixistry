@@ -2,8 +2,20 @@
 // this project draws exactly one sprite"). The grid's specId array is
 // mapped to RGBA through a small per-specId color LUT and blitted as a
 // single nearest-filtered texture; no per-cell geometry.
+//
+// The backing texture (and the canvas's own drawing-buffer size) is
+// SUPERSAMPLE cells wide/tall per grid cell, not 1:1 -- this is what makes
+// the per-cell temperature border (see buildPixelBuffer) possible at all:
+// at 1 texel per cell there's no sub-cell detail to draw a ring into. CSS
+// (`image-rendering: pixelated`) then scales the whole thing up further,
+// so each grid cell ends up as a crisp SUPERSAMPLE x SUPERSAMPLE block of
+// screen pixels with the border as its outer ring and the pure species
+// color in the middle.
 import { EMPTY } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
+import { getWall, isWallSpecId } from '../sim/walls';
+
+export const SUPERSAMPLE = 3;
 
 export interface FrameData {
   specId: Uint16Array;
@@ -13,6 +25,10 @@ export interface FrameData {
 
 export interface Renderer {
   setColorForSpec(specId: number, hex: string): void;
+  /** Mirrors the UI's radiation-radius setting so the persistent
+   * heater/cooler glow (see accumulateGlow) is sized to match what
+   * stepGlassRadiators is actually doing on the grid. */
+  setRadiationRadius(radius: number): void;
   drawFrame(frame: FrameData): void;
 }
 
@@ -71,28 +87,58 @@ function hexToRgba(hex: string): [number, number, number, number] {
 const BACKGROUND_RGBA: [number, number, number, number] = [12, 12, 16, 255];
 const MISSING_SPEC_RGBA: [number, number, number, number] = [255, 0, 255, 255];
 
-// Temperature overlay: cells warmer than ambient tint red, cooler tint
-// blue, saturating at +-TEMP_OVERLAY_RANGE_K away from ambient.
-const TEMP_OVERLAY_RANGE_K = 300;
-const TEMP_OVERLAY_MAX_STRENGTH = 0.55;
-const HOT_RGB: [number, number, number] = [255, 40, 20];
-const COLD_RGB: [number, number, number] = [40, 120, 255];
+// Temperature border: a cell's own color is left untouched in the interior
+// of its supersampled block: only the outer ring gets tinted, so the
+// species color always stays readable and the temperature reads as a
+// two-tone "pixel with an outline" rather than a full-cell wash. The tint
+// hue itself sweeps neutral -> mid -> strong as the deviation grows (light
+// blue -> strong blue when cooling, orange -> red when heating), and BORDER
+// blend strength ramps up separately so a barely-off-ambient cell gets a
+// faint ring rather than an abrupt one.
+const BORDER_RANGE_K = 150;
+const BORDER_MAX_STRENGTH = 0.85;
+const HOT_MID_RGB: [number, number, number] = [255, 150, 30];
+const HOT_STRONG_RGB: [number, number, number] = [255, 30, 20];
+const COLD_MID_RGB: [number, number, number] = [140, 190, 255];
+const COLD_STRONG_RGB: [number, number, number] = [20, 60, 220];
 
-function applyTemperatureOverlay(rgba: [number, number, number, number], tempK: number): [number, number, number, number] {
-  const deviation = tempK - AMBIENT_TEMPERATURE_K;
-  if (deviation === 0) return rgba;
-  const frac = Math.max(-1, Math.min(1, deviation / TEMP_OVERLAY_RANGE_K));
-  const strength = Math.abs(frac) * TEMP_OVERLAY_MAX_STRENGTH;
-  const tint = frac > 0 ? HOT_RGB : COLD_RGB;
+// Persistent glow: a soft, subtle wash (interior *and* border alike, plus
+// spilling into empty background cells) around every placed heater-glass/
+// cooler-glass cell, out to the current radiation radius, so the tool's
+// reach is visible on the grid without having to hover over it. Kept weak
+// (GLOW_MAX_STRENGTH) so it reads as a halo, not a repaint.
+const GLOW_MAX_STRENGTH = 0.22;
+
+/** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
+function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
   return [
-    rgba[0] + (tint[0] - rgba[0]) * strength,
-    rgba[1] + (tint[1] - rgba[1]) * strength,
-    rgba[2] + (tint[2] - rgba[2]) * strength,
+    rgba[0] + (hue[0] - rgba[0]) * strength,
+    rgba[1] + (hue[1] - rgba[1]) * strength,
+    rgba[2] + (hue[2] - rgba[2]) * strength,
     rgba[3],
   ];
 }
 
+/** The border ring's tint color + blend strength for a cell's temperature,
+ * or null if it's close enough to ambient that no border should show. */
+function borderTint(tempK: number): { hue: readonly [number, number, number]; strength: number } | null {
+  const deviation = tempK - AMBIENT_TEMPERATURE_K;
+  if (deviation === 0) return null;
+  const frac = Math.max(-1, Math.min(1, deviation / BORDER_RANGE_K));
+  const absFrac = Math.abs(frac);
+  const strength = absFrac * BORDER_MAX_STRENGTH;
+  const hue = frac > 0 ? lerpRgb(HOT_MID_RGB, HOT_STRONG_RGB, absFrac) : lerpRgb(COLD_MID_RGB, COLD_STRONG_RGB, absFrac);
+  return { hue, strength };
+}
+
+function lerpRgb(a: readonly [number, number, number], b: readonly [number, number, number], t: number): [number, number, number] {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
 export function createRenderer(canvas: HTMLCanvasElement, width: number, height: number): Renderer {
+  canvas.width = width * SUPERSAMPLE;
+  canvas.height = height * SUPERSAMPLE;
+
   const gl = canvas.getContext('webgl2');
   if (!gl) throw new Error('WebGL2 is not supported in this browser');
 
@@ -109,45 +155,118 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
   gl.enableVertexAttribArray(posLoc);
   gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
+  const texWidth = width * SUPERSAMPLE;
+  const texHeight = height * SUPERSAMPLE;
+
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, texWidth, texHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 
   const colorLUT = new Map<number, [number, number, number, number]>();
-  const pixelBuffer = new Uint8Array(width * height * 4);
+  const pixelBuffer = new Uint8Array(texWidth * texHeight * 4);
+
+  // Per-grid-cell (not per-subpixel) glow strength, recomputed every frame
+  // from the current specId grid -- cheap since it only walks radiator
+  // wall cells and their (small, player-bounded) radius, same cost class
+  // as heat.ts's own applyPointHeatSource.
+  let radiationRadius = 0;
+  let heaterGlow = new Float32Array(width * height);
+  let coolerGlow = new Float32Array(width * height);
+
+  function accumulateGlow(specIdGrid: Uint16Array): void {
+    heaterGlow.fill(0);
+    coolerGlow.fill(0);
+    if (radiationRadius <= 0) return;
+    const r2 = radiationRadius * radiationRadius;
+
+    for (let i = 0; i < specIdGrid.length; i++) {
+      const specId = specIdGrid[i] as number;
+      if (specId === EMPTY || !isWallSpecId(specId)) continue;
+      const watts = getWall(specId).radiatorWatts;
+      if (watts === 0) continue;
+
+      const cx = i % width;
+      const cy = Math.floor(i / width);
+      const glow = watts > 0 ? heaterGlow : coolerGlow;
+
+      const minX = Math.max(0, cx - radiationRadius);
+      const maxX = Math.min(width - 1, cx + radiationRadius);
+      const minY = Math.max(0, cy - radiationRadius);
+      const maxY = Math.min(height - 1, cy + radiationRadius);
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > r2) continue;
+          const falloff = 1 - Math.sqrt(d2) / radiationRadius;
+          const idx = y * width + x;
+          if (falloff > (glow[idx] as number)) glow[idx] = falloff;
+        }
+      }
+    }
+  }
 
   return {
     setColorForSpec(specId: number, hex: string): void {
       colorLUT.set(specId, hexToRgba(hex));
     },
 
+    setRadiationRadius(radius: number): void {
+      radiationRadius = radius;
+    },
+
     drawFrame({ specId: specIdGrid, tempK }: FrameData): void {
-      for (let i = 0; i < specIdGrid.length; i++) {
-        const specId = specIdGrid[i];
-        const o = i * 4;
-        if (specId === EMPTY) {
-          pixelBuffer[o] = BACKGROUND_RGBA[0];
-          pixelBuffer[o + 1] = BACKGROUND_RGBA[1];
-          pixelBuffer[o + 2] = BACKGROUND_RGBA[2];
-          pixelBuffer[o + 3] = BACKGROUND_RGBA[3];
-          continue;
+      accumulateGlow(specIdGrid);
+
+      for (let cy = 0; cy < height; cy++) {
+        for (let cx = 0; cx < width; cx++) {
+          const i = cy * width + cx;
+          const specId = specIdGrid[i];
+          const hGlow = heaterGlow[i] as number;
+          const cGlow = coolerGlow[i] as number;
+
+          let baseRgba: [number, number, number, number];
+          let border: { hue: readonly [number, number, number]; strength: number } | null = null;
+
+          if (specId === EMPTY) {
+            baseRgba = BACKGROUND_RGBA;
+          } else {
+            baseRgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
+            border = borderTint(tempK[i] as number);
+          }
+
+          let interiorRgba = baseRgba;
+          if (hGlow > 0) interiorRgba = tintTowards(interiorRgba, HOT_MID_RGB, hGlow * GLOW_MAX_STRENGTH);
+          if (cGlow > 0) interiorRgba = tintTowards(interiorRgba, COLD_MID_RGB, cGlow * GLOW_MAX_STRENGTH);
+
+          let ringRgba = interiorRgba;
+          if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);
+
+          const blockX = cx * SUPERSAMPLE;
+          const blockY = cy * SUPERSAMPLE;
+          for (let sy = 0; sy < SUPERSAMPLE; sy++) {
+            const onRingY = sy === 0 || sy === SUPERSAMPLE - 1;
+            const texY = blockY + sy;
+            for (let sx = 0; sx < SUPERSAMPLE; sx++) {
+              const onRing = onRingY || sx === 0 || sx === SUPERSAMPLE - 1;
+              const rgba = onRing ? ringRgba : interiorRgba;
+              const o = (texY * texWidth + (blockX + sx)) * 4;
+              pixelBuffer[o] = rgba[0];
+              pixelBuffer[o + 1] = rgba[1];
+              pixelBuffer[o + 2] = rgba[2];
+              pixelBuffer[o + 3] = rgba[3];
+            }
+          }
         }
-
-        let rgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
-        rgba = applyTemperatureOverlay(rgba, tempK[i] as number);
-
-        pixelBuffer[o] = rgba[0];
-        pixelBuffer[o + 1] = rgba[1];
-        pixelBuffer[o + 2] = rgba[2];
-        pixelBuffer[o + 3] = rgba[3];
       }
 
       gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixelBuffer);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, texWidth, texHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixelBuffer);
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     },

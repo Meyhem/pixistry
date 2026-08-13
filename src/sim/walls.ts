@@ -39,12 +39,13 @@ export interface WallMaterial {
   /** Zero for passive wall materials. Nonzero only for heater-glass/
    * cooler-glass: the fixed wattage each placed cell of this material
    * radiates (see heat.ts's stepGlassRadiators) into every cell within the
-   * player-configurable radiation radius, every tick -- positive heats,
-   * negative cools. This replaced an earlier cursor-anchored burner/coolant
-   * tool: baking the wattage into the material itself, rather than passing
-   * it around in tool messages, means a placed radiator keeps radiating for
-   * as long as it sits on the grid instead of only while the pointer is
-   * held down. */
+   * player-configurable radiation radius, every tick, until that cell
+   * reaches the tool's player-configurable target temperature -- positive
+   * heats, negative cools. This replaced an earlier cursor-anchored
+   * burner/coolant tool: baking the wattage into the material itself,
+   * rather than passing it around in tool messages, means a placed
+   * radiator keeps radiating for as long as it sits on the grid instead of
+   * only while the pointer is held down. */
   readonly radiatorWatts: number;
 }
 
