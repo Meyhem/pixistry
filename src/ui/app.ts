@@ -8,7 +8,7 @@
 // together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
-import type { FunnelSnapshot, MainToWorkerMessage, TubeSnapshot, WorkerToMainMessage } from '../sim/protocol';
+import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/protocol';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
@@ -18,18 +18,11 @@ import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
-import {
-  lumenWallCells,
-  nearestKneeIndex,
-  nearestSegmentIndex,
-  pointSegmentDistance,
-  polylineToLumenPath,
-  snapOctant,
-  type Point,
-} from '../sim/tube-shapes';
+import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
+import { ApparatusSelection } from './apparatus-selection';
 import { isElementLabel } from './species-classify';
 import { buildSpeciesLookup } from './species-lookup';
 import { formatCelsius } from './format';
@@ -42,12 +35,6 @@ const DEFAULT_FUNNEL_RATE_PER_MINUTE = 60;
 const DEFAULT_FUNNEL_TOTAL_AMOUNT = 100;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
-// How close (in grid cells) a click/hover needs to be to grab a tube's knee
-// or segment with the select-apparatus tool -- knees get first refusal
-// (checked before segments) so a click near a knee never accidentally grabs
-// the segment it terminates instead.
-const TUBE_KNEE_HIT_RADIUS = 3;
-const TUBE_SEGMENT_HIT_RADIUS = 2;
 
 type Tool =
   | { kind: 'paint'; specId: number }
@@ -60,21 +47,6 @@ type Tool =
   | { kind: 'stirrer' }
   | { kind: 'tube' }
   | { kind: 'select-apparatus' };
-
-/** Local draft for the select-apparatus tool's edit panel -- mirrors a
- * selected funnel's live config so every field edit (temp/rate/species/
- * total) sends a complete 'updateFunnel' message built from this draft
- * rather than from the worker's last snapshot, which only refreshes once
- * per frame and would otherwise let a second quick edit clobber the first
- * (see app.ts's sendFunnelUpdate). Re-seeded from the snapshot whenever the
- * selection changes (see selectFunnel/render). */
-interface FunnelEditDraft {
-  specId: number;
-  tempC: number;
-  ratePerMinute: number;
-  totalMode: 'finite' | 'infinite';
-  totalAmount: number;
-}
 
 const PHASE_LABEL: Record<number, string> = {
   [PhaseCode.Empty]: 'empty',
@@ -264,22 +236,9 @@ export function mountApp(root: HTMLElement): void {
   let lastHoverX = 0;
   let lastHoverY = 0;
 
-  // select-apparatus tool state: which placed funnel (by worker-assigned
-  // id) is selected, and a local edit draft for its settings -- see
-  // FunnelEditDraft's doc comment for why edits go through a draft instead
-  // of the last-known snapshot directly.
-  let selectedFunnelId: number | null = null;
-  let editDraft: FunnelEditDraft | null = null;
-  let lastFunnels: FunnelSnapshot[] = [];
-
-  // select-apparatus drag-to-move state: set on pointerdown when the click
-  // hit a funnel, cleared on pointerup. dragOffsetX/Y is the click point's
-  // offset from the funnel's anchor at grab time, so the funnel moves
-  // relative to where it was grabbed rather than snapping its anchor to the
-  // cursor.
-  let draggingFunnelId: number | null = null;
-  let dragOffsetX = 0;
-  let dragOffsetY = 0;
+  // select-apparatus tool's selection/edit-draft/drag state for both
+  // apparatus types -- see apparatus-selection.ts.
+  const apparatusSelection = new ApparatusSelection();
 
   // Conveyor-tube tool config (pre-placement) -- same "captured at placement
   // time" convention as the funnel's config above.
@@ -293,26 +252,6 @@ export function mountApp(root: HTMLElement): void {
   let tubeDrawPoints: Point[] = [];
   let tubeDrawPreview: Point | null = null;
 
-  // select-apparatus tube selection/edit -- mirrors selectedFunnelId/
-  // editDraft above, but a tube's own points only ever change through a
-  // knee/segment drag (moveTubeKnee/moveTubeSegment), never through the
-  // edit draft, so the draft here only covers coneSize/filter.
-  let selectedTubeId: number | null = null;
-  let tubeEditDraft: { coneSize: number; filter: Set<number> | null } | null = null;
-  let lastTubes: TubeSnapshot[] = [];
-
-  // select-apparatus tube drag state: which knee or segment (mutually
-  // exclusive) is being dragged, cleared on pointerup. Segment dragging
-  // tracks the last processed cursor cell so each pointermove can send just
-  // the incremental delta since the previous one (moveTubeSegment applies a
-  // relative translation) -- knee dragging needs no such tracking since
-  // moveTubeKnee already takes an absolute target and re-resolves fully
-  // from the tube's current neighbor points every call.
-  let draggingTubeKnee: number | null = null;
-  let draggingTubeSegment: number | null = null;
-  let tubeSegmentDragLastX = 0;
-  let tubeSegmentDragLastY = 0;
-
   // Label/color/palette-entry lookup for the probe, funnel field display,
   // and debug hook (see species-lookup.ts).
   const speciesLookup = buildSpeciesLookup();
@@ -325,14 +264,6 @@ export function mountApp(root: HTMLElement): void {
   let lastRadiatorRadius: Uint8Array | null = null;
   let lastRadiatorTargetK: Float32Array | null = null;
   let lastTick = 0;
-
-  function findFunnel(id: number | null): FunnelSnapshot | undefined {
-    return id === null ? undefined : lastFunnels.find((f) => f.id === id);
-  }
-
-  function findTube(id: number | null): TubeSnapshot | undefined {
-    return id === null ? undefined : lastTubes.find((t) => t.id === id);
-  }
 
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) return { ...TOOL_META_DEFAULTS, label: 'No tool selected', color: '#3a3d3a' };
@@ -384,8 +315,8 @@ export function mountApp(root: HTMLElement): void {
     if (t.kind === 'select-apparatus') {
       // The only branch that depends on live selection state rather than
       // just the tool kind, so it stays logic instead of a static table row.
-      const selectedFunnel = findFunnel(selectedFunnelId);
-      const selectedTube = selectedFunnel ? undefined : findTube(selectedTubeId);
+      const selectedFunnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
+      const selectedTube = selectedFunnel ? undefined : apparatusSelection.findTube(apparatusSelection.selectedTubeId);
       const nothingSelected = !selectedFunnel && !selectedTube;
       return {
         ...TOOL_META_DEFAULTS,
@@ -423,6 +354,7 @@ export function mountApp(root: HTMLElement): void {
    * FunnelEditDraft's doc comment for why every field is sent together
    * rather than patched individually. */
   function sendFunnelUpdate(): void {
+    const { selectedFunnelId, editDraft } = apparatusSelection;
     if (selectedFunnelId === null || !editDraft) return;
     send({
       type: 'updateFunnel',
@@ -434,13 +366,8 @@ export function mountApp(root: HTMLElement): void {
     });
   }
 
-  function selectFunnel(id: number | null): void {
-    selectedFunnelId = id;
-    editDraft = null;
-    if (id !== null) selectTube(null);
-  }
-
   function sendTubeUpdate(): void {
+    const { selectedTubeId, tubeEditDraft } = apparatusSelection;
     if (selectedTubeId === null || !tubeEditDraft) return;
     send({
       type: 'updateTube',
@@ -448,12 +375,6 @@ export function mountApp(root: HTMLElement): void {
       coneSize: tubeEditDraft.coneSize,
       filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null,
     });
-  }
-
-  function selectTube(id: number | null): void {
-    selectedTubeId = id;
-    tubeEditDraft = null;
-    if (id !== null) selectFunnel(null);
   }
 
   function render(): void {
@@ -496,15 +417,15 @@ export function mountApp(root: HTMLElement): void {
   function renderSidePanel(): void {
     const meta = describeToolMeta(tool);
     const isEditMode = tool?.kind === 'select-apparatus';
-    const selectedFunnel = isEditMode ? findFunnel(selectedFunnelId) : undefined;
-    const selectedTube = isEditMode && !selectedFunnel ? findTube(selectedTubeId) : undefined;
+    const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
+    const selectedTube = isEditMode && !selectedFunnel ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
     // The select-apparatus tool's own selection can go stale (the selected
     // funnel/tube got erased) -- drop it rather than keep pointing an edit
     // panel at nothing.
-    if (isEditMode && selectedFunnelId !== null && !selectedFunnel) selectFunnel(null);
-    if (isEditMode && selectedTubeId !== null && !selectedTube) selectTube(null);
-    if (isEditMode && selectedFunnel && !editDraft) {
-      editDraft = {
+    if (isEditMode && apparatusSelection.selectedFunnelId !== null && !selectedFunnel) apparatusSelection.selectFunnel(null);
+    if (isEditMode && apparatusSelection.selectedTubeId !== null && !selectedTube) apparatusSelection.selectTube(null);
+    if (isEditMode && selectedFunnel && !apparatusSelection.editDraft) {
+      apparatusSelection.editDraft = {
         specId: selectedFunnel.specId,
         tempC: selectedFunnel.tempC,
         ratePerMinute: selectedFunnel.ratePerMinute,
@@ -512,24 +433,25 @@ export function mountApp(root: HTMLElement): void {
         totalAmount: selectedFunnel.total ?? funnelTotalAmount,
       };
     }
-    if (isEditMode && selectedTube && !tubeEditDraft) {
-      tubeEditDraft = {
+    if (isEditMode && selectedTube && !apparatusSelection.tubeEditDraft) {
+      apparatusSelection.tubeEditDraft = {
         coneSize: selectedTube.coneSize,
         filter: selectedTube.filter ? new Set(selectedTube.filter) : null,
       };
     }
     const isTubeEditMode = isEditMode && !!selectedTube;
-    const tubeFields: TubeFieldValues = isTubeEditMode && tubeEditDraft ? tubeEditDraft : { coneSize: tubeConeSize, filter: tubeFilter };
+    const tubeFields: TubeFieldValues =
+      isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : { coneSize: tubeConeSize, filter: tubeFilter };
 
     const funnelFields: FunnelFieldValues =
-      isEditMode && editDraft
+      isEditMode && apparatusSelection.editDraft
         ? {
-            specLabel: speciesLookup.labelOf(editDraft.specId) ?? `spec ${editDraft.specId}`,
-            specColor: speciesLookup.colorOf(editDraft.specId) ?? '#888',
-            tempC: editDraft.tempC,
-            ratePerMinute: editDraft.ratePerMinute,
-            totalMode: editDraft.totalMode,
-            totalAmount: editDraft.totalAmount,
+            specLabel: speciesLookup.labelOf(apparatusSelection.editDraft.specId) ?? `spec ${apparatusSelection.editDraft.specId}`,
+            specColor: speciesLookup.colorOf(apparatusSelection.editDraft.specId) ?? '#888',
+            tempC: apparatusSelection.editDraft.tempC,
+            ratePerMinute: apparatusSelection.editDraft.ratePerMinute,
+            totalMode: apparatusSelection.editDraft.totalMode,
+            totalAmount: apparatusSelection.editDraft.totalAmount,
             remaining: selectedFunnel?.remaining ?? null,
           }
         : {
@@ -573,24 +495,24 @@ export function mountApp(root: HTMLElement): void {
         render();
       },
       onSetFunnelTemp: (value) => {
-        if (isEditMode && editDraft) {
-          editDraft.tempC = value;
+        if (isEditMode && apparatusSelection.editDraft) {
+          apparatusSelection.editDraft.tempC = value;
           sendFunnelUpdate();
         } else {
           funnelTempC = value;
         }
       },
       onSetFunnelRate: (value) => {
-        if (isEditMode && editDraft) {
-          editDraft.ratePerMinute = value;
+        if (isEditMode && apparatusSelection.editDraft) {
+          apparatusSelection.editDraft.ratePerMinute = value;
           sendFunnelUpdate();
         } else {
           funnelRatePerMinute = value;
         }
       },
       onSetFunnelTotalMode: (mode) => {
-        if (isEditMode && editDraft) {
-          editDraft.totalMode = mode;
+        if (isEditMode && apparatusSelection.editDraft) {
+          apparatusSelection.editDraft.totalMode = mode;
           sendFunnelUpdate();
         } else {
           funnelTotalMode = mode;
@@ -598,31 +520,32 @@ export function mountApp(root: HTMLElement): void {
         render();
       },
       onSetFunnelTotalAmount: (value) => {
-        if (isEditMode && editDraft) {
-          editDraft.totalAmount = value;
+        if (isEditMode && apparatusSelection.editDraft) {
+          apparatusSelection.editDraft.totalAmount = value;
           sendFunnelUpdate();
         } else {
           funnelTotalAmount = value;
         }
       },
       onResetFunnel: () => {
-        if (selectedFunnelId !== null) send({ type: 'resetFunnel', id: selectedFunnelId });
+        if (apparatusSelection.selectedFunnelId !== null) send({ type: 'resetFunnel', id: apparatusSelection.selectedFunnelId });
       },
       tubeFields,
       tubePalette: palette,
       onSetTubeConeSize: (value) => {
-        if (isTubeEditMode && tubeEditDraft) {
-          tubeEditDraft.coneSize = value;
+        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
+          apparatusSelection.tubeEditDraft.coneSize = value;
           sendTubeUpdate();
         } else {
           tubeConeSize = value;
         }
       },
       onToggleTubeFilterSpecies: (specId) => {
-        if (isTubeEditMode && tubeEditDraft) {
-          if (tubeEditDraft.filter === null) tubeEditDraft.filter = new Set(palette.map((p) => p.specId));
-          if (tubeEditDraft.filter.has(specId)) tubeEditDraft.filter.delete(specId);
-          else tubeEditDraft.filter.add(specId);
+        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
+          const draft = apparatusSelection.tubeEditDraft;
+          if (draft.filter === null) draft.filter = new Set(palette.map((p) => p.specId));
+          if (draft.filter.has(specId)) draft.filter.delete(specId);
+          else draft.filter.add(specId);
           sendTubeUpdate();
         } else {
           if (tubeFilter === null) tubeFilter = new Set(palette.map((p) => p.specId));
@@ -632,8 +555,8 @@ export function mountApp(root: HTMLElement): void {
         render();
       },
       onClearTubeFilter: () => {
-        if (isTubeEditMode && tubeEditDraft) {
-          tubeEditDraft.filter = null;
+        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
+          apparatusSelection.tubeEditDraft.filter = null;
           sendTubeUpdate();
         } else {
           tubeFilter = null;
@@ -655,8 +578,8 @@ export function mountApp(root: HTMLElement): void {
         onSelectSpecies: (specId) => {
           if (ptTarget === 'funnel-config') {
             funnelSpecId = specId;
-          } else if (ptTarget === 'funnel-edit' && editDraft) {
-            editDraft.specId = specId;
+          } else if (ptTarget === 'funnel-edit' && apparatusSelection.editDraft) {
+            apparatusSelection.editDraft.specId = specId;
             sendFunnelUpdate();
           } else {
             setTool({ kind: 'paint', specId });
@@ -746,7 +669,7 @@ export function mountApp(root: HTMLElement): void {
   function updateApparatusOverlay(x: number, y: number): void {
     const showFunnelGhost = tool?.kind === 'funnel';
     const showTubeDraw = tool?.kind === 'tube' && tubeDrawPoints.length > 0;
-    const editingTube = tool?.kind === 'select-apparatus' ? findTube(selectedTubeId) : undefined;
+    const editingTube = tool?.kind === 'select-apparatus' ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
     if ((!showFunnelGhost && !showTubeDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
@@ -786,49 +709,6 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
-  /** Bounding box hit-test against every placed funnel's rotated outline
-   * (see apparatus-shapes.ts's funnelBounds) -- good enough for "click
-   * anywhere near the funnel selects it" without pixel-perfect glass
-   * hit-testing. Returns the first match; overlapping funnels are an edge
-   * case not worth resolving more precisely. */
-  function hitTestFunnel(x: number, y: number): number | null {
-    for (const f of lastFunnels) {
-      const bounds = funnelBounds(funnelShapeFor(f.facing));
-      if (x >= f.anchorX + bounds.minDx && x <= f.anchorX + bounds.maxDx && y >= f.anchorY + bounds.minDy && y <= f.anchorY + bounds.maxDy) {
-        return f.id;
-      }
-    }
-    return null;
-  }
-
-  /** Nearest knee across every placed tube within TUBE_KNEE_HIT_RADIUS, or
-   * null -- checked before hitTestTubeSegment by callers so a click near a
-   * knee never grabs the segment it terminates instead. */
-  function hitTestTubeKnee(x: number, y: number): { tubeId: number; kneeIndex: number } | null {
-    let best: { tubeId: number; kneeIndex: number; dist: number } | null = null;
-    for (const t of lastTubes) {
-      const kneeIndex = nearestKneeIndex(t.points, { x, y }, TUBE_KNEE_HIT_RADIUS);
-      if (kneeIndex === null) continue;
-      const p = t.points[kneeIndex] as Point;
-      const dist = Math.hypot(p.x - x, p.y - y);
-      if (!best || dist < best.dist) best = { tubeId: t.id, kneeIndex, dist };
-    }
-    return best;
-  }
-
-  /** Nearest segment across every placed tube within TUBE_SEGMENT_HIT_RADIUS,
-   * or null. */
-  function hitTestTubeSegment(x: number, y: number): { tubeId: number; segIndex: number } | null {
-    let best: { tubeId: number; segIndex: number; dist: number } | null = null;
-    for (const t of lastTubes) {
-      const segIndex = nearestSegmentIndex(t.points, { x, y }, TUBE_SEGMENT_HIT_RADIUS);
-      if (segIndex === null) continue;
-      const dist = pointSegmentDistance({ x, y }, t.points[segIndex] as Point, t.points[segIndex + 1] as Point);
-      if (!best || dist < best.dist) best = { tubeId: t.id, segIndex, dist };
-    }
-    return best;
-  }
-
   /** Commits the in-progress tube draw (right-click): places a new tube if
    * at least one full segment was drawn, or silently discards a lone mouth
    * click with nothing to commit yet. */
@@ -852,7 +732,7 @@ export function mountApp(root: HTMLElement): void {
   /** Positions the select-apparatus tool's corner-bracket overlay over the
    * selected funnel's bounding box, or hides it. */
   function updateSelectionBox(): void {
-    const selected = tool?.kind === 'select-apparatus' ? findFunnel(selectedFunnelId) : undefined;
+    const selected = tool?.kind === 'select-apparatus' ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
     if (!selected || gridWidth === 0 || gridHeight === 0) {
       selectBox.style.display = 'none';
       return;
@@ -913,47 +793,10 @@ export function mountApp(root: HTMLElement): void {
         render();
         break;
       }
-      case 'select-apparatus': {
-        draggingFunnelId = null;
-        draggingTubeKnee = null;
-        draggingTubeSegment = null;
-
-        const hitFunnelId = hitTestFunnel(x, y);
-        if (hitFunnelId !== null) {
-          selectFunnel(hitFunnelId);
-          const hit = findFunnel(hitFunnelId);
-          if (hit) {
-            draggingFunnelId = hitFunnelId;
-            dragOffsetX = x - hit.anchorX;
-            dragOffsetY = y - hit.anchorY;
-          }
-          render();
-          break;
-        }
-
-        const kneeHit = hitTestTubeKnee(x, y);
-        if (kneeHit) {
-          selectTube(kneeHit.tubeId);
-          draggingTubeKnee = kneeHit.kneeIndex;
-          render();
-          break;
-        }
-
-        const segHit = hitTestTubeSegment(x, y);
-        if (segHit) {
-          selectTube(segHit.tubeId);
-          draggingTubeSegment = segHit.segIndex;
-          tubeSegmentDragLastX = x;
-          tubeSegmentDragLastY = y;
-          render();
-          break;
-        }
-
-        selectFunnel(null);
-        selectTube(null);
+      case 'select-apparatus':
+        apparatusSelection.beginSelection(x, y);
         render();
         break;
-      }
     }
   }
 
@@ -1007,22 +850,9 @@ export function mountApp(root: HTMLElement): void {
       } else if (tool?.kind === 'select-apparatus') {
         // Selecting is a single-click action (applyTool already ran once on
         // pointerdown), but if that click grabbed a funnel or a tube
-        // knee/segment, dragging moves it -- offset-relative to where it
-        // was grabbed for a funnel/knee, incremental-delta for a segment
-        // (see moveTubeSegment's doc comment for why).
-        if (draggingFunnelId !== null) {
-          send({ type: 'moveFunnel', id: draggingFunnelId, x: x - dragOffsetX, y: y - dragOffsetY });
-        } else if (draggingTubeKnee !== null && selectedTubeId !== null) {
-          send({ type: 'moveTubeKnee', id: selectedTubeId, kneeIndex: draggingTubeKnee, x, y });
-        } else if (draggingTubeSegment !== null && selectedTubeId !== null) {
-          const dx = x - tubeSegmentDragLastX;
-          const dy = y - tubeSegmentDragLastY;
-          if (dx !== 0 || dy !== 0) {
-            send({ type: 'moveTubeSegment', id: selectedTubeId, segIndex: draggingTubeSegment, dx, dy });
-            tubeSegmentDragLastX = x;
-            tubeSegmentDragLastY = y;
-          }
-        }
+        // knee/segment, dragging moves it -- see continueDrag's doc comment.
+        const msg = apparatusSelection.continueDrag(x, y);
+        if (msg) send(msg);
       } else if (tool?.kind !== 'funnel' && tool?.kind !== 'tube') {
         // Single-click action (place once) rather than a brush --
         // applyTool already ran once on pointerdown, so a drag shouldn't
@@ -1071,9 +901,7 @@ export function mountApp(root: HTMLElement): void {
       send({ type: 'stirEnd' });
       isMixing = false;
     }
-    draggingFunnelId = null;
-    draggingTubeKnee = null;
-    draggingTubeSegment = null;
+    apparatusSelection.endDrag();
     isPointerDown = false;
   });
 
@@ -1101,8 +929,8 @@ export function mountApp(root: HTMLElement): void {
       lastTempK = msg.tempK;
       lastRadiatorRadius = msg.radiatorRadius;
       lastRadiatorTargetK = msg.radiatorTargetK;
-      lastFunnels = msg.funnels;
-      lastTubes = msg.tubes;
+      apparatusSelection.setFunnels(msg.funnels);
+      apparatusSelection.setTubes(msg.tubes);
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,
