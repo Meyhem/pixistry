@@ -249,6 +249,34 @@ describe('applyPointHeatSource', () => {
 
     expect(grid.u[0] as number).toBeCloseTo(atTarget.u, 3);
   });
+
+  it('lands exactly on the target in one tick instead of overshooting past it for a low-heat-capacity cell', () => {
+    // A fixed joulesPerCell (watts * dt) applied to a tiny-heat-capacity gas
+    // cell can vastly exceed the energy gap to the target -- observed in
+    // practice as chlorine gas painted into a cold radiator swinging past
+    // the target down to 0J, then swinging back past it up into "hot"
+    // territory the very next tick, oscillating forever instead of
+    // settling. The fix clamps the write to the target's own energy value.
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const chlorine = findEntry(palette, 'Cl2');
+    const mass = massOf(species, chlorine.specId);
+    const thermal = species.thermalOf(chlorine.specId);
+
+    const roomTemp = energyForTemperature(thermal, mass, 298.15);
+    const grid = new SimGrid(1, 1);
+    grid.set(0, 0, chlorine.specId, roomTemp.phase, roomTemp.u);
+
+    const targetK = 173.15; // -100C
+    const targetU = energyForTemperature(thermal, mass, targetK).u;
+
+    applyPointHeatSource(grid, species, 0, 0, 0, 400, targetK, 1);
+    expect(grid.u[0] as number).toBeCloseTo(targetU, 3);
+
+    // A second tick at the target must not swing it back the other way.
+    applyPointHeatSource(grid, species, 0, 0, 0, 400, targetK, 1);
+    expect(grid.u[0] as number).toBeCloseTo(targetU, 3);
+  });
 });
 
 describe('stepRadiators', () => {

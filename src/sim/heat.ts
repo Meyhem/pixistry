@@ -188,7 +188,8 @@ export function applyPointHeatSource(
 
       const mass = massOf(species, specId as number);
       const thermal = species.thermalOf(specId as number);
-      const { tempK } = temperatureOf(thermal, mass, grid.u[idx] as number);
+      const currentU = grid.u[idx] as number;
+      const { tempK } = temperatureOf(thermal, mass, currentU);
       // A tolerance rather than exact equality: grid.u is Float32Array (see
       // grid.ts), whose ~1.19e-7 relative precision means a cell seeded
       // exactly at targetK can round-trip through energyForTemperature/
@@ -198,9 +199,18 @@ export function applyPointHeatSource(
       // target". 0.01K is comfortably above that float32 noise floor while
       // staying far below any real target gap the sim cares about.
       if (Math.abs(tempK - targetK) < 0.01) continue;
-      const direction = tempK < targetK ? 1 : -1;
 
-      const newU = (grid.u[idx] as number) + direction * joulesPerCell;
+      // joulesPerCell is a fixed, mass-independent amount, so a
+      // small-heat-capacity cell (a gas, especially) can swing past the
+      // target in a single tick -- observed in practice as gas painted into
+      // a cold radiator overshooting down to (clamped) 0J, then next tick
+      // overshooting back up past the target into "hot" territory, forever
+      // oscillating instead of settling. Clamping the write to targetU (the
+      // energy that implies exactly targetK) makes the radiator a true
+      // thermostat: a cell approaches the target and stops there instead of
+      // ever crossing it.
+      const targetU = energyForTemperature(thermal, mass, targetK).u;
+      const newU = tempK < targetK ? Math.min(currentU + joulesPerCell, targetU) : Math.max(currentU - joulesPerCell, targetU);
       grid.u[idx] = Math.max(0, newU);
     }
   }
