@@ -28,6 +28,29 @@ function displaceDensity(grid: SimGrid, species: SpeciesTable, idx: number, spec
   return species.buoyantDensityOf(specId, phase, tempK);
 }
 
+type TargetStatus =
+  | { kind: 'blocked' } // a tube's lumen or a wall material -- never a valid destination
+  | { kind: 'empty' }
+  | { kind: 'occupied'; specId: number; phase: PhaseCode };
+
+/** The shared head of canDisplace/canRiseThroughLiquid below: a tube's
+ * lumen is only ever entered via its own suction cone (see tube.ts's
+ * stepTubes), never by ordinary falling-sand displacement -- otherwise
+ * matter could fall/rise straight into the middle of a tube, bypassing the
+ * mouth and its species filter entirely. Beyond that, only the empty/wall/
+ * occupied distinction is shared; the two callers disagree on what to do
+ * with "empty" (canDisplace treats it as auto-displaceable,
+ * canRiseThroughLiquid doesn't -- liquids don't spontaneously rise into open
+ * air), so that decision stays with each predicate rather than being folded
+ * in here. */
+function blockedTarget(grid: SimGrid, targetIdx: number): TargetStatus {
+  if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return { kind: 'blocked' };
+  if (grid.isEmptyAt(targetIdx)) return { kind: 'empty' };
+  const specId = grid.specId[targetIdx] as number;
+  if (isWallSpecId(specId)) return { kind: 'blocked' };
+  return { kind: 'occupied', specId, phase: grid.phase[targetIdx] as PhaseCode };
+}
+
 function canDisplace(
   grid: SimGrid,
   species: SpeciesTable,
@@ -37,21 +60,15 @@ function canDisplace(
   targetIdx: number,
   direction: 'down' | 'up',
 ): boolean {
-  // A tube's lumen is only ever entered via its own suction cone (see
-  // tube.ts's stepTubes), never by ordinary falling-sand displacement --
-  // otherwise matter could fall/rise straight into the middle of a tube,
-  // bypassing the mouth and its species filter entirely.
-  if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return false;
-  if (grid.isEmptyAt(targetIdx)) return true;
-  const targetSpecId = grid.specId[targetIdx] as number;
-  if (isWallSpecId(targetSpecId)) return false;
+  const target = blockedTarget(grid, targetIdx);
+  if (target.kind === 'blocked') return false;
+  if (target.kind === 'empty') return true;
   // Density sorting is a liquid/gas thing -- two solid grains never swap
   // places by density, they just pile up static once resting, so a denser
   // solid can't tunnel through a lighter one underneath it.
-  const targetPhase = grid.phase[targetIdx] as PhaseCode;
-  if (fromPhase === PhaseCode.Solid && targetPhase === PhaseCode.Solid) return false;
+  if (fromPhase === PhaseCode.Solid && target.phase === PhaseCode.Solid) return false;
   const fromDensity = displaceDensity(grid, species, fromIdx, fromSpecId, fromPhase);
-  const targetDensity = displaceDensity(grid, species, targetIdx, targetSpecId, targetPhase);
+  const targetDensity = displaceDensity(grid, species, targetIdx, target.specId, target.phase);
   return direction === 'down' ? fromDensity > targetDensity : fromDensity < targetDensity;
 }
 
@@ -71,15 +88,49 @@ function canRiseThroughLiquid(
   fromPhase: PhaseCode,
   targetIdx: number,
 ): boolean {
-  if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return false;
-  if (grid.isEmptyAt(targetIdx)) return false;
-  const targetSpecId = grid.specId[targetIdx] as number;
-  if (isWallSpecId(targetSpecId)) return false;
-  const targetPhase = grid.phase[targetIdx] as PhaseCode;
-  if (targetPhase !== PhaseCode.Liquid) return false;
+  const target = blockedTarget(grid, targetIdx);
+  if (target.kind !== 'occupied' || target.phase !== PhaseCode.Liquid) return false;
   const fromDensity = displaceDensity(grid, species, fromIdx, fromSpecId, fromPhase);
-  const targetDensity = displaceDensity(grid, species, targetIdx, targetSpecId, targetPhase);
+  const targetDensity = displaceDensity(grid, species, targetIdx, target.specId, target.phase);
   return fromDensity < targetDensity;
+}
+
+/** Swaps a mover into its destination and marks both cells moved this tick
+ * -- the one-liner repeated at every successful move below. Always returns
+ * true so callers can write `return commitSwap(...)` from a boolean-
+ * returning helper (tryDiagonal) or `commitSwap(...); return;` from a
+ * void one (moveFalling/moveRising). */
+function commitSwap(grid: SimGrid, moved: Uint8Array, a: number, b: number): true {
+  grid.swap(a, b);
+  moved[a] = 1;
+  moved[b] = 1;
+  return true;
+}
+
+/** Tries each of the two diagonal targets at row `targetY` (order randomized
+ * per pickDiagonalOrder), swapping into the first one where `canMove` holds
+ * and a DIAGONAL_P roll succeeds. Shared by the down/up diagonal-fallback
+ * step in moveFalling and moveRising -- all three sites (solid/liquid
+ * falling, buoyant liquid rising, gas rising) roll the same DIAGONAL_P once
+ * a straight move has already failed; only the direction (targetY) and the
+ * density predicate differ between them. */
+function tryDiagonal(
+  grid: SimGrid,
+  moved: Uint8Array,
+  idx: number,
+  x: number,
+  targetY: number,
+  rng: Rng,
+  canMove: (targetIdx: number) => boolean,
+): boolean {
+  for (const dx of pickDiagonalOrder(rng)) {
+    const nx = x + dx;
+    if (!grid.inBounds(nx, targetY)) continue;
+    const nIdx = grid.index(nx, targetY);
+    if (moved[nIdx]) continue;
+    if (canMove(nIdx) && rng() < DIAGONAL_P) return commitSwap(grid, moved, idx, nIdx);
+  }
+  return false;
 }
 
 function moveFalling(
@@ -98,24 +149,10 @@ function moveFalling(
   if (grid.inBounds(x, belowY)) {
     const belowIdx = grid.index(x, belowY);
     if (canDisplace(grid, species, idx, specId, fromPhase, belowIdx, 'down')) {
-      grid.swap(idx, belowIdx);
-      moved[idx] = 1;
-      moved[belowIdx] = 1;
+      commitSwap(grid, moved, idx, belowIdx);
       return;
     }
-
-    for (const dx of pickDiagonalOrder(rng)) {
-      const nx = x + dx;
-      if (!grid.inBounds(nx, belowY)) continue;
-      const nIdx = grid.index(nx, belowY);
-      if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, idx, specId, fromPhase, nIdx, 'down') && rng() < DIAGONAL_P) {
-        grid.swap(idx, nIdx);
-        moved[idx] = 1;
-        moved[nIdx] = 1;
-        return;
-      }
-    }
+    if (tryDiagonal(grid, moved, idx, x, belowY, rng, (t) => canDisplace(grid, species, idx, specId, fromPhase, t, 'down'))) return;
   }
 
   if (!canSpreadHorizontally) return;
@@ -127,24 +164,10 @@ function moveFalling(
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
     if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, aboveIdx)) {
-      grid.swap(idx, aboveIdx);
-      moved[idx] = 1;
-      moved[aboveIdx] = 1;
+      commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-
-    for (const dx of pickDiagonalOrder(rng)) {
-      const nx = x + dx;
-      if (!grid.inBounds(nx, aboveY)) continue;
-      const nIdx = grid.index(nx, aboveY);
-      if (moved[nIdx]) continue;
-      if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, nIdx) && rng() < DIAGONAL_P) {
-        grid.swap(idx, nIdx);
-        moved[idx] = 1;
-        moved[nIdx] = 1;
-        return;
-      }
-    }
+    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canRiseThroughLiquid(grid, species, idx, specId, fromPhase, t))) return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {
@@ -155,9 +178,7 @@ function moveFalling(
     if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
     if (grid.isEmptyAt(nIdx)) {
       if (rng() < LIQUID_SPREAD_P) {
-        grid.swap(idx, nIdx);
-        moved[idx] = 1;
-        moved[nIdx] = 1;
+        commitSwap(grid, moved, idx, nIdx);
         return;
       }
       continue;
@@ -171,9 +192,7 @@ function moveFalling(
     const targetPhase = grid.phase[nIdx] as PhaseCode;
     if (targetPhase !== PhaseCode.Liquid) continue;
     if (rng() < LIQUID_SPREAD_P) {
-      grid.swap(idx, nIdx);
-      moved[idx] = 1;
-      moved[nIdx] = 1;
+      commitSwap(grid, moved, idx, nIdx);
       return;
     }
   }
@@ -193,24 +212,10 @@ function moveRising(
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
     if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, aboveIdx, 'up')) {
-      grid.swap(idx, aboveIdx);
-      moved[idx] = 1;
-      moved[aboveIdx] = 1;
+      commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-
-    for (const dx of pickDiagonalOrder(rng)) {
-      const nx = x + dx;
-      if (!grid.inBounds(nx, aboveY)) continue;
-      const nIdx = grid.index(nx, aboveY);
-      if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, nIdx, 'up') && rng() < DIAGONAL_P) {
-        grid.swap(idx, nIdx);
-        moved[idx] = 1;
-        moved[nIdx] = 1;
-        return;
-      }
-    }
+    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canDisplace(grid, species, idx, specId, PhaseCode.Gas, t, 'up'))) return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {
@@ -220,9 +225,7 @@ function moveRising(
     if (moved[nIdx]) continue;
     if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
     if (grid.isEmptyAt(nIdx) && rng() < GAS_SPREAD_P) {
-      grid.swap(idx, nIdx);
-      moved[idx] = 1;
-      moved[nIdx] = 1;
+      commitSwap(grid, moved, idx, nIdx);
       return;
     }
   }
