@@ -11,7 +11,6 @@
 // calculation over a real distance.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import type { SpeciesTable, ThermalProfile } from './species';
-import { getWall, isWallSpecId } from './walls';
 
 export const CELL_VOLUME_CM3 = 1;
 export const AMBIENT_TEMPERATURE_K = 298.15;
@@ -195,18 +194,19 @@ export function applyPointHeatSource(
 }
 
 /**
- * Heater-glass/cooler-glass tool support: every wall cell on the grid whose
- * material has a nonzero radiatorWatts (see walls.ts) radiates its fixed
- * wattage into cells within `radiationRadius` of itself, every tick, until
- * a warmed/cooled cell reaches that radiator kind's target temperature --
- * unlike the old burner/coolant tool, this is anchored to the placed glass
- * cells themselves rather than the cursor, so a radiator keeps working for
- * as long as it sits on the grid. `radiationRadius` is a single
- * player-configurable value shared by every radiator cell (both heater and
- * cooler); `heaterTargetK`/`coolerTargetK` are separate per-kind setpoints,
- * all set via the UI's side panel.
+ * Heater/cooler radiator support: every cell with a nonzero grid.radiator
+ * value (see radiators.ts -- a background field, not a grid.specId
+ * occupant, so it has no collision) radiates its fixed wattage into cells
+ * within `radiationRadius` of itself, every tick, until a warmed/cooled
+ * cell reaches that radiator kind's target temperature -- unlike the old
+ * cursor-anchored burner/coolant tool, this is anchored to the placed
+ * radiator cells themselves, so a radiator keeps working for as long as
+ * it's marked on the grid. `radiationRadius` is a single player-configurable
+ * value shared by every radiator cell (both heater and cooler);
+ * `heaterTargetK`/`coolerTargetK` are separate per-kind setpoints, all set
+ * via the UI's side panel.
  */
-export function stepGlassRadiators(
+export function stepRadiators(
   grid: SimGrid,
   species: SpeciesTable,
   radiationRadius: number,
@@ -215,10 +215,8 @@ export function stepGlassRadiators(
   dtSeconds: number,
 ): void {
   if (radiationRadius <= 0) return;
-  for (let idx = 0; idx < grid.specId.length; idx++) {
-    const specId = grid.specId[idx] as number;
-    if (specId === EMPTY || !isWallSpecId(specId)) continue;
-    const watts = getWall(specId).radiatorWatts;
+  for (let idx = 0; idx < grid.radiator.length; idx++) {
+    const watts = grid.radiator[idx] as number;
     if (watts === 0) continue;
     const targetK = watts > 0 ? heaterTargetK : coolerTargetK;
     const x = idx % grid.width;

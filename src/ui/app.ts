@@ -1,11 +1,11 @@
-// M4+ UI: the full v1 tool set (paint, erase, wall materials including
-// heater-glass/cooler-glass, probe, mixer, grabber) plus time controls
-// (pause, single-step, speed multiplier), a pinned-species quick row backed
-// by a full periodic-table modal, and a hover inspector -- all plain DOM per
-// the design doc's "src/ui plain DOM/React panels", no framework. Visual
-// layout follows the "Pixistry UI Refresh" design (see toolbar.ts,
-// side-panel.ts, periodic-table.ts for the three panel builders this module
-// wires together).
+// M4+ UI: the full v1 tool set (paint, erase, wall materials, heater/cooler
+// radiators, probe, mixer, grabber) plus time controls (pause, single-step,
+// speed multiplier), a pinned-species quick row backed by a full
+// periodic-table modal, and a hover inspector -- all plain DOM per the
+// design doc's "src/ui plain DOM/React panels", no framework. Visual layout
+// follows the "Pixistry UI Refresh" design (see toolbar.ts, side-panel.ts,
+// periodic-table.ts for the three panel builders this module wires
+// together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
@@ -13,6 +13,7 @@ import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
 import { getWall, wallList } from '../sim/walls';
+import { RADIATORS, radiatorFor, type RadiatorSign } from '../sim/radiators';
 import { buildToolbar, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type SidePanelCallbacks, type ToolMeta } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
@@ -34,6 +35,7 @@ type Tool =
   | { kind: 'paint'; specId: number }
   | { kind: 'erase' }
   | { kind: 'wall'; specId: number }
+  | { kind: 'radiator'; sign: RadiatorSign }
   | { kind: 'mixer' }
   | { kind: 'grabber' };
 
@@ -170,6 +172,7 @@ export function mountApp(root: HTMLElement): void {
   let lastSpecId: Uint16Array | null = null;
   let lastPhase: Uint8Array | null = null;
   let lastTempK: Float32Array | null = null;
+  let lastRadiator: Int16Array | null = null;
 
   function paletteEntryFor(specId: number): PaletteEntry | undefined {
     return palette.find((entry) => entry.specId === specId);
@@ -204,8 +207,22 @@ export function mountApp(root: HTMLElement): void {
         meltLabel: '',
         boilLabel: '',
         phaseLabel: '',
-        isThermal: wall.radiatorWatts !== 0,
-        isHeater: wall.radiatorWatts > 0,
+        isThermal: false,
+        isHeater: false,
+      };
+    }
+    if (t.kind === 'radiator') {
+      const radiator = radiatorFor(t.sign);
+      return {
+        label: radiator.label,
+        color: radiator.color,
+        category: 'APPARATUS',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: true,
+        isHeater: radiator.sign > 0,
       };
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
@@ -232,10 +249,12 @@ export function mountApp(root: HTMLElement): void {
     const toolbarCallbacks: ToolbarCallbacks = {
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
       isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
+      isRadiatorActive: (sign) => tool?.kind === 'radiator' && tool.sign === sign,
       isToolActive: (kind) => tool?.kind === kind,
       isPinned: (label) => pinnedLabels.includes(label),
       onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
       onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
+      onSelectRadiator: (sign) => setTool({ kind: 'radiator', sign }),
       onSelectTool: (kind) => setTool({ kind }),
       onTogglePin: togglePin,
       onOpenPeriodicTable: () => {
@@ -256,10 +275,10 @@ export function mountApp(root: HTMLElement): void {
         render();
       },
     };
-    buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
+    buildToolbar(toolbar, palette, wallList(), RADIATORS, pinnedLabels, toolbarCallbacks);
 
     const meta = describeToolMeta(tool);
-    const isHeaterActive = tool?.kind === 'wall' && getWall(tool.specId).radiatorWatts > 0;
+    const isHeaterActive = tool?.kind === 'radiator' && tool.sign > 0;
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
       onSetBrushWidth: (value) => {
@@ -329,6 +348,9 @@ export function mountApp(root: HTMLElement): void {
       case 'wall':
         send({ type: 'paint', x, y, radius: brushWidth, specId: tool.specId, tempC: brushTempC });
         break;
+      case 'radiator':
+        send({ type: 'paintRadiator', x, y, radius: brushWidth, watts: radiatorFor(tool.sign).watts });
+        break;
       case 'erase':
         send({ type: 'erase', x, y, radius: brushWidth });
         break;
@@ -349,9 +371,11 @@ export function mountApp(root: HTMLElement): void {
     }
     const idx = y * gridWidth + x;
     const specId = lastSpecId[idx] as number;
+    const radWatts = lastRadiator ? (lastRadiator[idx] as number) : 0;
+    const radiatorNote = radWatts > 0 ? ' · radiating heat' : radWatts < 0 ? ' · radiating cold' : '';
     if (specId === EMPTY) {
       inspector.classList.add('empty');
-      inspectorText.textContent = 'empty';
+      inspectorText.textContent = `empty${radiatorNote}`;
       return;
     }
     inspector.classList.remove('empty');
@@ -360,7 +384,7 @@ export function mountApp(root: HTMLElement): void {
     const tempC = kelvinToCelsius(lastTempK[idx] as number);
     const phaseCode = lastPhase[idx] as number;
     const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
-    inspectorText.textContent = `${label} · ${tempC.toFixed(1)}°C · ${phase}`;
+    inspectorText.textContent = `${label} · ${tempC.toFixed(1)}°C · ${phase}${radiatorNote}`;
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -419,7 +443,8 @@ export function mountApp(root: HTMLElement): void {
       lastSpecId = msg.specId;
       lastPhase = msg.phase;
       lastTempK = msg.tempK;
-      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK });
+      lastRadiator = msg.radiator;
+      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK, radiator: msg.radiator });
     }
   };
 }

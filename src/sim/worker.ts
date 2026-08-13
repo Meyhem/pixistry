@@ -1,13 +1,14 @@
 // Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
 // thread over postMessage. Tick order follows the design doc's movement ->
 // heat -> react. M4 added tools (walls reuse the plain paint/erase messages
-// since SpeciesTable branches transparently on wall specIds, which is also
-// how heater-glass/cooler-glass are painted; mixer stirs) and time controls
-// (single-step, speed multiplier). M5 wires the static reaction table into
-// the grid (react.ts) -- this is what makes an ionic solid painted next to
-// water actually dissolve into aqueous ions on-grid. Pixistry is just
-// pixels of elements and compounds with a temperature each -- there is no
-// gas pressure model.
+// since SpeciesTable branches transparently on wall specIds; heater/cooler
+// radiators are painted via a separate paintRadiator message into
+// grid.radiator, a non-physical overlay -- see radiators.ts; mixer stirs)
+// and time controls (single-step, speed multiplier). M5 wires the static
+// reaction table into the grid (react.ts) -- this is what makes an ionic
+// solid painted next to water actually dissolve into aqueous ions on-grid.
+// Pixistry is just pixels of elements and compounds with a temperature
+// each -- there is no gas pressure model.
 import { SimGrid } from './grid';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import {
@@ -16,7 +17,7 @@ import {
   MAX_TEMP_K,
   massOf,
   stepConduction,
-  stepGlassRadiators,
+  stepRadiators,
   temperatureOf,
 } from './heat';
 import { stepMovement } from './movement';
@@ -27,10 +28,11 @@ import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
-  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; tick: number };
+  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; radiator: Int16Array; tick: number };
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
+  | { type: 'paintRadiator'; x: number; y: number; radius: number; watts: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
@@ -68,13 +70,13 @@ let running = true;
 let speed = 1;
 let tickAccumulator = 0;
 
-// How far (in cells) every heater-glass/cooler-glass cell currently on the
-// grid radiates into its surroundings each tick -- see heat.ts's
-// stepGlassRadiators. A single shared value for all radiator cells,
-// player-adjustable via the side panel while a radiator tool is selected.
+// How far (in cells) every radiator cell currently on the grid radiates
+// into its surroundings each tick -- see heat.ts's stepRadiators. A single
+// shared value for all radiator cells, player-adjustable via the side panel
+// while a radiator tool is selected.
 let radiationRadius = DEFAULT_RADIATION_RADIUS;
 
-// Per-kind thermostat setpoints for stepGlassRadiators -- see heat.ts's
+// Per-kind thermostat setpoints for stepRadiators -- see heat.ts's
 // applyPointHeatSource: a radiator stops adding/removing energy once a
 // cell it's reaching is at or past its kind's target.
 let heaterTargetK = DEFAULT_HEATER_TARGET_K;
@@ -105,7 +107,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 
 function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
-  stepGlassRadiators(grid, species, radiationRadius, heaterTargetK, coolerTargetK, TICK_DT_SECONDS);
+  stepRadiators(grid, species, radiationRadius, heaterTargetK, coolerTargetK, TICK_DT_SECONDS);
   stepConduction(grid, species);
   stepReactions(grid, species, rng);
 }
@@ -141,8 +143,9 @@ function postFrame(): void {
   const specId = grid.specId.slice();
   const phase = grid.phase.slice();
   const tempK = computeTempGrid();
+  const radiator = grid.radiator.slice();
   overlayGrabbedCells(specId, phase, tempK);
-  post({ type: 'frame', specId, phase, tempK, tick });
+  post({ type: 'frame', specId, phase, tempK, radiator, tick });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -156,8 +159,16 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
       break;
     }
+    case 'paintRadiator':
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        grid.radiator[grid.index(px, py)] = msg.watts;
+      });
+      break;
     case 'erase':
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.clear(px, py));
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        grid.clear(px, py);
+        grid.radiator[grid.index(px, py)] = 0;
+      });
       break;
     case 'setRunning':
       running = msg.running;

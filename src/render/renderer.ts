@@ -13,7 +13,6 @@
 // color in the middle.
 import { EMPTY } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
-import { getWall, isWallSpecId } from '../sim/walls';
 
 export const SUPERSAMPLE = 3;
 
@@ -21,13 +20,14 @@ export interface FrameData {
   specId: Uint16Array;
   phase: Uint8Array;
   tempK: Float32Array;
+  radiator: Int16Array;
 }
 
 export interface Renderer {
   setColorForSpec(specId: number, hex: string): void;
   /** Mirrors the UI's radiation-radius setting so the persistent
    * heater/cooler glow (see accumulateGlow) is sized to match what
-   * stepGlassRadiators is actually doing on the grid. */
+   * stepRadiators is actually doing on the grid. */
   setRadiationRadius(radius: number): void;
   drawFrame(frame: FrameData): void;
 }
@@ -103,10 +103,12 @@ const COLD_MID_RGB: [number, number, number] = [140, 190, 255];
 const COLD_STRONG_RGB: [number, number, number] = [20, 60, 220];
 
 // Persistent glow: a soft, subtle wash (interior *and* border alike, plus
-// spilling into empty background cells) around every placed heater-glass/
-// cooler-glass cell, out to the current radiation radius, so the tool's
-// reach is visible on the grid without having to hover over it. Kept weak
-// (GLOW_MAX_STRENGTH) so it reads as a halo, not a repaint.
+// spilling into empty background cells) around every placed radiator cell,
+// out to the current radiation radius, so the tool's reach is visible on
+// the grid without having to hover over it -- doubles as the only visual
+// marker for a radiator's location now that it's not physical matter with
+// its own color. Kept weak (GLOW_MAX_STRENGTH) so it reads as a halo, not a
+// repaint.
 const GLOW_MAX_STRENGTH = 0.22;
 
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
@@ -170,23 +172,21 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
   const pixelBuffer = new Uint8Array(texWidth * texHeight * 4);
 
   // Per-grid-cell (not per-subpixel) glow strength, recomputed every frame
-  // from the current specId grid -- cheap since it only walks radiator
-  // wall cells and their (small, player-bounded) radius, same cost class
-  // as heat.ts's own applyPointHeatSource.
+  // from the current radiator overlay -- cheap since it only walks radiator
+  // cells and their (small, player-bounded) radius, same cost class as
+  // heat.ts's own applyPointHeatSource.
   let radiationRadius = 0;
   let heaterGlow = new Float32Array(width * height);
   let coolerGlow = new Float32Array(width * height);
 
-  function accumulateGlow(specIdGrid: Uint16Array): void {
+  function accumulateGlow(radiatorGrid: Int16Array): void {
     heaterGlow.fill(0);
     coolerGlow.fill(0);
     if (radiationRadius <= 0) return;
     const r2 = radiationRadius * radiationRadius;
 
-    for (let i = 0; i < specIdGrid.length; i++) {
-      const specId = specIdGrid[i] as number;
-      if (specId === EMPTY || !isWallSpecId(specId)) continue;
-      const watts = getWall(specId).radiatorWatts;
+    for (let i = 0; i < radiatorGrid.length; i++) {
+      const watts = radiatorGrid[i] as number;
       if (watts === 0) continue;
 
       const cx = i % width;
@@ -220,8 +220,8 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       radiationRadius = radius;
     },
 
-    drawFrame({ specId: specIdGrid, tempK }: FrameData): void {
-      accumulateGlow(specIdGrid);
+    drawFrame({ specId: specIdGrid, tempK, radiator }: FrameData): void {
+      accumulateGlow(radiator);
 
       for (let cy = 0; cy < height; cy++) {
         for (let cx = 0; cx < width; cx++) {

@@ -1,6 +1,6 @@
 // The right-hand card describing the active tool: swatch/label/category
 // chip, species melt/boil/phase readout when relevant, brush width, brush
-// temperature, and (for heater-glass/cooler-glass) radiation radius +
+// temperature, and (for the heater/cooler radiator tools) radiation radius +
 // target temperature. Rebuilt wholesale whenever the active tool or any of
 // its settings change -- see app.ts's render().
 import { formatCelsius } from './format';
@@ -143,8 +143,8 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     hintTitle.textContent = 'HOW IT WORKS';
     const hintBody = el('p', 'setting-hint');
     hintBody.textContent = meta.isHeater
-      ? 'Placed glass heats nearby cells every tick, up to the target temperature.'
-      : 'Placed glass cools nearby cells every tick, down to the target temperature.';
+      ? 'Placed radiator heats nearby cells every tick, up to the target temperature -- pure radiation, no collision.'
+      : 'Placed radiator cools nearby cells every tick, down to the target temperature -- pure radiation, no collision.';
     hint.appendChild(hintTitle);
     hint.appendChild(hintBody);
     container.appendChild(hint);

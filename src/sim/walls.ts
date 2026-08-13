@@ -1,20 +1,16 @@
-// Synthetic wall materials (glass/steel/insulator, plus heater-glass/
-// cooler-glass) -- M4. These are NOT chemistry molecules: the v1 element set
-// has no silicon (so "glass"/SiO2 can't be interned) and "steel" isn't a
-// single compound anyway. They live as a small fixed table with their own
-// thermal/physical constants, with no InternedPool/MoleculeGraph involvement
-// at all.
+// Synthetic wall materials (glass/steel/insulator) -- M4. These are NOT
+// chemistry molecules: the v1 element set has no silicon (so "glass"/SiO2
+// can't be interned) and "steel" isn't a single compound anyway. They live
+// as a small fixed table with their own thermal/physical constants, with no
+// InternedPool/MoleculeGraph involvement at all.
 //
-// Heater-glass/cooler-glass are drawn exactly like any other wall material
-// (paint tool, brush-width radius) but carry a nonzero radiatorWatts: once
-// placed, every such cell radiates its fixed wattage into cells within the
-// player-configurable radiation radius, every tick, for as long as it sits
-// on the grid -- see heat.ts's stepGlassRadiators. This replaced an earlier
-// burner/coolant tool that injected heat at the cursor only while the
-// pointer was held down; the drawn-apparatus model reads better for a
-// lab-bench sim (Bunsen burner under a flask vs. a magic heat ray).
+// Heater/cooler apparatus used to live here too (as heater-glass/
+// cooler-glass wall materials), occupying grid.specId and blocking movement
+// like any other wall. That's been replaced by a non-physical radiator
+// overlay (SimGrid.radiator, see radiators.ts) so a placed heater/cooler no
+// longer collides with anything -- see radiators.ts for that model.
 //
-// specIds are reserved in a disjoint range (0xFF00..0xFF04), well above any
+// specIds are reserved in a disjoint range (0xFF00..0xFF02), well above any
 // real chemistry specId (InternedPool grows from 0, currently ~16 species)
 // and below EMPTY (0xffff), so grid.specId can stay one flat Uint16Array
 // and SpeciesTable/heat.ts/movement.ts just need one range check to branch.
@@ -23,7 +19,7 @@ import type { ThermalProfile } from './species';
 
 export const WALL_SPEC_BASE = 0xff00;
 
-export type WallKind = 'glass' | 'steel' | 'insulator' | 'heater-glass' | 'cooler-glass';
+export type WallKind = 'glass' | 'steel' | 'insulator';
 
 export interface WallMaterial {
   readonly specId: number;
@@ -36,22 +32,9 @@ export interface WallMaterial {
   readonly meltK: number;
   readonly thermalConductivity: number;
   readonly density: number;
-  /** Zero for passive wall materials. Nonzero only for heater-glass/
-   * cooler-glass: the fixed wattage each placed cell of this material
-   * radiates (see heat.ts's stepGlassRadiators) into every cell within the
-   * player-configurable radiation radius, every tick, until that cell
-   * reaches the tool's player-configurable target temperature -- positive
-   * heats, negative cools. This replaced an earlier cursor-anchored
-   * burner/coolant tool: baking the wattage into the material itself,
-   * rather than passing it around in tool messages, means a placed
-   * radiator keeps radiating for as long as it sits on the grid instead of
-   * only while the pointer is held down. */
-  readonly radiatorWatts: number;
 }
 
 const NEVER_MELTS_K = 1e9;
-const HEATER_GLASS_WATTS = 400;
-const COOLER_GLASS_WATTS = -400;
 
 const WALLS: readonly WallMaterial[] = [
   {
@@ -62,7 +45,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 1.0,
     density: 2.5,
-    radiatorWatts: 0,
   },
   {
     specId: WALL_SPEC_BASE + 1,
@@ -72,7 +54,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 45,
     density: 7.8,
-    radiatorWatts: 0,
   },
   {
     specId: WALL_SPEC_BASE + 2,
@@ -82,27 +63,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 0.03,
     density: 1.5,
-    radiatorWatts: 0,
-  },
-  {
-    specId: WALL_SPEC_BASE + 3,
-    kind: 'heater-glass',
-    label: 'Heating Glass',
-    color: '#ff9d5c',
-    meltK: NEVER_MELTS_K,
-    thermalConductivity: 1.0,
-    density: 2.5,
-    radiatorWatts: HEATER_GLASS_WATTS,
-  },
-  {
-    specId: WALL_SPEC_BASE + 4,
-    kind: 'cooler-glass',
-    label: 'Cooling Glass',
-    color: '#5cc8ff',
-    meltK: NEVER_MELTS_K,
-    thermalConductivity: 1.0,
-    density: 2.5,
-    radiatorWatts: COOLER_GLASS_WATTS,
   },
 ];
 
