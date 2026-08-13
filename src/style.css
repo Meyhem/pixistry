@@ -472,41 +472,59 @@ body {
   color: var(--accent);
 }
 
-.tube-filter-list {
+.species-chip-list {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 220px;
-  overflow-y: auto;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 6px;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 4px;
 }
 
-.tube-filter-item {
-  display: flex;
+.species-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  cursor: pointer;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px 0 10px;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--swatch, #444);
   font-size: 12px;
+  font-weight: 600;
 }
 
-.tube-filter-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+.species-chip-name {
+  white-space: nowrap;
 }
 
-.tube-filter-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+.species-chip-remove {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
   flex-shrink: 0;
 }
 
-.tube-filter-name {
-  color: var(--text);
+.species-chip-add-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.species-chip-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .apparatus-preview {

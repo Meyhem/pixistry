@@ -12,6 +12,7 @@ import type { PaletteEntry } from '../sim/species';
 import { formatCelsius } from './format';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el, hintBox, propRow } from './dom';
+import { buildSpeciesChipList } from './species-chip-list';
 
 export interface ToolMeta {
   label: string;
@@ -69,11 +70,11 @@ export interface SidePanelCallbacks {
   onSetFunnelTotalAmount(value: number): void;
   onResetFunnel(): void;
   tubeFields: TubeFieldValues;
-  /** Every paintable species, for the filter's checkbox list. */
+  /** Every paintable species, for the filter's chip-list picker. */
   tubePalette: readonly PaletteEntry[];
   onSetTubeConeSize(value: number): void;
-  onToggleTubeFilterSpecies(specId: number): void;
-  onClearTubeFilter(): void;
+  onOpenTubeFilterPicker(): void;
+  onRemoveTubeFilterSpecies(specId: number): void;
 }
 
 const MIN_RADIUS = 1;
@@ -231,36 +232,16 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   addSlider(container, 'Suction cone size', MIN_TUBE_CONE_SIZE, MAX_TUBE_CONE_SIZE, 1, f.coneSize, (v) => String(v), cb.onSetTubeConeSize);
 
   const filterWrap = el('div', 'setting');
-  const filterHeader = el('div', 'setting-row');
   const filterLabel = el('span', 'setting-label');
   filterLabel.textContent = 'Species filter';
-  filterHeader.appendChild(filterLabel);
-  if (f.filter !== null) {
-    const clearBtn = el('button', 'funnel-toggle-btn');
-    clearBtn.textContent = 'All';
-    clearBtn.onclick = cb.onClearTubeFilter;
-    filterHeader.appendChild(clearBtn);
+  filterWrap.appendChild(filterLabel);
+  if (f.filter === null) {
+    filterWrap.appendChild(hintBox('No species added -- every species passes through.'));
   }
-  filterWrap.appendChild(filterHeader);
-
-  const list = el('div', 'tube-filter-list');
-  for (const entry of cb.tubePalette) {
-    const checked = f.filter === null || f.filter.has(entry.specId);
-    const row = el('label', 'tube-filter-item');
-    const checkbox = el('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = checked;
-    checkbox.onchange = () => cb.onToggleTubeFilterSpecies(entry.specId);
-    const swatch = el('span', 'tube-filter-swatch');
-    swatch.style.background = entry.color;
-    const name = el('span', 'tube-filter-name');
-    name.textContent = entry.label;
-    row.appendChild(checkbox);
-    row.appendChild(swatch);
-    row.appendChild(name);
-    list.appendChild(row);
-  }
-  filterWrap.appendChild(list);
+  buildSpeciesChipList(filterWrap, cb.tubePalette, f.filter ?? new Set(), {
+    onAdd: cb.onOpenTubeFilterPicker,
+    onRemove: cb.onRemoveTubeFilterSpecies,
+  });
   container.appendChild(filterWrap);
 
   container.appendChild(

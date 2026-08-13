@@ -224,7 +224,7 @@ export function mountApp(root: HTMLElement): void {
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
   let ptSelectedSymbol: string | null = null;
-  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' = 'paint';
+  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' = 'paint';
   let isPointerDown = false;
   let isGrabbing = false;
   // The mixer tool's active brush stroke: while held, position updates go
@@ -508,16 +508,28 @@ export function mountApp(root: HTMLElement): void {
       };
     }
 
-    /** Toggles specId's membership in a species filter set -- null means
-     * "accept every species" (the default), so toggling one off from that
-     * state first materializes the full palette into a real Set to remove
-     * it from. Shared by both branches (a placed tube's live filter, or the
-     * pre-placement one) of onToggleTubeFilterSpecies below. */
-    function toggleFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> {
-      const next = new Set(filter ?? palette.map((p) => p.specId));
-      if (next.has(specId)) next.delete(specId);
-      else next.add(specId);
+    /** Adds specId to a species filter set -- null means "accept every
+     * species" (the default), so adding to that state starts a fresh
+     * single-member Set rather than materializing the full palette (unlike
+     * the old checkbox-list's deny-list semantics, a chip list reads as an
+     * allow-list). Shared by both branches (a placed tube's live filter, or
+     * the pre-placement one) of onOpenTubeFilterPicker's ptTarget dispatch
+     * below. */
+    function addFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> {
+      const next = new Set(filter ?? []);
+      next.add(specId);
       return next;
+    }
+
+    /** Removes specId from a species filter set, collapsing back to null
+     * (accept every species) once the last chip is removed rather than
+     * leaving an empty-but-non-null Set, which would silently mean "blocks
+     * everything." */
+    function removeFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> | null {
+      if (!filter) return null;
+      const next = new Set(filter);
+      next.delete(specId);
+      return next.size === 0 ? null : next;
     }
 
     /** Same convention as funnelSetter, for the tube tool's coneSize/filter
@@ -572,16 +584,20 @@ export function mountApp(root: HTMLElement): void {
       tubeFields,
       tubePalette: palette,
       onSetTubeConeSize: tubeSetter('coneSize'),
-      onToggleTubeFilterSpecies: (specId) => {
+      onOpenTubeFilterPicker: () => {
+        ptTarget = isTubeEditMode ? 'tube-filter-edit-add' : 'tube-filter-add';
+        ptOpen = true;
+        render();
+      },
+      onRemoveTubeFilterSpecies: (specId) => {
         if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          apparatusSelection.tubeEditDraft.filter = toggleFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
+          apparatusSelection.tubeEditDraft.filter = removeFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
           sendTubeUpdate();
         } else {
-          tubeDraft.filter = toggleFilterSpecies(tubeDraft.filter, specId);
+          tubeDraft.filter = removeFilterSpecies(tubeDraft.filter, specId);
         }
         render();
       },
-      onClearTubeFilter: () => tubeSetter('filter', { render: true })(null),
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -600,6 +616,11 @@ export function mountApp(root: HTMLElement): void {
           } else if (ptTarget === 'funnel-edit' && apparatusSelection.editDraft) {
             apparatusSelection.editDraft.specId = specId;
             sendFunnelUpdate();
+          } else if (ptTarget === 'tube-filter-add') {
+            tubeDraft.filter = addFilterSpecies(tubeDraft.filter, specId);
+          } else if (ptTarget === 'tube-filter-edit-add' && apparatusSelection.tubeEditDraft) {
+            apparatusSelection.tubeEditDraft.filter = addFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
+            sendTubeUpdate();
           } else {
             setTool({ kind: 'paint', specId });
           }
