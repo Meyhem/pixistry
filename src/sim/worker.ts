@@ -10,27 +10,27 @@
 // solid painted next to water actually dissolve into aqueous ions on-grid.
 // Pixistry is just pixels of elements and compounds with a temperature
 // each -- there is no gas pressure model.
-import { EMPTY, SimGrid } from './grid';
+//
+// Wire types live in protocol.ts and frame-building in frame.ts (both pure,
+// independently testable) -- this module is just the live grid/instance
+// state and the tick loop/message dispatch that mutate it.
+import { SimGrid } from './grid';
 import { forEachCellInRadius, withinRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
-import type { FunnelFacing } from './apparatus-shapes';
-import { funnelShapeFor } from './apparatus-shapes';
+import { buildFrame } from './frame';
 import {
   celsiusToKelvin,
   energyForTemperature,
-  kelvinToCelsius,
   MAX_TEMP_K,
   massOf,
   stepAmbient,
   stepConduction,
   stepRadiators,
   stepRadiativeLoss,
-  temperatureOf,
 } from './heat';
 import {
   moveFunnelInstance,
   placeFunnelInstance,
-  rateFromIntervalTicks,
   resetFunnelInstance,
   stepFunnels,
   updateFunnelInstance,
@@ -38,81 +38,12 @@ import {
 } from './funnel';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
+import type { MainToWorkerMessage, WorkerToMainMessage } from './protocol';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
-import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
+import { buildPalette, SpeciesTable } from './species';
 import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
-import type { Point } from './tube-shapes';
-
-export interface FunnelSnapshot {
-  id: number;
-  anchorX: number;
-  anchorY: number;
-  facing: FunnelFacing;
-  specId: number;
-  tempC: number;
-  ratePerMinute: number;
-  total: number | null;
-  remaining: number | null;
-}
-
-export interface TubeSnapshot {
-  id: number;
-  points: Point[];
-  coneSize: number;
-  /** null = accept every species. */
-  filter: number[] | null;
-}
-
-export type WorkerToMainMessage =
-  | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
-  | {
-      type: 'frame';
-      specId: Uint16Array;
-      phase: Uint8Array;
-      tempK: Float32Array;
-      radiatorRadius: Uint8Array;
-      radiatorTargetK: Float32Array;
-      stirrerMask: Uint8Array;
-      tubeMask: Uint8Array;
-      funnelFillSpecId: Uint16Array;
-      funnels: FunnelSnapshot[];
-      tubes: TubeSnapshot[];
-      tick: number;
-    };
-
-export type MainToWorkerMessage =
-  | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
-  | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
-  | { type: 'paintStirrer'; x: number; y: number; radius: number }
-  | { type: 'erase'; x: number; y: number; radius: number }
-  | { type: 'setRunning'; running: boolean }
-  | { type: 'step' }
-  | { type: 'setSpeed'; speed: number }
-  | { type: 'stirStart'; x: number; y: number; radius: number }
-  | { type: 'stirMove'; x: number; y: number }
-  | { type: 'stirEnd' }
-  | { type: 'grabStart'; x: number; y: number; radius: number }
-  | { type: 'grabMove'; x: number; y: number }
-  | { type: 'grabEnd' }
-  | {
-      type: 'placeFunnel';
-      x: number;
-      y: number;
-      facing: FunnelFacing;
-      specId: number;
-      tempC: number;
-      ratePerMinute: number;
-      total: number | null;
-    }
-  | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
-  | { type: 'resetFunnel'; id: number }
-  | { type: 'moveFunnel'; id: number; x: number; y: number }
-  | { type: 'placeTube'; points: Point[]; coneSize: number; filter: number[] | null }
-  | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
-  | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
-  | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null };
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -134,7 +65,7 @@ let tickAccumulator = 0;
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
 // movement/heat/react while held, and overlaid back into the outgoing frame
-// purely for display -- see overlayGrabbedCells/postFrame below.
+// purely for display -- see frame.ts's overlayGrabbedCells.
 let grabState: GrabState | null = null;
 
 // The mixer tool's active brush stroke (see mixer.ts): while the user holds
@@ -164,6 +95,21 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
   forEachCellInRadius(grid, x, y, radius, apply);
 }
 
+/** Looks up a placed funnel/tube by id and runs `fn` on it if found -- shared
+ * guard for every message handler below that edits or moves an existing
+ * instance, replacing what used to be a hand-written `find` + `if` at each
+ * one. A missing id (the instance was erased between the UI sending the
+ * message and the worker processing it) is silently a no-op, same as before. */
+function withFunnel(id: number, fn: (instance: FunnelInstance) => void): void {
+  const instance = funnels.find((f) => f.id === id);
+  if (instance) fn(instance);
+}
+
+function withTube(id: number, fn: (instance: TubeInstance) => void): void {
+  const instance = tubes.find((t) => t.id === id);
+  if (instance) fn(instance);
+}
+
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++);
@@ -180,103 +126,8 @@ function runOneTick(): void {
   stepReactions(grid, species, rng);
 }
 
-function computeTempGrid(): Float32Array {
-  const temps = new Float32Array(grid.width * grid.height);
-  for (let idx = 0; idx < grid.specId.length; idx++) {
-    if (grid.isEmptyAt(idx)) continue;
-    const specId = grid.specId[idx] as number;
-    const mass = massOf(species, specId);
-    const { tempK } = temperatureOf(species.thermalOf(specId), mass, grid.u[idx] as number);
-    temps[idx] = tempK;
-  }
-  return temps;
-}
-
-/** Per-frame decorative reservoir fill: for every funnel with remaining
- * supply, marks its open interior cells (see apparatus-shapes.ts's
- * reservoirCells) with its species -- but only where the grid cell is
- * actually empty, so real matter someone poured/dropped in there still
- * takes precedence over the cosmetic wash. Recomputed fresh every frame
- * rather than stored on SimGrid, since it's purely a rendering hint, not
- * simulated state (see renderer.ts's blend of this array). */
-function computeFunnelFill(): Uint16Array {
-  const fill = new Uint16Array(grid.width * grid.height).fill(EMPTY);
-  for (const instance of funnels) {
-    if (instance.remaining === 0) continue;
-    const shape = funnelShapeFor(instance.facing);
-    for (const cell of shape.reservoirCells) {
-      const x = instance.anchorX + cell.dx;
-      const y = instance.anchorY + cell.dy;
-      if (!grid.inBounds(x, y)) continue;
-      const idx = grid.index(x, y);
-      if (grid.isEmptyAt(idx)) fill[idx] = instance.specId;
-    }
-  }
-  return fill;
-}
-
-function funnelSnapshots(): FunnelSnapshot[] {
-  return funnels.map((f) => ({
-    id: f.id,
-    anchorX: f.anchorX,
-    anchorY: f.anchorY,
-    facing: f.facing,
-    specId: f.specId,
-    tempC: kelvinToCelsius(f.tempK),
-    ratePerMinute: rateFromIntervalTicks(f.intervalTicks),
-    total: f.total,
-    remaining: f.remaining,
-  }));
-}
-
-function tubeSnapshots(): TubeSnapshot[] {
-  return tubes.map((t) => ({
-    id: t.id,
-    points: t.points.map((p) => ({ x: p.x, y: p.y })),
-    coneSize: t.coneSize,
-    filter: t.filter ? [...t.filter] : null,
-  }));
-}
-
-function overlayGrabbedCells(specId: Uint16Array, phase: Uint8Array, tempK: Float32Array): void {
-  if (!grabState) return;
-  for (const cell of grabState.cells) {
-    const x = grabState.anchorX + cell.ox;
-    const y = grabState.anchorY + cell.oy;
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    const mass = massOf(species, cell.specId);
-    const { tempK: cellTempK } = temperatureOf(species.thermalOf(cell.specId), mass, cell.u);
-    specId[idx] = cell.specId;
-    phase[idx] = cell.phase;
-    tempK[idx] = cellTempK;
-  }
-}
-
 function postFrame(): void {
-  const specId = grid.specId.slice();
-  const phase = grid.phase.slice();
-  const tempK = computeTempGrid();
-  const radiatorRadius = grid.radiatorRadius.slice();
-  const radiatorTargetK = grid.radiatorTargetK.slice();
-  const stirrerMask = grid.stirrerMask.slice();
-  const tubeMask = grid.tubeMask.slice();
-  const funnelFillSpecId = computeFunnelFill();
-  overlayGrabbedCells(specId, phase, tempK);
-  post({
-    type: 'frame',
-    specId,
-    phase,
-    tempK,
-    radiatorRadius,
-    radiatorTargetK,
-    stirrerMask,
-    tubeMask,
-    funnelFillSpecId,
-    funnels: funnelSnapshots(),
-    tubes: tubeSnapshots(),
-    tick,
-  });
+  post(buildFrame(grid, species, { funnels, tubes, grabState, tick }));
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -372,41 +223,31 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         }),
       );
       break;
-    case 'updateFunnel': {
-      const instance = funnels.find((f) => f.id === msg.id);
-      if (instance) updateFunnelInstance(instance, { specId: msg.specId, tempC: msg.tempC, ratePerMinute: msg.ratePerMinute, total: msg.total });
+    case 'updateFunnel':
+      withFunnel(msg.id, (instance) =>
+        updateFunnelInstance(instance, { specId: msg.specId, tempC: msg.tempC, ratePerMinute: msg.ratePerMinute, total: msg.total }),
+      );
       break;
-    }
-    case 'resetFunnel': {
-      const instance = funnels.find((f) => f.id === msg.id);
-      if (instance) resetFunnelInstance(instance);
+    case 'resetFunnel':
+      withFunnel(msg.id, resetFunnelInstance);
       break;
-    }
-    case 'moveFunnel': {
-      const instance = funnels.find((f) => f.id === msg.id);
-      if (instance) moveFunnelInstance(grid, species, instance, msg.x, msg.y);
+    case 'moveFunnel':
+      withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y));
       break;
-    }
     case 'placeTube':
       tubes.push(
         placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
       );
       break;
-    case 'moveTubeKnee': {
-      const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y });
+    case 'moveTubeKnee':
+      withTube(msg.id, (instance) => moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y }));
       break;
-    }
-    case 'moveTubeSegment': {
-      const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy);
+    case 'moveTubeSegment':
+      withTube(msg.id, (instance) => moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy));
       break;
-    }
-    case 'updateTube': {
-      const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null });
+    case 'updateTube':
+      withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
       break;
-    }
   }
 };
 

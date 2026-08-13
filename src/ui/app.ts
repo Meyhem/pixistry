@@ -8,7 +8,7 @@
 // together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
-import type { FunnelSnapshot, MainToWorkerMessage, TubeSnapshot, WorkerToMainMessage } from '../sim/worker';
+import type { FunnelSnapshot, MainToWorkerMessage, TubeSnapshot, WorkerToMainMessage } from '../sim/protocol';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
