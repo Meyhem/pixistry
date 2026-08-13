@@ -31,6 +31,13 @@ export class SimGrid {
    * stepRadiators and radiators.ts. */
   readonly radiatorRadius: Uint8Array;
   readonly radiatorTargetK: Float32Array;
+  /** Stirrer apparatus overlay -- same "fixed background field, not matter"
+   * convention as radiatorRadius above: painted once by the stirrer tool
+   * (see worker.ts's 'paintStirrer' handler) into a per-cell flag (nonzero
+   * = inside a drawn stirrer shape), left untouched by set/clear/swap, and
+   * read every tick by stirrer.ts's stepStirrers to keep randomizing
+   * whatever liquid/gas cells sit inside it. */
+  readonly stirrerMask: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -41,6 +48,7 @@ export class SimGrid {
     this.phase = new Uint8Array(size);
     this.radiatorRadius = new Uint8Array(size);
     this.radiatorTargetK = new Float32Array(size);
+    this.stirrerMask = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {

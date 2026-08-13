@@ -40,6 +40,7 @@ import { stirRegion } from './mixer';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
+import { stepStirrers } from './stirrer';
 
 export interface FunnelSnapshot {
   id: number;
@@ -62,6 +63,7 @@ export type WorkerToMainMessage =
       tempK: Float32Array;
       radiatorRadius: Uint8Array;
       radiatorTargetK: Float32Array;
+      stirrerMask: Uint8Array;
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
       tick: number;
@@ -70,11 +72,14 @@ export type WorkerToMainMessage =
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
   | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
+  | { type: 'paintStirrer'; x: number; y: number; radius: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
-  | { type: 'stir'; x: number; y: number; radius: number }
+  | { type: 'stirStart'; x: number; y: number; radius: number }
+  | { type: 'stirMove'; x: number; y: number }
+  | { type: 'stirEnd' }
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
   | { type: 'grabEnd' }
@@ -115,6 +120,14 @@ let tickAccumulator = 0;
 // purely for display -- see overlayGrabbedCells/postFrame below.
 let grabState: GrabState | null = null;
 
+// The mixer tool's active brush stroke (see mixer.ts): while the user holds
+// the mixer tool down, stirState tracks the brush's current center/radius
+// and runOneTick re-applies a full stirRegion shuffle there every tick --
+// not just once per pointer-move event -- so every pixel within the brush
+// really is randomized every tick for as long as the stroke lasts. Cleared
+// on 'stirEnd' (pointerup).
+let stirState: { x: number; y: number; radius: number } | null = null;
+
 // Placed addition-funnels (see funnel.ts) -- unlike walls or the radiator
 // overlay, a funnel needs per-instance state (species/rate/remaining budget)
 // that isn't representable as a value per grid cell, so it's tracked here as
@@ -141,6 +154,8 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++);
+  if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
+  stepStirrers(grid, rng);
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
   // Mutually exclusive per cell by construction (see exposedFaceCount):
@@ -221,9 +236,10 @@ function postFrame(): void {
   const tempK = computeTempGrid();
   const radiatorRadius = grid.radiatorRadius.slice();
   const radiatorTargetK = grid.radiatorTargetK.slice();
+  const stirrerMask = grid.stirrerMask.slice();
   const funnelFillSpecId = computeFunnelFill();
   overlayGrabbedCells(specId, phase, tempK);
-  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, funnelFillSpecId, funnels: funnelSnapshots(), tick });
+  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, stirrerMask, funnelFillSpecId, funnels: funnelSnapshots(), tick });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -246,10 +262,16 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       });
       break;
     }
+    case 'paintStirrer':
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        grid.stirrerMask[grid.index(px, py)] = 1;
+      });
+      break;
     case 'erase':
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.clear(px, py);
         grid.radiatorRadius[grid.index(px, py)] = 0;
+        grid.stirrerMask[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the
@@ -271,8 +293,17 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'setSpeed':
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
       break;
-    case 'stir':
-      stirRegion(grid, rng, msg.x, msg.y, msg.radius);
+    case 'stirStart':
+      stirState = { x: msg.x, y: msg.y, radius: msg.radius };
+      break;
+    case 'stirMove':
+      if (stirState) {
+        stirState.x = msg.x;
+        stirState.y = msg.y;
+      }
+      break;
+    case 'stirEnd':
+      stirState = null;
       break;
     case 'grabStart':
       grabState = grabPickUp(grid, msg.x, msg.y, msg.radius);

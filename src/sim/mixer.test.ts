@@ -71,8 +71,40 @@ describe('stirRegion', () => {
     const before = grid.specId.slice();
 
     const rng = mulberry32(42);
-    for (let i = 0; i < 30; i++) stirRegion(grid, rng, 5, 5, 5, 1);
+    for (let i = 0; i < 30; i++) stirRegion(grid, rng, 5, 5, 5);
 
     expect(grid.specId).not.toEqual(before);
+  });
+
+  it('randomizes essentially every cell within the radius in a single call', () => {
+    const palette = buildPalette();
+    const water = findEntry(palette, 'H2O');
+    const hydrogen = findEntry(palette, 'H2');
+
+    // Alternating columns of two distinguishable species -- a single full
+    // shuffle should scramble this checkerboard, not leave most of it
+    // untouched the way the old per-cell-probability swap did.
+    const grid = new SimGrid(12, 12);
+    for (let y = 0; y < 12; y++) {
+      for (let x = 0; x < 12; x++) {
+        const isWater = (x + y) % 2 === 0;
+        grid.set(x, y, isWater ? water.specId : hydrogen.specId, isWater ? PhaseCode.Liquid : PhaseCode.Gas);
+      }
+    }
+    const before = grid.specId.slice();
+
+    const rng = mulberry32(99);
+    stirRegion(grid, rng, 6, 6, 6);
+
+    // A full random permutation of a 50/50 checkerboard only changes a cell
+    // when it lands on the *other* species, which happens ~50% of the time
+    // in expectation -- so this just needs to be well above what the old
+    // per-cell-probability swap achieved (a small minority of cells), not
+    // above 50%.
+    let changed = 0;
+    for (let i = 0; i < before.length; i++) {
+      if (grid.specId[i] !== before[i]) changed++;
+    }
+    expect(changed).toBeGreaterThan(before.length * 0.3);
   });
 });

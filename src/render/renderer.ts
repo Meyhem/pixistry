@@ -22,6 +22,11 @@ export interface FrameData {
   tempK: Float32Array;
   radiatorRadius: Uint8Array;
   radiatorTargetK: Float32Array;
+  /** Stirrer apparatus overlay (see grid.ts's stirrerMask) -- nonzero where
+   * a stirrer shape has been painted. Purely a location marker, like the
+   * radiator glow: the stirrer isn't matter and has no color of its own, so
+   * without this its drawn shape would be invisible once painted. */
+  stirrerMask: Uint8Array;
   /** Addition-funnel reservoir fill (see worker.ts's computeFunnelFill) --
    * EMPTY everywhere except a placed funnel's open interior, where it's that
    * funnel's species. Purely a rendering hint, not real matter: blended at
@@ -132,6 +137,13 @@ const GAS_LIGHTEN_RGB: [number, number, number] = [255, 255, 255];
 // visually distinct from real matter.
 const FUNNEL_FILL_STRENGTH = 0.6;
 
+// Stirrer overlay tint: a flat, weak wash over every masked cell (no
+// falloff/radius involved -- the mask is already the exact drawn shape) so
+// a placed stirrer stays visible on the grid without swamping the species
+// color underneath, same "halo not repaint" restraint as GLOW_MAX_STRENGTH.
+const STIRRER_GLOW_RGB: [number, number, number] = [168, 119, 240];
+const STIRRER_GLOW_STRENGTH = 0.2;
+
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
   return [
@@ -240,7 +252,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, funnelFillSpecId }: FrameData): void {
+    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, funnelFillSpecId }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -272,6 +284,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           let interiorRgba = baseRgba;
           if (hGlow > 0) interiorRgba = tintTowards(interiorRgba, HOT_MID_RGB, hGlow * GLOW_MAX_STRENGTH);
           if (cGlow > 0) interiorRgba = tintTowards(interiorRgba, COLD_MID_RGB, cGlow * GLOW_MAX_STRENGTH);
+          if ((stirrerMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, STIRRER_GLOW_RGB, STIRRER_GLOW_STRENGTH);
 
           let ringRgba = interiorRgba;
           if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);

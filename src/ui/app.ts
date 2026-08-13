@@ -15,6 +15,7 @@ import { BORDER_RANGE_K } from '../render/renderer';
 import { getWall, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
+import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta } from './side-panel';
@@ -40,6 +41,7 @@ type Tool =
   | { kind: 'mixer' }
   | { kind: 'grabber' }
   | { kind: 'funnel' }
+  | { kind: 'stirrer' }
   | { kind: 'select-apparatus' };
 
 /** Local draft for the select-apparatus tool's edit panel -- mirrors a
@@ -200,6 +202,11 @@ export function mountApp(root: HTMLElement): void {
   let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' = 'paint';
   let isPointerDown = false;
   let isGrabbing = false;
+  // The mixer tool's active brush stroke: while held, position updates go
+  // straight to the worker's stirState (stirStart/stirMove/stirEnd) instead
+  // of through applyTool, since the worker re-stirs that position every
+  // simulation tick on its own -- see worker.ts's runOneTick.
+  let isMixing = false;
 
   // Addition-funnel tool config (pre-placement) -- captured into the
   // instance at placement time, same "settings are a snapshot, not
@@ -341,6 +348,21 @@ export function mountApp(root: HTMLElement): void {
         funnelPanel: 'config',
       };
     }
+    if (t.kind === 'stirrer') {
+      return {
+        label: STIRRER_LABEL,
+        color: STIRRER_COLOR,
+        category: 'APPARATUS',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: false,
+        showBrushTemp: false,
+        showBrushWidth: true,
+        funnelPanel: 'none',
+      };
+    }
     if (t.kind === 'select-apparatus') {
       const selected = findFunnel(selectedFunnelId);
       return {
@@ -359,8 +381,8 @@ export function mountApp(root: HTMLElement): void {
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
       erase: { label: 'Erase', color: '#8a8a8a' },
-      mixer: { label: 'Mixer', color: '#c9a8ff' },
-      grabber: { label: 'Grabber', color: '#f2d94e' },
+      mixer: { label: 'Mix', color: '#c9a8ff' },
+      grabber: { label: 'Grab', color: '#f2d94e' },
     };
     const info = TOOL_META[t.kind];
     return {
@@ -703,7 +725,13 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'erase', x, y, radius: brushWidth });
         break;
       case 'mixer':
-        send({ type: 'stir', x, y, radius: brushWidth });
+        // Handled directly by the pointerdown/pointermove/pointerup
+        // handlers below (stirStart/stirMove/stirEnd) rather than here, so
+        // the worker can keep re-stirring the held brush every simulation
+        // tick, not just once per pointer event -- see isMixing.
+        break;
+      case 'stirrer':
+        send({ type: 'paintStirrer', x, y, radius: brushWidth });
         break;
       case 'grabber':
         break;
@@ -767,6 +795,9 @@ export function mountApp(root: HTMLElement): void {
     if (tool?.kind === 'grabber') {
       isGrabbing = true;
       send({ type: 'grabStart', x, y, radius: brushWidth });
+    } else if (tool?.kind === 'mixer') {
+      isMixing = true;
+      send({ type: 'stirStart', x, y, radius: brushWidth });
     } else {
       applyTool(x, y);
     }
@@ -778,6 +809,8 @@ export function mountApp(root: HTMLElement): void {
     if (isPointerDown) {
       if (isGrabbing) {
         send({ type: 'grabMove', x, y });
+      } else if (isMixing) {
+        send({ type: 'stirMove', x, y });
       } else if (tool?.kind === 'select-apparatus') {
         // Selecting is a single-click action (applyTool already ran once on
         // pointerdown), but if that click grabbed a funnel, dragging moves
@@ -818,6 +851,10 @@ export function mountApp(root: HTMLElement): void {
       send({ type: 'grabEnd' });
       isGrabbing = false;
     }
+    if (isMixing) {
+      send({ type: 'stirEnd' });
+      isMixing = false;
+    }
     draggingFunnelId = null;
     isPointerDown = false;
   });
@@ -857,6 +894,7 @@ export function mountApp(root: HTMLElement): void {
         tempK: msg.tempK,
         radiatorRadius: msg.radiatorRadius,
         radiatorTargetK: msg.radiatorTargetK,
+        stirrerMask: msg.stirrerMask,
         funnelFillSpecId: msg.funnelFillSpecId,
       });
       // The select-apparatus tool's edit panel shows a placed funnel's live

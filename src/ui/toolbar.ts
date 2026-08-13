@@ -9,9 +9,10 @@ import type { PaletteEntry } from '../sim/species';
 import type { WallMaterial } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
+import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 
-export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'select-apparatus';
+export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
 export const SELECT_APPARATUS_COLOR = '#4da3ff';
@@ -120,12 +121,15 @@ export function buildToolbar(
   apparatus.items.appendChild(
     makePaletteButton(FUNNEL_LABEL, FUNNEL_COLOR, cb.isToolActive('funnel'), () => cb.onSelectTool('funnel')),
   );
+  apparatus.items.appendChild(
+    makePaletteButton(STIRRER_LABEL, STIRRER_COLOR, cb.isToolActive('stirrer'), () => cb.onSelectTool('stirrer')),
+  );
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');
   tools.items.appendChild(makePaletteButton('Erase', null, cb.isToolActive('erase'), () => cb.onSelectTool('erase')));
-  tools.items.appendChild(makePaletteButton('Mixer', '#c9a8ff', cb.isToolActive('mixer'), () => cb.onSelectTool('mixer')));
-  tools.items.appendChild(makePaletteButton('Grabber', '#f2d94e', cb.isToolActive('grabber'), () => cb.onSelectTool('grabber')));
+  tools.items.appendChild(makePaletteButton('Mix', '#c9a8ff', cb.isToolActive('mixer'), () => cb.onSelectTool('mixer')));
+  tools.items.appendChild(makePaletteButton('Grab', '#f2d94e', cb.isToolActive('grabber'), () => cb.onSelectTool('grabber')));
   tools.items.appendChild(
     makePaletteButton(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, cb.isToolActive('select-apparatus'), () =>
       cb.onSelectTool('select-apparatus'),
