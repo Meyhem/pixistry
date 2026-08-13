@@ -11,9 +11,9 @@
 import { SimGrid } from './grid';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import {
-  AMBIENT_TEMPERATURE_K,
   celsiusToKelvin,
   energyForTemperature,
+  MAX_TEMP_K,
   massOf,
   stepConduction,
   stepGlassRadiators,
@@ -30,7 +30,7 @@ export type WorkerToMainMessage =
   | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; tick: number };
 
 export type MainToWorkerMessage =
-  | { type: 'paint'; x: number; y: number; radius: number; specId: number }
+  | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
@@ -151,7 +151,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'paint': {
       const mass = massOf(species, msg.specId);
       const thermal = species.thermalOf(msg.specId);
-      const { u, phase } = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
+      const tempK = Math.min(MAX_TEMP_K, Math.max(0, celsiusToKelvin(msg.tempC)));
+      const { u, phase } = energyForTemperature(thermal, mass, tempK);
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
       break;
     }

@@ -95,7 +95,7 @@ const MISSING_SPEC_RGBA: [number, number, number, number] = [255, 0, 255, 255];
 // blue -> strong blue when cooling, orange -> red when heating), and BORDER
 // blend strength ramps up separately so a barely-off-ambient cell gets a
 // faint ring rather than an abrupt one.
-const BORDER_RANGE_K = 150;
+export const BORDER_RANGE_K = 150;
 const BORDER_MAX_STRENGTH = 0.85;
 const HOT_MID_RGB: [number, number, number] = [255, 150, 30];
 const HOT_STRONG_RGB: [number, number, number] = [255, 30, 20];

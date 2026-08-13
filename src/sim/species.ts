@@ -12,6 +12,8 @@ export interface PaletteEntry {
   phase: PhaseCode;
   density: number;
   color: string;
+  meltingPointC: number;
+  boilingPointC: number;
 }
 
 /** Per-species thermal data needed by heat.ts, phase-independent parts
@@ -86,7 +88,15 @@ export function buildPalette(): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
   SPECIES.forEach((data, specId) => {
     if (!data.paintable) return;
-    entries.push({ label: data.name, specId, phase: toPhaseCode(data.phaseAtSTP), density: data.density, color: data.color });
+    entries.push({
+      label: data.name,
+      specId,
+      phase: toPhaseCode(data.phaseAtSTP),
+      density: data.density,
+      color: data.color,
+      meltingPointC: data.meltingPointC,
+      boilingPointC: data.boilingPointC,
+    });
   });
   return entries;
 }
