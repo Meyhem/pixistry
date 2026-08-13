@@ -1199,8 +1199,17 @@ export function mountApp(root: HTMLElement): void {
       // "Remaining" count and needs to reflect Reset immediately -- only the
       // side panel is rebuilt here, not the toolbar, so a rapid succession of
       // frame ticks can't blow away a toolbar button mid-click.
-      if (tool?.kind === 'select-apparatus') renderSidePanel();
-      else updateSelectionBox();
+      //
+      // Skipped while focus is inside the panel itself: a rebuild replaces
+      // the DOM node under an active drag (e.g. the cone-size range input),
+      // which kills the browser's native drag gesture on every tick -- a
+      // slider could only ever be "clicked" (one input event, completing
+      // before the next frame lands), never dragged.
+      if (tool?.kind === 'select-apparatus') {
+        if (!sidePanel.contains(document.activeElement)) renderSidePanel();
+      } else {
+        updateSelectionBox();
+      }
     }
   };
 

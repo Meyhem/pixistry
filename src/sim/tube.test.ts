@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { PhaseCode, SimGrid, TubeMaskValue } from './grid';
+import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
 import { DEFAULT_TUBE_CONE_SIZE, moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import type { Point } from './tube-shapes';
 
+const species = new SpeciesTable();
+
 function place(grid: SimGrid, points: Point[], overrides: { coneSize?: number; filter?: Set<number> | null } = {}): TubeInstance {
-  return placeTubeInstance(grid, {
+  return placeTubeInstance(grid, species, {
     points,
     coneSize: overrides.coneSize ?? DEFAULT_TUBE_CONE_SIZE,
     filter: overrides.filter ?? null,
@@ -192,7 +195,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
     const instance = place(grid, STRAIGHT);
     const oldWalls = instance.geometry.wallCells.map((c) => grid.index(c.x, c.y));
 
-    moveTubeKnee(grid, instance, 1, { x: 26, y: 26 });
+    moveTubeKnee(grid, species, instance, 1, { x: 26, y: 26 });
 
     for (const cell of instance.geometry.wallCells) {
       expect(grid.specId[grid.index(cell.x, cell.y)]).toBe(GLASS_WALL_SPEC_ID);
@@ -211,7 +214,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
     grid.setAt(midIdx, SpeciesId.H2O, PhaseCode.Liquid, 0);
 
     // Shrink the tube down to a 2-cell stub that no longer covers midIdx.
-    moveTubeKnee(grid, instance, 1, { x: 21, y: 20 });
+    moveTubeKnee(grid, species, instance, 1, { x: 21, y: 20 });
 
     const newLumenSet = new Set(instance.geometry.lumenIdx);
     if (!newLumenSet.has(midIdx)) {
@@ -227,7 +230,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
       { x: 60, y: 50 },
       { x: 60, y: 60 },
     ]);
-    moveTubeKnee(grid, instance, 1, { x: 55, y: 40 });
+    moveTubeKnee(grid, species, instance, 1, { x: 55, y: 40 });
     for (let i = 1; i < instance.points.length; i++) {
       const a = instance.points[i - 1] as Point;
       const b = instance.points[i] as Point;
@@ -245,7 +248,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
       { x: 70, y: 50 },
       { x: 70, y: 60 },
     ]);
-    moveTubeSegment(grid, instance, 1, 0, 10);
+    moveTubeSegment(grid, species, instance, 1, 0, 10);
     for (let i = 1; i < instance.points.length; i++) {
       const a = instance.points[i - 1] as Point;
       const b = instance.points[i] as Point;
@@ -262,7 +265,7 @@ describe('updateTubeInstance', () => {
     const instance = place(grid, STRAIGHT);
     const wallsBefore = instance.geometry.wallCells;
 
-    updateTubeInstance(grid, instance, { coneSize: instance.coneSize, filter: new Set([SpeciesId.H2O]) });
+    updateTubeInstance(grid, species, instance, { coneSize: instance.coneSize, filter: new Set([SpeciesId.H2O]) });
 
     expect(instance.filter?.has(SpeciesId.H2O)).toBe(true);
     expect(instance.geometry.wallCells).toBe(wallsBefore);
@@ -273,7 +276,7 @@ describe('updateTubeInstance', () => {
     const instance = place(grid, STRAIGHT, { coneSize: 1 });
     expect(instance.geometry.coneSrcIdx.length).toBe(1);
 
-    updateTubeInstance(grid, instance, { coneSize: 3, filter: null });
+    updateTubeInstance(grid, species, instance, { coneSize: 3, filter: null });
     expect(instance.geometry.coneSrcIdx.length).toBe(1 + 3 + 5);
     for (const i of instance.geometry.coneSrcIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Cone);
   });

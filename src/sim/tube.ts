@@ -11,6 +11,8 @@
 // movement.ts already knows to leave those cells alone (blocked as both a
 // mover and a destination) so only stepTubes below ever touches them.
 import { PhaseCode, SimGrid, TubeMaskValue } from './grid';
+import { glassWallEnergyAtAmbient } from './heat';
+import type { SpeciesTable } from './species';
 import {
   coneCells,
   lumenOpenEnds,
@@ -123,10 +125,16 @@ function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
  * "overwrite" convention placeFunnelInstance uses) and marks lumen/cone
  * cells in the overlay mask -- lumen cells' existing contents are left
  * alone (a cell that was already lumen cargo before an edit, and still is
- * after, keeps its contents automatically since nothing here clears it). */
-function stampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
+ * after, keeps its contents automatically since nothing here clears it).
+ *
+ * Walls are seeded at AMBIENT_TEMPERATURE_K, not u=0 -- u=0 means 0 Kelvin,
+ * and a wall ring that starts at literal absolute zero acts as a runaway
+ * heat sink on whatever cargo conducts against it every tick it sits in the
+ * lumen (observed freezing 21C water solid over an ordinary transport run). */
+function stampTubeGeometry(grid: SimGrid, species: SpeciesTable, geometry: TubeGeometry): void {
+  const wallU = glassWallEnergyAtAmbient(species);
   for (const cell of geometry.wallCells) {
-    if (grid.inBounds(cell.x, cell.y)) grid.set(cell.x, cell.y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, 0);
+    if (grid.inBounds(cell.x, cell.y)) grid.set(cell.x, cell.y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
   }
   for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
   for (const i of geometry.coneSrcIdx) {
@@ -144,10 +152,10 @@ export interface TubePlacement {
  * instance. `points` must already be octant-snapped (see tube-shapes.ts's
  * snapOctant) -- the drawing UI is responsible for that, same as the
  * funnel tool owns its own facing before calling placeFunnelInstance. */
-export function placeTubeInstance(grid: SimGrid, placement: TubePlacement): TubeInstance {
+export function placeTubeInstance(grid: SimGrid, species: SpeciesTable, placement: TubePlacement): TubeInstance {
   const points = placement.points.map((p) => ({ x: p.x, y: p.y }));
   const geometry = buildTubeGeometry(grid, points, placement.coneSize);
-  stampTubeGeometry(grid, geometry);
+  stampTubeGeometry(grid, species, geometry);
   return {
     id: nextTubeId++,
     points,
@@ -160,10 +168,10 @@ export function placeTubeInstance(grid: SimGrid, placement: TubePlacement): Tube
 /** Re-derives and re-stamps a tube's geometry after its points or cone size
  * changed -- shared by moveTubeKnee/moveTubeSegment (points change) and
  * updateTubeInstance's cone-size edits. */
-function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: Point[], newConeSize: number): void {
+function rebuildTubeGeometry(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, newPoints: Point[], newConeSize: number): void {
   unstampTubeGeometry(grid, instance.geometry);
   const geometry = buildTubeGeometry(grid, newPoints, newConeSize);
-  stampTubeGeometry(grid, geometry);
+  stampTubeGeometry(grid, species, geometry);
   instance.points = newPoints;
   instance.coneSize = newConeSize;
   instance.geometry = geometry;
@@ -175,7 +183,7 @@ function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: P
  * has two fixed neighbors and must satisfy both at once, which
  * resolveKneePosition solves for -- see its doc comment for why a single
  * point generally can't land exactly under the cursor in that case. */
-export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: number, raw: Point): void {
+export function moveTubeKnee(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, kneeIndex: number, raw: Point): void {
   const points = instance.points;
   if (kneeIndex < 0 || kneeIndex >= points.length) return;
   const prev = points[kneeIndex - 1];
@@ -192,7 +200,7 @@ export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: n
   }
   const newPoints = points.slice();
   newPoints[kneeIndex] = newPoint;
-  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
 }
 
 /** Drags segment (segIndex, segIndex+1) by (dx, dy): both its points
@@ -204,7 +212,7 @@ export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: n
  * points don't" rule moveTubeKnee applies to a single knee, applied to both
  * ends of the dragged segment in sequence (segIndex first, so segIndex+1
  * resolves against segIndex's already-updated position). */
-export function moveTubeSegment(grid: SimGrid, instance: TubeInstance, segIndex: number, dx: number, dy: number): void {
+export function moveTubeSegment(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, segIndex: number, dx: number, dy: number): void {
   const points = instance.points;
   const i = segIndex;
   const j = segIndex + 1;
@@ -218,7 +226,7 @@ export function moveTubeSegment(grid: SimGrid, instance: TubeInstance, segIndex:
   const newPoints = points.slice();
   newPoints[i] = newI;
   newPoints[j] = newJ;
-  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
 }
 
 export interface TubeConfig {
@@ -230,10 +238,10 @@ export interface TubeConfig {
  * apparatus tool's edit panel) -- geometry (points) only ever changes via
  * moveTubeKnee/moveTubeSegment, never here, so a cone-size change is the
  * only case that needs a re-stamp. */
-export function updateTubeInstance(grid: SimGrid, instance: TubeInstance, config: TubeConfig): void {
+export function updateTubeInstance(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, config: TubeConfig): void {
   instance.filter = config.filter ? new Set(config.filter) : null;
   if (config.coneSize !== instance.coneSize) {
-    rebuildTubeGeometry(grid, instance, instance.points, config.coneSize);
+    rebuildTubeGeometry(grid, species, instance, instance.points, config.coneSize);
   }
 }
 

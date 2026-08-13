@@ -8,7 +8,7 @@
 // worker.ts's `funnels` list.
 import { PhaseCode, SimGrid } from './grid';
 import { funnelShapeFor, funnelSpawnOffset, type FunnelFacing } from './apparatus-shapes';
-import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, massOf } from './heat';
+import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, glassWallEnergyAtAmbient, massOf } from './heat';
 import type { SpeciesTable } from './species';
 import { GLASS_WALL_SPEC_ID } from './walls';
 
@@ -66,13 +66,14 @@ export interface FunnelPlacement {
 /** Stamps the funnel's glass outline into the grid -- overwriting whatever
  * was there, same as painting a wall material -- and returns the new tracked
  * instance, ready to drip on a future tick (see stepFunnels). */
-export function placeFunnelInstance(grid: SimGrid, placement: FunnelPlacement): FunnelInstance {
+export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placement: FunnelPlacement): FunnelInstance {
   const shape = funnelShapeFor(placement.facing);
+  const wallU = glassWallEnergyAtAmbient(species);
   for (const cell of shape.cells) {
     const x = placement.x + cell.dx;
     const y = placement.y + cell.dy;
     if (!grid.inBounds(x, y)) continue;
-    grid.set(x, y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, 0);
+    grid.set(x, y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
   }
   return {
     id: nextFunnelId++,
@@ -93,17 +94,18 @@ export function placeFunnelInstance(grid: SimGrid, placement: FunnelPlacement): 
  * there, same as placeFunnelInstance), and updates the instance's anchor in
  * place. Facing is unchanged -- the select-apparatus tool's drag only
  * translates, it doesn't rotate. */
-export function moveFunnelInstance(grid: SimGrid, instance: FunnelInstance, x: number, y: number): void {
+export function moveFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, x: number, y: number): void {
   const shape = funnelShapeFor(instance.facing);
   for (const cell of shape.cells) {
     const ox = instance.anchorX + cell.dx;
     const oy = instance.anchorY + cell.dy;
     if (grid.inBounds(ox, oy)) grid.clear(ox, oy);
   }
+  const wallU = glassWallEnergyAtAmbient(species);
   for (const cell of shape.cells) {
     const nx = x + cell.dx;
     const ny = y + cell.dy;
-    if (grid.inBounds(nx, ny)) grid.set(nx, ny, GLASS_WALL_SPEC_ID, PhaseCode.Solid, 0);
+    if (grid.inBounds(nx, ny)) grid.set(nx, ny, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
   }
   instance.anchorX = x;
   instance.anchorY = y;

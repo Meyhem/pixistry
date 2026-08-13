@@ -12,6 +12,7 @@
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { RADIATOR_WATTS } from './radiators';
 import type { SpeciesTable, ThermalProfile } from './species';
+import { GLASS_WALL_SPEC_ID } from './walls';
 
 export const CELL_VOLUME_CM3 = 1;
 export const AMBIENT_TEMPERATURE_K = celsiusToKelvin(21);
@@ -104,6 +105,17 @@ export function energyForTemperature(thermal: ThermalProfile, massG: number, tar
     return { u: L.uMeltEnd + massG * thermal.specificHeatLiquid * (targetK - thermal.meltK), phase: PhaseCode.Liquid };
   }
   return { u: L.uBoilEnd + massG * thermal.specificHeatGas * (targetK - thermal.boilK), phase: PhaseCode.Gas };
+}
+
+/** Internal energy a glass wall cell should be stamped with at placement
+ * time -- apparatus (funnel/tube) glass used to hardcode u=0, which is
+ * literal 0 Kelvin, not "room temperature". A wall ring stamped that way
+ * acts as a near-absolute-zero heat sink on whatever it conducts against
+ * every tick it's adjacent to (observed freezing 21C water solid while
+ * sitting in a conveyor tube's lumen), only slowly warming toward ambient
+ * via stepAmbient's capped drift. Walls should start at ambient instead. */
+export function glassWallEnergyAtAmbient(species: SpeciesTable): number {
+  return energyForTemperature(species.thermalOf(GLASS_WALL_SPEC_ID), massOf(species, GLASS_WALL_SPEC_ID), AMBIENT_TEMPERATURE_K).u;
 }
 
 function heatCapacityFor(thermal: ThermalProfile, phase: PhaseCode): number {

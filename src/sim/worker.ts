@@ -380,7 +380,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'placeFunnel':
       funnels.push(
-        placeFunnelInstance(grid, {
+        placeFunnelInstance(grid, species, {
           x: msg.x,
           y: msg.y,
           facing: msg.facing,
@@ -403,25 +403,27 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'moveFunnel': {
       const instance = funnels.find((f) => f.id === msg.id);
-      if (instance) moveFunnelInstance(grid, instance, msg.x, msg.y);
+      if (instance) moveFunnelInstance(grid, species, instance, msg.x, msg.y);
       break;
     }
     case 'placeTube':
-      tubes.push(placeTubeInstance(grid, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
+      tubes.push(
+        placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
+      );
       break;
     case 'moveTubeKnee': {
       const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) moveTubeKnee(grid, instance, msg.kneeIndex, { x: msg.x, y: msg.y });
+      if (instance) moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y });
       break;
     }
     case 'moveTubeSegment': {
       const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) moveTubeSegment(grid, instance, msg.segIndex, msg.dx, msg.dy);
+      if (instance) moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy);
       break;
     }
     case 'updateTube': {
       const instance = tubes.find((t) => t.id === msg.id);
-      if (instance) updateTubeInstance(grid, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null });
+      if (instance) updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null });
       break;
     }
   }

@@ -17,8 +17,8 @@ import {
 
 const species = new SpeciesTable();
 
-function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelInstance>[1]> = {}): FunnelInstance {
-  return placeFunnelInstance(grid, {
+function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelInstance>[2]> = {}): FunnelInstance {
+  return placeFunnelInstance(grid, species, {
     x: 50,
     y: 50,
     facing: 'down',
@@ -163,7 +163,7 @@ describe('funnel', () => {
     const instance = place(grid);
     const shape = funnelShapeFor(instance.facing);
 
-    moveFunnelInstance(grid, instance, 30, 90); // far enough away (and in bounds) that the old and new outlines don't overlap
+    moveFunnelInstance(grid, species, instance, 30, 90); // far enough away (and in bounds) that the old and new outlines don't overlap
 
     expect(instance.anchorX).toBe(30);
     expect(instance.anchorY).toBe(90);
@@ -180,7 +180,7 @@ describe('funnel', () => {
     const instance = place(grid);
     grid.set(70, 60, SpeciesId.Fe, PhaseCode.Solid);
 
-    moveFunnelInstance(grid, instance, 70, 60);
+    moveFunnelInstance(grid, species, instance, 70, 60);
 
     expect(grid.specId[grid.index(70, 60)]).toBe(GLASS_WALL_SPEC_ID);
   });
