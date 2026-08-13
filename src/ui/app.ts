@@ -31,7 +31,7 @@ import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type Tool
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { isElementLabel } from './species-classify';
-import { SPECIES } from '../sim/species-data';
+import { buildSpeciesLookup } from './species-lookup';
 import { formatCelsius } from './format';
 
 const DEFAULT_RADIUS = 2;
@@ -313,19 +313,9 @@ export function mountApp(root: HTMLElement): void {
   let tubeSegmentDragLastX = 0;
   let tubeSegmentDragLastY = 0;
 
-  // Label lookup for the probe: every species (SPECIES is a fully static
-  // table shared by main thread and worker, so specIds are stable array
-  // indices -- no need to round-trip through the worker) plus walls.
-  const labelBySpecId = new Map<number, string>();
-  const colorBySpecId = new Map<number, string>();
-  SPECIES.forEach((data, specId) => {
-    labelBySpecId.set(specId, data.name);
-    colorBySpecId.set(specId, data.color);
-  });
-  for (const wall of wallList()) {
-    labelBySpecId.set(wall.specId, wall.label);
-    colorBySpecId.set(wall.specId, wall.color);
-  }
+  // Label/color/palette-entry lookup for the probe, funnel field display,
+  // and debug hook (see species-lookup.ts).
+  const speciesLookup = buildSpeciesLookup();
 
   // Latest frame data, kept around purely so the hover inspector can look
   // up a cell locally without a worker round trip.
@@ -335,10 +325,6 @@ export function mountApp(root: HTMLElement): void {
   let lastRadiatorRadius: Uint8Array | null = null;
   let lastRadiatorTargetK: Float32Array | null = null;
   let lastTick = 0;
-
-  function paletteEntryFor(specId: number): PaletteEntry | undefined {
-    return palette.find((entry) => entry.specId === specId);
-  }
 
   function findFunnel(id: number | null): FunnelSnapshot | undefined {
     return id === null ? undefined : lastFunnels.find((f) => f.id === id);
@@ -351,7 +337,7 @@ export function mountApp(root: HTMLElement): void {
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) return { ...TOOL_META_DEFAULTS, label: 'No tool selected', color: '#3a3d3a' };
     if (t.kind === 'paint') {
-      const entry = paletteEntryFor(t.specId);
+      const entry = speciesLookup.paletteEntryOf(t.specId);
       if (!entry) return describeToolMeta(null);
       return {
         ...TOOL_META_DEFAULTS,
@@ -538,8 +524,8 @@ export function mountApp(root: HTMLElement): void {
     const funnelFields: FunnelFieldValues =
       isEditMode && editDraft
         ? {
-            specLabel: labelBySpecId.get(editDraft.specId) ?? `spec ${editDraft.specId}`,
-            specColor: colorBySpecId.get(editDraft.specId) ?? '#888',
+            specLabel: speciesLookup.labelOf(editDraft.specId) ?? `spec ${editDraft.specId}`,
+            specColor: speciesLookup.colorOf(editDraft.specId) ?? '#888',
             tempC: editDraft.tempC,
             ratePerMinute: editDraft.ratePerMinute,
             totalMode: editDraft.totalMode,
@@ -547,8 +533,8 @@ export function mountApp(root: HTMLElement): void {
             remaining: selectedFunnel?.remaining ?? null,
           }
         : {
-            specLabel: labelBySpecId.get(funnelSpecId) ?? `spec ${funnelSpecId}`,
-            specColor: colorBySpecId.get(funnelSpecId) ?? '#888',
+            specLabel: speciesLookup.labelOf(funnelSpecId) ?? `spec ${funnelSpecId}`,
+            specColor: speciesLookup.colorOf(funnelSpecId) ?? '#888',
             tempC: funnelTempC,
             ratePerMinute: funnelRatePerMinute,
             totalMode: funnelTotalMode,
@@ -988,8 +974,8 @@ export function mountApp(root: HTMLElement): void {
       return;
     }
     inspector.classList.remove('empty');
-    const label = labelBySpecId.get(specId) ?? `spec ${specId}`;
-    inspectorSwatch.style.background = colorBySpecId.get(specId) ?? '#888';
+    const label = speciesLookup.labelOf(specId) ?? `spec ${specId}`;
+    inspectorSwatch.style.background = speciesLookup.colorOf(specId) ?? '#888';
     const tempC = kelvinToCelsius(lastTempK[idx] as number);
     const phaseCode = lastPhase[idx] as number;
     const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
@@ -1097,12 +1083,9 @@ export function mountApp(root: HTMLElement): void {
       gridWidth = msg.width;
       gridHeight = msg.height;
       palette = msg.palette;
+      speciesLookup.setPalette(msg.palette);
       renderer = createRenderer(canvas, gridWidth, gridHeight);
-      for (const entry of msg.palette) {
-        renderer.setColorForSpec(entry.specId, entry.color);
-        labelBySpecId.set(entry.specId, entry.label);
-        colorBySpecId.set(entry.specId, entry.color);
-      }
+      for (const entry of msg.palette) renderer.setColorForSpec(entry.specId, entry.color);
       for (const wall of wallList()) renderer.setColorForSpec(wall.specId, wall.color);
 
       const firstPinned = pinnedLabels.map((label) => palette.find((entry) => entry.label === label)).find((entry): entry is PaletteEntry => !!entry);
@@ -1186,7 +1169,7 @@ export function mountApp(root: HTMLElement): void {
           x,
           y,
           specId,
-          label: specId === EMPTY ? null : (labelBySpecId.get(specId) ?? null),
+          label: specId === EMPTY ? null : (speciesLookup.labelOf(specId) ?? null),
           tempK,
           tempC: kelvinToCelsius(tempK),
           phase: PHASE_LABEL[phaseCode] ?? 'unknown',
