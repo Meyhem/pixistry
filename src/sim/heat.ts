@@ -178,14 +178,20 @@ function writeEnergy(grid: SimGrid, thermal: ThermalProfile, mass: number, idx: 
   grid.phase[idx] = temperatureOf(thermal, mass, u).phase;
 }
 
-function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Array, i: number, j: number): void {
-  if (grid.specId[i] === EMPTY || grid.specId[j] === EMPTY) return;
+/** Raw pairwise conduction flux between i and j (positive = i loses, j
+ * gains), capped at that pair's own capacity gap -- but NOT yet checked
+ * against either cell's actual currently-stored energy, since a cell can
+ * be party to up to 4 of these in one tick and each is computed from an
+ * independent snapshot. stepConduction's second pass does that check
+ * across all of a cell's exchanges at once (see its comment). */
+function computeFlux(grid: SimGrid, species: SpeciesTable, i: number, j: number): number {
+  if (grid.specId[i] === EMPTY || grid.specId[j] === EMPTY) return 0;
 
   const cellI = readCell(grid, species, i);
   const cellJ = readCell(grid, species, j);
 
   const diff = cellI.tempK - cellJ.tempK;
-  if (diff === 0) return;
+  if (diff === 0) return 0;
 
   const { conductivity: kI, heatCapacity: hcI } = phaseThermal(cellI.thermal, cellI.phase);
   const { conductivity: kJ, heatCapacity: hcJ } = phaseThermal(cellJ.thermal, cellJ.phase);
@@ -196,10 +202,13 @@ function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Arr
   const maxFlux = Math.abs(diff) * Math.min(capacityI, capacityJ) * 0.5;
 
   let flux = kBlend * diff * CONDUCTION_RATE;
-  flux = Math.max(-maxFlux, Math.min(maxFlux, flux));
+  return Math.max(-maxFlux, Math.min(maxFlux, flux));
+}
 
-  deltaU[i] = (deltaU[i] as number) - flux;
-  deltaU[j] = (deltaU[j] as number) + flux;
+interface PendingExchange {
+  i: number;
+  j: number;
+  flux: number;
 }
 
 /**
@@ -292,15 +301,85 @@ export function stepRadiators(grid: SimGrid, species: SpeciesTable, dtSeconds: n
 export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
   const { width, height } = grid;
   const deltaU = new Float32Array(width * height);
+  const exchanges: PendingExchange[] = [];
+  const outgoing = new Float32Array(width * height);
+  const degree = new Uint8Array(width * height);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = grid.index(x, y);
       if (grid.specId[idx] === EMPTY) continue;
 
-      if (x + 1 < width) exchangeEnergy(grid, species, deltaU, idx, grid.index(x + 1, y));
-      if (y + 1 < height) exchangeEnergy(grid, species, deltaU, idx, grid.index(x, y + 1));
+      if (x + 1 < width) {
+        const j = grid.index(x + 1, y);
+        const flux = computeFlux(grid, species, idx, j);
+        if (flux !== 0) {
+          exchanges.push({ i: idx, j, flux });
+          outgoing[flux > 0 ? idx : j] = (outgoing[flux > 0 ? idx : j] as number) + Math.abs(flux);
+          degree[idx] = (degree[idx] as number) + 1;
+          degree[j] = (degree[j] as number) + 1;
+        }
+      }
+      if (y + 1 < height) {
+        const j = grid.index(x, y + 1);
+        const flux = computeFlux(grid, species, idx, j);
+        if (flux !== 0) {
+          exchanges.push({ i: idx, j, flux });
+          outgoing[flux > 0 ? idx : j] = (outgoing[flux > 0 ? idx : j] as number) + Math.abs(flux);
+          degree[idx] = (degree[idx] as number) + 1;
+          degree[j] = (degree[j] as number) + 1;
+        }
+      }
     }
+  }
+
+  // Each pairwise flux above is capped at half *that pair's* own capacity
+  // gap -- a bound that's only valid in isolation. A cell touching multiple
+  // neighbors at once (up to 4, on this grid) has each of those pairs
+  // computed independently from the same starting snapshot, so their sum
+  // can ask a cell to trade away several times its own capacity gap's
+  // worth of energy in a single tick. That's an unconditionally-unstable
+  // explicit-diffusion step: it doesn't just overshoot equilibrium, it
+  // *overshoots past the neighbors' own temperatures*, and the next tick's
+  // symmetric overshoot in the opposite direction compounds into growing
+  // oscillation -- observed as same-material touching cells (a settled
+  // solid Cu pile, no reaction or radiator involved) swinging hundreds of
+  // degrees apart tick to tick despite starting perfectly uniform. Scaling
+  // every exchange a cell is party to by 1/max(degree(i), degree(j)) keeps
+  // each cell's total this-tick exchange within the same "at most half its
+  // own capacity gap" stability bound the single-pair cap already assumed,
+  // now honored in aggregate too.
+  const scale = new Float32Array(width * height).fill(1);
+  for (let idx = 0; idx < scale.length; idx++) {
+    if (grid.specId[idx] === EMPTY) continue;
+    const d = degree[idx] as number;
+    if (d > 1) scale[idx] = 1 / d;
+  }
+
+  // A cell can still be the loser in several of the (now degree-scaled)
+  // exchanges above, so their sum can in principle ask a cell to give away
+  // more energy than it currently holds even though every individual flux
+  // is now bounded. Left unchecked, writeEnergy's floor-at-0 would
+  // silently discard the shortfall on the losing side while the
+  // neighbor(s) on the other end of those exchanges already banked the
+  // un-scaled amount -- manufacturing energy out of nothing. A second
+  // scale pass caps each cell's total outgoing flux at what it actually
+  // has stored, keeping the whole batch energy-conserving.
+  const outgoingScale = new Float32Array(width * height).fill(1);
+  for (let idx = 0; idx < outgoingScale.length; idx++) {
+    if (grid.specId[idx] === EMPTY) continue;
+    const out = (outgoing[idx] as number) * (scale[idx] as number);
+    if (out <= 0) continue;
+    const currentU = grid.u[idx] as number;
+    if (out > currentU) outgoingScale[idx] = currentU / out;
+  }
+
+  for (const { i, j, flux } of exchanges) {
+    const degreeScale = Math.min(scale[i] as number, scale[j] as number);
+    const loser = flux > 0 ? i : j;
+    const effectiveFlux = flux * degreeScale * (outgoingScale[loser] as number);
+    deltaU[i] = (deltaU[i] as number) - effectiveFlux;
+    deltaU[j] = (deltaU[j] as number) + effectiveFlux;
   }
 
   for (let idx = 0; idx < grid.u.length; idx++) {
