@@ -54,6 +54,28 @@ function pickDiagonalOrder(rng: Rng): [number, number] {
   return rng() < 0.5 ? [-1, 1] : [1, -1];
 }
 
+/** Buoyant-rise check for a liquid displacing the liquid above it. Unlike
+ * canDisplace, an empty target is NOT auto-displaceable here: liquids don't
+ * spontaneously rise into open air the way gas does, they only rise past a
+ * denser liquid that's in their way. */
+function canRiseThroughLiquid(
+  grid: SimGrid,
+  species: SpeciesTable,
+  fromIdx: number,
+  fromSpecId: number,
+  fromPhase: PhaseCode,
+  targetIdx: number,
+): boolean {
+  if (grid.isEmptyAt(targetIdx)) return false;
+  const targetSpecId = grid.specId[targetIdx] as number;
+  if (isWallSpecId(targetSpecId)) return false;
+  const targetPhase = grid.phase[targetIdx] as PhaseCode;
+  if (targetPhase !== PhaseCode.Liquid) return false;
+  const fromDensity = displaceDensity(grid, species, fromIdx, fromSpecId, fromPhase);
+  const targetDensity = displaceDensity(grid, species, targetIdx, targetSpecId, targetPhase);
+  return fromDensity < targetDensity;
+}
+
 function moveFalling(
   grid: SimGrid,
   species: SpeciesTable,
@@ -91,12 +113,57 @@ function moveFalling(
   }
 
   if (!canSpreadHorizontally) return;
+
+  // Buoyant rise: a lighter liquid trapped under/inside a denser one (e.g.
+  // enveloped against a solid boundary with no downward escape) floats up
+  // through it rather than sitting stuck forever.
+  const aboveY = y - 1;
+  if (grid.inBounds(x, aboveY)) {
+    const aboveIdx = grid.index(x, aboveY);
+    if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, aboveIdx)) {
+      grid.swap(idx, aboveIdx);
+      moved[idx] = 1;
+      moved[aboveIdx] = 1;
+      return;
+    }
+
+    for (const dx of pickDiagonalOrder(rng)) {
+      const nx = x + dx;
+      if (!grid.inBounds(nx, aboveY)) continue;
+      const nIdx = grid.index(nx, aboveY);
+      if (moved[nIdx]) continue;
+      if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, nIdx) && rng() < DIAGONAL_P) {
+        grid.swap(idx, nIdx);
+        moved[idx] = 1;
+        moved[nIdx] = 1;
+        return;
+      }
+    }
+  }
+
   for (const dx of pickDiagonalOrder(rng)) {
     const nx = x + dx;
     if (!grid.inBounds(nx, y)) continue;
     const nIdx = grid.index(nx, y);
     if (moved[nIdx]) continue;
-    if (grid.isEmptyAt(nIdx) && rng() < LIQUID_SPREAD_P) {
+    if (grid.isEmptyAt(nIdx)) {
+      if (rng() < LIQUID_SPREAD_P) {
+        grid.swap(idx, nIdx);
+        moved[idx] = 1;
+        moved[nIdx] = 1;
+        return;
+      }
+      continue;
+    }
+    // Lateral liquid<->liquid mixing: swap regardless of density so
+    // same-density liquids intermix and different-density liquids get
+    // reshuffled into positions where the vertical density checks above
+    // can sort them into layers, instead of never touching at all.
+    const targetSpecId = grid.specId[nIdx] as number;
+    if (isWallSpecId(targetSpecId)) continue;
+    const targetPhase = grid.phase[nIdx] as PhaseCode;
+    if (targetPhase !== PhaseCode.Liquid) continue;
+    if (rng() < LIQUID_SPREAD_P) {
       grid.swap(idx, nIdx);
       moved[idx] = 1;
       moved[nIdx] = 1;

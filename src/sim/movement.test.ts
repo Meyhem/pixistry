@@ -169,6 +169,38 @@ describe('stepMovement', () => {
     expect(run()).toEqual(run());
   });
 
+  it('lets a lighter liquid rise out of an envelope of denser liquid resting on a solid (regression)', () => {
+    // Before the lateral-mixing/buoyant-rise fix, moveFalling only tried to
+    // move a liquid down/diagonal-down by density, or sideways into empty
+    // space -- never sideways/upward past another liquid. A lighter liquid
+    // pinned against a solid floor with denser liquid on every open side had
+    // no legal move at all and sat frozen forever.
+    const species = new SpeciesTable();
+    expect(species.densityOf(SpeciesId.H2O2)).toBeGreaterThan(species.densityOf(SpeciesId.H2O)); // 1.45 vs 1.0
+
+    const grid = new SimGrid(5, 6);
+    // Solid floor.
+    for (let x = 0; x < 5; x++) grid.set(x, 5, SpeciesId.Fe, PhaseCode.Solid);
+    // Denser H2O2 pool filling everything above the floor.
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) grid.set(x, y, SpeciesId.H2O2, PhaseCode.Liquid);
+    }
+    // Lighter water, enveloped: resting on the floor, H2O2 on every side.
+    grid.set(2, 4, SpeciesId.H2O, PhaseCode.Liquid);
+
+    const rng = mulberry32(11);
+    for (let tick = 0; tick < 400; tick++) stepMovement(grid, species, rng, tick);
+
+    let waterY = -1;
+    for (let y = 0; y < 6; y++) {
+      for (let x = 0; x < 5; x++) {
+        if (grid.specId[grid.index(x, y)] === SpeciesId.H2O) waterY = y;
+      }
+    }
+    expect(waterY).toBeGreaterThanOrEqual(0);
+    expect(waterY).toBeLessThan(4); // it moved up off the floor, not stuck
+  });
+
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(4, 4);
