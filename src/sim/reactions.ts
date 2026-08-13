@@ -4,7 +4,7 @@
 // products that can ever appear on the grid are the ones listed here, each
 // with hand-picked, physically sane deltaH/ignition-threshold/probability,
 // so reactions can't wander into estimated-property species and blow up the
-// energy/pressure bookkeeping.
+// energy bookkeeping.
 import { SpeciesId } from './species-data';
 
 export interface ReactionRule {

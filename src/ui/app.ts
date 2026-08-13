@@ -1,19 +1,18 @@
 // M4 UI: the full v1 tool set (paint, erase, wall materials, burner,
 // coolant, probe, mixer) plus time controls (pause, single-step, speed
 // multiplier) and a hover inspector -- all plain DOM per the design doc's
-// "src/ui plain DOM/React panels", no framework. M5 adds a pressure
-// reading to the inspector for gas cells.
+// "src/ui plain DOM/React panels", no framework.
 import { createRenderer, type Renderer } from '../render/renderer';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
-import { pressureKPa } from '../sim/pressure';
 import { wallList } from '../sim/walls';
 
-const BRUSH_RADIUS = 2;
+const DEFAULT_RADIUS = 2;
+const MIN_RADIUS = 1;
+const MAX_RADIUS = 12;
 const BURNER_WATTS = 400;
 const COOLANT_WATTS = -400;
-const MIXER_RADIUS = 3;
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
 type Tool =
@@ -22,7 +21,8 @@ type Tool =
   | { kind: 'wall'; specId: number }
   | { kind: 'burner' }
   | { kind: 'coolant' }
-  | { kind: 'mixer' };
+  | { kind: 'mixer' }
+  | { kind: 'grabber' };
 
 const PHASE_LABEL: Record<number, string> = {
   [PhaseCode.Empty]: 'empty',
@@ -60,8 +60,10 @@ export function mountApp(root: HTMLElement): void {
   let tool: Tool | null = null;
   let running = true;
   let speed = 1;
+  let radius = DEFAULT_RADIUS;
   let activeButton: HTMLButtonElement | null = null;
   let isPointerDown = false;
+  let isGrabbing = false;
 
   // Label lookup for the probe: palette species and walls. Reaction
   // products (M5) can mint specIds beyond the initial palette -- the
@@ -76,7 +78,6 @@ export function mountApp(root: HTMLElement): void {
   let lastSpecId: Uint16Array | null = null;
   let lastPhase: Uint8Array | null = null;
   let lastTempK: Float32Array | null = null;
-  let lastN: Uint8Array | null = null;
 
   function setActive(button: HTMLButtonElement): void {
     activeButton?.classList.remove('active');
@@ -120,6 +121,25 @@ export function mountApp(root: HTMLElement): void {
     addToolButton('Burner', '#ff7a3c', () => ({ kind: 'burner' }));
     addToolButton('Coolant', '#3ca7ff', () => ({ kind: 'coolant' }));
     addToolButton('Mixer', '#c9a8ff', () => ({ kind: 'mixer' }));
+    addToolButton('Grabber', '#f2d94e', () => ({ kind: 'grabber' }));
+
+    addSeparator();
+
+    const radiusLabel = document.createElement('label');
+    radiusLabel.className = 'radius-label';
+    radiusLabel.textContent = `Radius: ${radius}`;
+    const radiusSlider = document.createElement('input');
+    radiusSlider.type = 'range';
+    radiusSlider.className = 'radius-slider';
+    radiusSlider.min = String(MIN_RADIUS);
+    radiusSlider.max = String(MAX_RADIUS);
+    radiusSlider.value = String(radius);
+    radiusSlider.oninput = () => {
+      radius = Number(radiusSlider.value);
+      radiusLabel.textContent = `Radius: ${radius}`;
+    };
+    toolbar.appendChild(radiusLabel);
+    toolbar.appendChild(radiusSlider);
 
     addSeparator();
 
@@ -172,22 +192,24 @@ export function mountApp(root: HTMLElement): void {
     if (!tool) return;
     switch (tool.kind) {
       case 'paint':
-        send({ type: 'paint', x, y, radius: BRUSH_RADIUS, specId: tool.specId });
+        send({ type: 'paint', x, y, radius, specId: tool.specId });
         break;
       case 'wall':
-        send({ type: 'paint', x, y, radius: BRUSH_RADIUS, specId: tool.specId });
+        send({ type: 'paint', x, y, radius, specId: tool.specId });
         break;
       case 'erase':
-        send({ type: 'erase', x, y, radius: BRUSH_RADIUS });
+        send({ type: 'erase', x, y, radius });
         break;
       case 'burner':
-        send({ type: 'heat', x, y, radius: BRUSH_RADIUS, watts: BURNER_WATTS });
+        send({ type: 'heat', x, y, radius, watts: BURNER_WATTS });
         break;
       case 'coolant':
-        send({ type: 'heat', x, y, radius: BRUSH_RADIUS, watts: COOLANT_WATTS });
+        send({ type: 'heat', x, y, radius, watts: COOLANT_WATTS });
         break;
       case 'mixer':
-        send({ type: 'stir', x, y, radius: MIXER_RADIUS });
+        send({ type: 'stir', x, y, radius });
+        break;
+      case 'grabber':
         break;
     }
   }
@@ -199,7 +221,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function updateInspector(x: number, y: number): void {
-    if (!lastSpecId || !lastPhase || !lastTempK || !lastN || !renderer) return;
+    if (!lastSpecId || !lastPhase || !lastTempK || !renderer) return;
     if (x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) return;
     const idx = y * gridWidth + x;
     const specId = lastSpecId[idx] as number;
@@ -211,21 +233,28 @@ export function mountApp(root: HTMLElement): void {
     const tempK = lastTempK[idx] as number;
     const phaseCode = lastPhase[idx] as number;
     const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
-    // Pressure only means anything for a gas cell -- liquids/solids don't
-    // carry a mole count (grid.n stays 0), see pressure.ts.
-    const pressureSuffix =
-      phaseCode === PhaseCode.Gas ? `  ${pressureKPa(lastN[idx] as number, tempK).toFixed(1)} kPa` : '';
-    inspector.textContent = `${label}  ${tempK.toFixed(1)} K  (${phase})${pressureSuffix}`;
+    inspector.textContent = `${label}  ${tempK.toFixed(1)} K  (${phase})`;
   }
 
   canvas.addEventListener('pointerdown', (event) => {
     isPointerDown = true;
     const { x, y } = gridCoordsFromEvent(event);
-    applyTool(x, y);
+    if (tool?.kind === 'grabber') {
+      isGrabbing = true;
+      send({ type: 'grabStart', x, y, radius });
+    } else {
+      applyTool(x, y);
+    }
   });
   canvas.addEventListener('pointermove', (event) => {
     const { x, y } = gridCoordsFromEvent(event);
-    if (isPointerDown) applyTool(x, y);
+    if (isPointerDown) {
+      if (isGrabbing) {
+        send({ type: 'grabMove', x, y });
+      } else {
+        applyTool(x, y);
+      }
+    }
     updateInspector(x, y);
   });
   canvas.addEventListener('pointerleave', () => {
@@ -233,6 +262,10 @@ export function mountApp(root: HTMLElement): void {
   });
   window.addEventListener('pointerup', () => {
     if (isPointerDown) releaseTool();
+    if (isGrabbing) {
+      send({ type: 'grabEnd' });
+      isGrabbing = false;
+    }
     isPointerDown = false;
   });
 
@@ -251,8 +284,7 @@ export function mountApp(root: HTMLElement): void {
       lastSpecId = msg.specId;
       lastPhase = msg.phase;
       lastTempK = msg.tempK;
-      lastN = msg.n;
-      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK, n: msg.n });
+      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK });
     }
   };
 }

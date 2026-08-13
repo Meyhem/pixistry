@@ -43,14 +43,12 @@ describe('SimGrid', () => {
     const grid = new SimGrid(2, 1);
     grid.set(0, 0, 3, PhaseCode.Gas);
     grid.u[0] = 42;
-    grid.n[0] = 5;
 
     grid.swap(0, 1);
 
     expect(grid.specId[1]).toBe(3);
     expect(grid.phase[1]).toBe(PhaseCode.Gas);
     expect(grid.u[1]).toBe(42);
-    expect(grid.n[1]).toBe(5);
     expect(grid.isEmptyAt(0)).toBe(true);
   });
 });

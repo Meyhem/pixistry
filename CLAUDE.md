@@ -14,10 +14,16 @@ weirdness. Don't resurrect it without addressing why it was replaced.
 
 **Current status: built and running.** `src/sim/species-data.ts` (static species table) and
 `src/sim/reactions.ts` (static reaction table) are the chemistry data; `src/sim` (grid/worker: movement,
-energy/conduction/phase-change, tools, gas pressure and reactions wired into the tick loop, and vessel
-bursting), `src/render` (WebGL renderer), and `src/ui` (full tool set + inspector) round out a running
-app. See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-layer breakdown and its "What's next" section for
-what's left (the deliberately-deferred list, plus optional prefab apparatus stamps).
+energy/conduction/phase-change, tools, and reactions wired into the tick loop), `src/render` (WebGL
+renderer), and `src/ui` (full tool set + inspector) round out a running app. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the per-layer breakdown and its "What's next" section for what's
+left (the deliberately-deferred list, plus optional prefab apparatus stamps).
+
+There is no gas pressure model: an earlier version modeled gas cells with a mole count and derived
+pressure via the ideal gas law (`grid.n`, `pressure.ts`, vessel bursting on wall-strength thresholds), but
+it was ripped out as too complicated. The sim is just pixels of elements and compounds, each carrying a
+temperature — that's it. Walls are indestructible now that nothing can burst them. Don't reintroduce
+pressure/mole-count fields without discussing it first.
 
 ## Commands
 

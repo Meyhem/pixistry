@@ -26,7 +26,6 @@ export interface WallMaterial {
   readonly meltK: number;
   readonly thermalConductivity: number;
   readonly density: number;
-  readonly wallStrength: number;
 }
 
 const NEVER_MELTS_K = 1e9;
@@ -40,7 +39,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 1.0,
     density: 2.5,
-    wallStrength: 3,
   },
   {
     specId: WALL_SPEC_BASE + 1,
@@ -50,7 +48,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 45,
     density: 7.8,
-    wallStrength: 10,
   },
   {
     specId: WALL_SPEC_BASE + 2,
@@ -60,7 +57,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 0.03,
     density: 1.5,
-    wallStrength: 5,
   },
 ];
 

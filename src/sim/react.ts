@@ -5,7 +5,7 @@
 // heat.ts uses) and fires probabilistically once past its ignition
 // threshold. This is what makes dissolution (NaCl + H2O -> aqueous ions)
 // actually happen on the grid -- it's just another rule in the table.
-import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { EMPTY, SimGrid } from './grid';
 import { clampEnergyToMaxTemp, massOf, temperatureOf } from './heat';
 import { findReaction } from './reactions';
 import type { SpeciesTable } from './species';
@@ -37,18 +37,16 @@ function findEmptyNeighbor(grid: SimGrid, touched: Uint8Array, x: number, y: num
   return -1;
 }
 
-/** Splits totalEnergy/totalN across product cells proportional to each
- * product's own nominal parcel mass (density * cell volume, same convention
- * as heat.ts), then derives each slot's real phase from its own thermal
- * profile -- a product only keeps a share of n if it actually condenses out
- * as a gas. */
+/** Splits totalEnergy across product cells proportional to each product's
+ * own nominal parcel mass (density * cell volume, same convention as
+ * heat.ts), then derives each slot's real phase from its own thermal
+ * profile. */
 function placeProducts(
   grid: SimGrid,
   species: SpeciesTable,
   slots: number[],
   productSpecIds: readonly number[],
   totalEnergy: number,
-  totalN: number,
 ): void {
   const masses = productSpecIds.map((specId) => massOf(species, specId));
   const totalMass = masses.reduce((s, m) => s + m, 0) || 1;
@@ -64,8 +62,7 @@ function placeProducts(
     // repeated firing can't climb into physically absurd territory.
     const uK = clampEnergyToMaxTemp(thermal, masses[k] as number, Math.max(0, totalEnergy * weight));
     const { phase } = temperatureOf(thermal, masses[k] as number, uK);
-    const nK = phase === PhaseCode.Gas ? Math.round(totalN * weight) : 0;
-    grid.setAt(idx, specId, phase, uK, nK);
+    grid.setAt(idx, specId, phase, uK);
   }
 }
 
@@ -113,10 +110,9 @@ function tryReact(
   const molarMassA = (SPECIES[specA] as { molarMass: number }).molarMass;
   const releasedJ = -rule.deltaH * 1000 * (massA / molarMassA);
   const totalEnergy = (grid.u[i] as number) + (grid.u[j] as number) + releasedJ;
-  const totalN = (grid.n[i] as number) + (grid.n[j] as number);
 
   const leftover = reactantSlots.filter((s) => !slots.includes(s));
-  placeProducts(grid, species, slots, products, totalEnergy, totalN);
+  placeProducts(grid, species, slots, products, totalEnergy);
   for (const idx of leftover) grid.clearAt(idx);
 
   for (const idx of slots) touched[idx] = 1;
@@ -124,8 +120,8 @@ function tryReact(
   return true;
 }
 
-/** One reaction tick. Mutates grid in place. Run after movement/heat/
- * pressure, per the design doc's movement -> heat -> react tick order. */
+/** One reaction tick. Mutates grid in place. Run after movement/heat,
+ * per the design doc's movement -> heat -> react tick order. */
 export function stepReactions(grid: SimGrid, species: SpeciesTable, rng: Rng): void {
   const { width, height } = grid;
   const touched = new Uint8Array(width * height);

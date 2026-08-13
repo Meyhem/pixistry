@@ -2,15 +2,13 @@
 // this project draws exactly one sprite"). The grid's specId array is
 // mapped to RGBA through a small per-specId color LUT and blitted as a
 // single nearest-filtered texture; no per-cell geometry.
-import { EMPTY, PhaseCode } from '../sim/grid';
+import { EMPTY } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
-import { pressureKPa } from '../sim/pressure';
 
 export interface FrameData {
   specId: Uint16Array;
   phase: Uint8Array;
   tempK: Float32Array;
-  n: Uint8Array;
 }
 
 export interface Renderer {
@@ -73,13 +71,6 @@ function hexToRgba(hex: string): [number, number, number, number] {
 const BACKGROUND_RGBA: [number, number, number, number] = [12, 12, 16, 255];
 const MISSING_SPEC_RGBA: [number, number, number, number] = [255, 0, 255, 255];
 
-// Gas cells' alpha channel doubles as a pressure readout: a near-vacuum gas
-// cell is barely visible, full opacity is reached around 3 atm. Solids and
-// liquids don't carry a mole count (grid.n stays 0, see pressure.ts) so
-// they're left fully opaque regardless of this scale.
-const PRESSURE_ALPHA_MIN = 40;
-const PRESSURE_ALPHA_FULL_KPA = 3 * 101.325;
-
 // Temperature overlay: cells warmer than ambient tint red, cooler tint
 // blue, saturating at +-TEMP_OVERLAY_RANGE_K away from ambient.
 const TEMP_OVERLAY_RANGE_K = 300;
@@ -134,7 +125,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase, tempK, n }: FrameData): void {
+    drawFrame({ specId: specIdGrid, tempK }: FrameData): void {
       for (let i = 0; i < specIdGrid.length; i++) {
         const specId = specIdGrid[i];
         const o = i * 4;
@@ -149,17 +140,10 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
         let rgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
         rgba = applyTemperatureOverlay(rgba, tempK[i] as number);
 
-        let alpha = rgba[3];
-        if (phase[i] === PhaseCode.Gas) {
-          const pressure = pressureKPa(n[i] as number, tempK[i] as number);
-          const frac = Math.max(0, Math.min(1, pressure / PRESSURE_ALPHA_FULL_KPA));
-          alpha = PRESSURE_ALPHA_MIN + frac * (255 - PRESSURE_ALPHA_MIN);
-        }
-
         pixelBuffer[o] = rgba[0];
         pixelBuffer[o + 1] = rgba[1];
         pixelBuffer[o + 2] = rgba[2];
-        pixelBuffer[o + 3] = alpha;
+        pixelBuffer[o + 3] = rgba[3];
       }
 
       gl.bindTexture(gl.TEXTURE_2D, texture);

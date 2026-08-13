@@ -6,8 +6,11 @@ hand-written reaction table) and that engine was actually built and shipped as `
 In practice it produced unpredictable products, temperature runaways, and pressure weirdness once real
 usage exercised it, so it was deleted and replaced with the much simpler static species/reaction table
 described below. `.grill/chem-ca-sim.md` is kept for the historical rationale (and the parts of it that
-still apply — grid layout, movement, energy/conduction, gas pressure, tools — are all unaffected), but its
-"why not just hardcode X" answer for chemistry specifically no longer reflects what's actually built.
+still apply — grid layout, movement, energy/conduction, tools — are all unaffected), but its "why not just
+hardcode X" answer for chemistry specifically no longer reflects what's actually built. The design doc's
+gas pressure model (Q11, `grid.n`/`pressure.ts`/vessel bursting) was also dropped after real usage: Pixistry
+is just pixels of elements and compounds, each with a temperature — no pressure, no compression, no vessel
+bursting.
 
 ## Layers
 
@@ -53,10 +56,10 @@ probability gating, energy bookkeeping).
 ## `src/sim`: grid, movement, and energy
 
 - **`grid.ts`** — `SimGrid`: flat typed arrays for `specId` (u16, `EMPTY` sentinel), `u` (f32, internal
-  energy in joules), `phase` (u8, `PhaseCode`), and `n` (u8, gas mole count, unused until M5). `phase` is
-  the live, per-cell runtime phase — it can differ from a species' `phaseAtSTP` once a cell has been
-  heated or cooled, and both movement and conduction read/write it directly rather than re-deriving it
-  from the species table each time.
+  energy in joules), and `phase` (u8, `PhaseCode`). `phase` is the live, per-cell runtime phase — it can
+  differ from a species' `phaseAtSTP` once a cell has been heated or cooled, and both movement and
+  conduction read/write it directly rather than re-deriving it from the species table each time. There is
+  no pressure/mole-count field: a gas cell is just a cell with `PhaseCode.Gas`, same as any other phase.
 - **`species.ts`** — `SpeciesTable`: a thin, eager wrapper directly over `species-data.ts`'s `SPECIES`
   array (no interning — specIds are just array indices), exposing `phaseOf`, `densityOf`, and `thermalOf`
   (a `ThermalProfile`: melt/boil points in K, specific heat and thermal conductivity per phase, latent
@@ -97,25 +100,13 @@ probability gating, energy bookkeeping).
   `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to branch to
   the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 — `meltK` is set absurdly
   high so `heat.ts`'s existing plateau logic simply never triggers, rather than adding special-case code —
-  and `movement.ts` skips them outright (neither a mover nor something the mover can displace into). Each
-  wall's `wallStrength` is a multiple of ambient pressure (glass 3x, insulator 5x, steel 10x), the unit
-  `pressure.ts`'s `stepWallBurst` (M6) compares against.
+  and `movement.ts` skips them outright (neither a mover nor something the mover can displace into). Walls
+  are otherwise indestructible: there is no pressure model, so nothing ever bursts them.
 - **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent liquid/gas cells in a
   radius, independent of `movement.ts`'s density-driven swaps. This is **stirring only**. The design doc
   frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs; now that
   `react.ts` (M5) wires reactions into the tick loop, stirring genuinely helps interface-limited pairs meet
   faster, but the mixer implementation itself is unchanged from M4.
-- **`pressure.ts`** (M5) — gas pressure per the design doc's Q11: `grid.n` (u8, already reserved since M2)
-  holds a nominal 0-255 "fullness" unit for gas cells, not literal moles — cells have no defined physical
-  size (same convention as `heat.ts`'s mass), and `MOLES_PER_UNIT` is calibrated so a freshly painted, full
-  gas cell (`n=255`) reads ~1 atm at ambient temperature. `pressureKPa` derives pressure via the ideal gas
-  law `P = nRT/V`. `stepPressure` runs two passes: an order-independent snapshot-delta pass (mirroring
-  `heat.ts`'s `exchangeEnergy`) that equalizes `n` between adjacent gas cells of the *same* species, and a
-  live-mutating expansion pass that lets a pressurized gas cell leak a share of its `n` (and a matching
-  share of its energy, to keep temperature continuous) into an adjacent empty cell — so gas actually
-  dilutes into a vacuum instead of only relocating via `movement.ts`'s whole-cell swaps. Different gas
-  species sharing a boundary don't exchange `n` here; only `movement.ts`'s swaps can displace one gas past
-  another.
 - **`react.ts`** (M5) — wires `reactions.ts`'s static rule table into the grid tick loop: every adjacent
   non-empty, non-wall cell pair is visited exactly once per tick (each unordered pair checked from its
   top-left cell, same scan `heat.ts` uses), looked up via `findReaction(specA, specB)`, checked against
@@ -125,36 +116,22 @@ probability gating, energy bookkeeping).
   placement: 1-2 products reuse the two reactant cells directly; a 3rd product needs an empty neighbor
   cell (searched around both reactant cells) or the reaction doesn't fire that tick. Reaction enthalpy
   (`deltaH`) is scaled off reactant A's own nominal parcel mass (`massA / molarMassA`, the same "cell is a
-  parcel" convention `heat.ts` uses) and, along with both cells' pre-reaction `U` and `n`, is split across
-  product cells proportional to each product's own nominal mass — each product's *own* thermal profile
-  then decides its real resulting phase, and only a product that lands as a gas keeps a share of `n`. The
-  resulting energy is passed through `heat.ts`'s `clampEnergyToMaxTemp` (see above) before being written,
-  so a cell that keeps getting re-ignited tick after tick can't climb unboundedly.
-- **`pressure.ts`'s `stepWallBurst`** (M6) — the design doc's Q11 payoff ("past wall strength the vessel
-  bursts"): a wall cell adjacent to a gas cell whose pressure exceeds `wallStrength * ambient pressure` is
-  destroyed outright (`grid.clearAt`), not weakened incrementally. Destroying it just clears the cell to
-  empty; the actual escape happens the *next* tick, when `stepPressure`'s existing expansion pass finds a
-  newly-empty neighbor and pushes gas through it — no separate "gas rushes out" code needed, since that
-  pass already handles gas-into-vacuum. This is also the whole of M6's "apparatus" story: per the design
-  doc, apparatus was never scripted geometry, just player-drawn wall cells with `walls.ts`'s existing
-  per-material Tm/conductivity/strength, so a heated flask + sloping tube + cool section already gets
-  distillation (separation by boiling point) for free from M3's conduction and M2's movement — bursting was
-  the one piece of physics in that story that didn't already exist.
-- **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> heat ->
-  pressure -> wallBurst -> react`, per the design doc's `movement -> heat -> react` order, with M5's gas
-  pressure diffusion and M6's wall bursting grouped alongside heat as energy/gas-state concerns, run just
-  before reactions so a reaction sees the tick's settled pressure and any wall destroyed this tick — heat
-  itself includes an optional point heat source before conduction), and talks to the main thread over
-  `postMessage`. Paint messages carry only a `specId`; the
-  worker derives the painted cell's initial `U`/phase from ambient temperature via `heat.ts`, and (M5) a
-  freshly painted gas cell starts "full" (`n=255`). M4 adds: `step` (advance exactly one tick while paused,
-  for single-stepping), `setSpeed` (0.25x-4x — implemented as a fractional tick accumulator so ticks stay
-  whole and deterministic rather than scaling `TICK_MS`, which would make the swap-probability-per-tick
-  physics run at different real rates instead of different simulated rates), `heat`/`clearHeat` (a
-  persistent point power source in **watts, not target temperature** — deliberately, so boiling a painted
-  liquid still costs real simulated time instead of snapping to a setpoint; see `heat.ts`'s
-  `applyPointHeatSource`), and `stir`. Frame messages carry `phase`, a derived `tempK` grid, and (M5) `n` so
-  the UI's hover inspector can look up a cell (including gas pressure) locally without a worker round trip
+  parcel" convention `heat.ts` uses) and, along with both cells' pre-reaction `U`, is split across product
+  cells proportional to each product's own nominal mass — each product's *own* thermal profile then
+  decides its real resulting phase. The resulting energy is passed through `heat.ts`'s
+  `clampEnergyToMaxTemp` (see above) before being written, so a cell that keeps getting re-ignited tick
+  after tick can't climb unboundedly.
+- **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> heat -> react`, per the design
+  doc's order; heat itself includes an optional point heat source before conduction), and talks to the
+  main thread over `postMessage`. Paint messages carry only a `specId`; the worker derives the painted
+  cell's initial `U`/phase from ambient temperature via `heat.ts`. M4 adds: `step` (advance exactly one
+  tick while paused, for single-stepping), `setSpeed` (0.25x-4x — implemented as a fractional tick
+  accumulator so ticks stay whole and deterministic rather than scaling `TICK_MS`, which would make the
+  swap-probability-per-tick physics run at different real rates instead of different simulated rates),
+  `heat`/`clearHeat` (a persistent point power source in **watts, not target temperature** —
+  deliberately, so boiling a painted liquid still costs real simulated time instead of snapping to a
+  setpoint; see `heat.ts`'s `applyPointHeatSource`), and `stir`. Frame messages carry `phase` and a
+  derived `tempK` grid so the UI's hover inspector can look up a cell locally without a worker round trip
   per hover.
 
 ## `src/render` and `src/ui`
@@ -168,21 +145,22 @@ probability gating, energy bookkeeping).
   controls. A hover inspector panel is always active regardless of the selected tool (shows formula/wall
   label, temperature in K, and phase for the cell under the cursor) — probe isn't a separate selectable
   tool since hovering is unambiguous and doesn't compete with a click-drag tool the way paint/erase would.
-  (M5) A gas cell's inspector line also shows pressure in kPa, via `pressure.ts`'s `pressureKPa` over the
-  frame's `n`/`tempK`. Reaction products can be any species in `species-data.ts`'s `SPECIES` array,
-  including the non-`paintable` ones that never appear in the initial palette (e.g. the aqueous ions); the
-  inspector falls back to `spec N` for those since the main thread only ever learns palette/wall labels
-  from the worker, not the full static table.
+  Reaction products can be any species in `species-data.ts`'s `SPECIES` array, including the non-`paintable`
+  ones that never appear in the initial palette (e.g. the aqueous ions); the inspector falls back to
+  `spec N` for those since the main thread only ever learns palette/wall labels from the worker, not the
+  full static table.
 
 ## What's next (not yet built)
 
 The static species/reaction table (`species-data.ts` + `reactions.ts`) replaced the earlier graph-search
-chemistry engine; everything else from the original M1-M6 build order (grid/movement, energy/conduction,
-tools, gas pressure, vessel bursting) is unaffected and still in place. Beyond that, what's left is the
-"deliberately deferred" list from the historical design doc — organic chemistry/C-C chains, catalysis,
-momentum/velocity fields, pumps/vacuum/pH meters/pipettes, WebGPU, a Rust/WASM port, and any
-objective/scoring/progression layer — none of which is scheduled for v1. The one explicitly-called-out
-convenience feature still missing is prefab apparatus stamps (beaker/flask/condenser as one-click wall
-shapes); these are pure convenience over player-drawn wall cells, not new physics, so nothing in `src/sim`
-depends on them existing. Growing the reaction table itself (more compounds, more rules) is now just data
-entry in `reactions.ts`/`species-data.ts` — no engine changes required.
+chemistry engine; grid/movement, energy/conduction, and tools are unaffected and still in place. Gas
+pressure and vessel bursting (`grid.n`, `pressure.ts`, `stepWallBurst`) were dropped entirely — Pixistry is
+pixels of elements/compounds with a temperature, nothing more; walls are now indestructible since there's
+no pressure to burst them with. Beyond that, what's left is the "deliberately deferred" list from the
+historical design doc — organic chemistry/C-C chains, catalysis, momentum/velocity fields, pumps/vacuum/pH
+meters/pipettes, WebGPU, a Rust/WASM port, and any objective/scoring/progression layer — none of which is
+scheduled for v1. The one explicitly-called-out convenience feature still missing is prefab apparatus
+stamps (beaker/flask/condenser as one-click wall shapes); these are pure convenience over player-drawn wall
+cells, not new physics, so nothing in `src/sim` depends on them existing. Growing the reaction table itself
+(more compounds, more rules) is now just data entry in `reactions.ts`/`species-data.ts` — no engine changes
+required.

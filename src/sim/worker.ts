@@ -1,28 +1,24 @@
 // Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
 // thread over postMessage. Tick order follows the design doc's movement ->
-// heat -> react, with gas pressure diffusion (M5) grouped alongside heat as
-// another energy/gas-state concern, run just before reactions so a reaction
-// sees this tick's settled pressure. M4 added tools (walls reuse the plain
-// paint/erase messages since SpeciesTable branches transparently on wall
-// specIds; burner/coolant inject watts; mixer stirs) and time controls
-// (single-step, speed multiplier). M5 adds gas pressure (pressure.ts) and
-// wires the static reaction table into the grid (react.ts) -- this is what
-// makes an ionic solid painted next to water actually dissolve into aqueous
-// ions on-grid. M6 adds vessel bursting: stepWallBurst runs right after
-// stepPressure so a wall destroyed this tick leaves an empty cell that the
-// *next* tick's pressure-expansion pass can actually push gas into.
-import { PhaseCode, SimGrid } from './grid';
+// heat -> react. M4 added tools (walls reuse the plain paint/erase messages
+// since SpeciesTable branches transparently on wall specIds; burner/coolant
+// inject watts; mixer stirs) and time controls (single-step, speed
+// multiplier). M5 wires the static reaction table into the grid (react.ts)
+// -- this is what makes an ionic solid painted next to water actually
+// dissolve into aqueous ions on-grid. Pixistry is just pixels of elements
+// and compounds with a temperature each -- there is no gas pressure model.
+import { SimGrid } from './grid';
+import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import { AMBIENT_TEMPERATURE_K, applyPointHeatSource, energyForTemperature, massOf, stepConduction, temperatureOf } from './heat';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
-import { FULL_N, stepPressure, stepWallBurst } from './pressure';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
-  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; n: Uint8Array; tick: number };
+  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; tick: number };
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number }
@@ -32,7 +28,10 @@ export type MainToWorkerMessage =
   | { type: 'setSpeed'; speed: number }
   | { type: 'heat'; x: number; y: number; radius: number; watts: number }
   | { type: 'clearHeat' }
-  | { type: 'stir'; x: number; y: number; radius: number };
+  | { type: 'stir'; x: number; y: number; radius: number }
+  | { type: 'grabStart'; x: number; y: number; radius: number }
+  | { type: 'grabMove'; x: number; y: number }
+  | { type: 'grabEnd' };
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -58,6 +57,12 @@ let tickAccumulator = 0;
 // correctly with the speed multiplier.
 let activeHeatSource: { x: number; y: number; radius: number; watts: number } | null = null;
 
+// The grabber tool (see grabber.ts): held cells are pulled out of `grid`
+// entirely for the duration of a drag, so they're immune to
+// movement/heat/react while held, and overlaid back into the outgoing frame
+// purely for display -- see overlayGrabbedCells/postFrame below.
+let grabState: GrabState | null = null;
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -81,8 +86,6 @@ function runOneTick(): void {
     applyPointHeatSource(grid, activeHeatSource.x, activeHeatSource.y, activeHeatSource.radius, activeHeatSource.watts, TICK_DT_SECONDS);
   }
   stepConduction(grid, species);
-  stepPressure(grid);
-  stepWallBurst(grid, species);
   stepReactions(grid, species, rng);
 }
 
@@ -98,15 +101,27 @@ function computeTempGrid(): Float32Array {
   return temps;
 }
 
+function overlayGrabbedCells(specId: Uint16Array, phase: Uint8Array, tempK: Float32Array): void {
+  if (!grabState) return;
+  for (const cell of grabState.cells) {
+    const x = grabState.anchorX + cell.ox;
+    const y = grabState.anchorY + cell.oy;
+    if (!grid.inBounds(x, y)) continue;
+    const idx = grid.index(x, y);
+    const mass = massOf(species, cell.specId);
+    const { tempK: cellTempK } = temperatureOf(species.thermalOf(cell.specId), mass, cell.u);
+    specId[idx] = cell.specId;
+    phase[idx] = cell.phase;
+    tempK[idx] = cellTempK;
+  }
+}
+
 function postFrame(): void {
-  post({
-    type: 'frame',
-    specId: grid.specId.slice(),
-    phase: grid.phase.slice(),
-    tempK: computeTempGrid(),
-    n: grid.n.slice(),
-    tick,
-  });
+  const specId = grid.specId.slice();
+  const phase = grid.phase.slice();
+  const tempK = computeTempGrid();
+  overlayGrabbedCells(specId, phase, tempK);
+  post({ type: 'frame', specId, phase, tempK, tick });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -116,10 +131,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       const mass = massOf(species, msg.specId);
       const thermal = species.thermalOf(msg.specId);
       const { u, phase } = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K);
-      // A freshly painted gas cell starts "full" (n=255, ~1 atm at ambient
-      // T -- see pressure.ts); other phases don't use n.
-      const n = phase === PhaseCode.Gas ? FULL_N : 0;
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u, n));
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
       break;
     }
     case 'erase':
@@ -143,6 +155,21 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'stir':
       stirRegion(grid, rng, msg.x, msg.y, msg.radius);
+      break;
+    case 'grabStart':
+      grabState = grabPickUp(grid, msg.x, msg.y, msg.radius);
+      break;
+    case 'grabMove':
+      if (grabState) {
+        grabState.anchorX = msg.x;
+        grabState.anchorY = msg.y;
+      }
+      break;
+    case 'grabEnd':
+      if (grabState) {
+        grabDrop(grid, grabState);
+        grabState = null;
+      }
       break;
   }
 };

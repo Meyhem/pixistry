@@ -200,7 +200,7 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
     // cells sitting between several larger neighbors, especially) can still
     // receive more total flux this tick than its own capacity holds -- left
     // unclamped that overshoot compounds tick over tick into an exponential
-    // runaway (temperature and, downstream, pressure spiking to Infinity).
+    // runaway (temperature spiking to Infinity).
     // Bounding a single tick's own temperature swing to a generous but
     // finite MAX_DELTA_T_PER_TICK breaks that feedback loop without
     // otherwise affecting normal (non-runaway) conduction.

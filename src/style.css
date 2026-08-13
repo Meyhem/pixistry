@@ -44,6 +44,16 @@ body {
   text-shadow: none;
 }
 
+.radius-label {
+  font-size: 13px;
+  color: #ccc;
+  white-space: nowrap;
+}
+
+.radius-slider {
+  width: 100px;
+}
+
 .pause-btn {
   margin-left: auto;
   border: 2px solid #3a3a40;
