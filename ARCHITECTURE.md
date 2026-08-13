@@ -93,24 +93,26 @@ probability gating, energy bookkeeping).
   rate limit otherwise and was independently observed climbing into the tens of millions of K over a real
   play session. `applyPointHeatSource` is the shared "inject/remove watts within a radius" primitive
   (converted to joules via the tick's real duration, so it's watts, not a target temperature — boiling a
-  painted liquid still costs real simulated time rather than snapping to a setpoint); `stepGlassRadiators`
-  calls it once per heater-glass/cooler-glass wall cell currently on the grid, at a single
-  player-configurable radius shared by every radiator cell, so a placed radiator keeps radiating for as
-  long as it sits on the grid rather than only while a tool is held down at the cursor (the latter was an
-  earlier burner/coolant tool design, since replaced).
+  painted liquid still costs real simulated time rather than snapping to a setpoint); `stepRadiators`
+  calls it once per cell with a nonzero `grid.radiatorRadius` (a per-cell overlay field, not a wall
+  material — see `radiators.ts` and `grid.ts` — so a placed radiator has no collision and doesn't
+  occupy `grid.specId` at all), driving it toward that cell's own `grid.radiatorTargetK`. Both fields
+  are a snapshot of the side panel's sliders captured once at paint time, so a placed radiator keeps
+  radiating exactly as configured for as long as it's on the grid, regardless of what the sliders do
+  afterward.
 - **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
-- **`walls.ts`** (M4) — glass/steel/insulator, plus heater-glass/cooler-glass, as a small fixed table of
-  synthetic pseudo-species, *not* chemistry species: the v1 element set has no silicon (so glass/SiO2 has
-  no entry) and "steel" isn't a single compound anyway. specIds are reserved in a disjoint range
-  (`0xff00..0xff04`, below the `EMPTY` sentinel `0xffff` and above the highest `species-data.ts` index), so
-  `grid.specId` stays one flat `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check
-  (`isWallSpecId`) to branch to the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 —
-  `meltK` is set absurdly high so `heat.ts`'s existing plateau logic simply never triggers, rather than
-  adding special-case code — and `movement.ts` skips them outright (neither a mover nor something the mover
-  can displace into). Walls are otherwise indestructible: there is no pressure model, so nothing ever
-  bursts them. Heater-glass/cooler-glass are drawn exactly like any other wall material but carry a nonzero
-  `radiatorWatts`; `heat.ts`'s `stepGlassRadiators` (called once per tick from `worker.ts`) is what turns
-  that into an actual heat/cooling effect on nearby cells — see the `heat.ts` entry below.
+- **`walls.ts`** (M4) — glass/steel/insulator, a small fixed table of synthetic pseudo-species, *not*
+  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry) and "steel" isn't a
+  single compound anyway. specIds are reserved in a disjoint range (`0xff00..0xff02`, below the `EMPTY`
+  sentinel `0xffff` and above the highest `species-data.ts` index), so `grid.specId` stays one flat
+  `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to branch to
+  the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 — `meltK` is set absurdly high so
+  `heat.ts`'s existing plateau logic simply never triggers, rather than adding special-case code — and
+  `movement.ts` skips them outright (neither a mover nor something the mover can displace into). Walls are
+  otherwise indestructible: there is no pressure model, so nothing ever bursts them. Heater/cooler
+  apparatus used to live here as heater-glass/cooler-glass wall materials, occupying `grid.specId` and
+  blocking movement like any other wall; that's been replaced by the non-physical radiator overlay
+  described in the `heat.ts` entry above, so a placed radiator no longer collides with anything.
 - **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent liquid/gas cells in a
   radius, independent of `movement.ts`'s density-driven swaps. This is **stirring only**. The design doc
   frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs; now that
@@ -147,17 +149,16 @@ probability gating, energy bookkeeping).
   its fixed neighbors at once — `resolveKneePosition` brute-forces the 8x8 direction-pair combinations and
   picks the valid intersection closest to the cursor.
 - **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> radiate -> conduct -> react`, per
-  the design doc's order — `stepGlassRadiators` takes the point-heat-source slot conduction previously
-  shared with the cursor-driven burner/coolant tool), and talks to the main thread over `postMessage`.
-  Paint messages carry only a `specId`; the worker derives the painted cell's initial `U`/phase from
-  ambient temperature via `heat.ts` — this is also how heater-glass/cooler-glass get placed, since they're
-  just wall specIds like any other. M4 adds: `step` (advance exactly one tick while paused, for
-  single-stepping), `setSpeed` (0.25x-4x — implemented as a fractional tick accumulator so ticks stay
-  whole and deterministic rather than scaling `TICK_MS`, which would make the swap-probability-per-tick
-  physics run at different real rates instead of different simulated rates), `setRadiationRadius` (how far
-  every heater-glass/cooler-glass cell on the grid radiates, a single value shared by all of them), and
-  `stir`. Frame messages carry `phase` and a derived `tempK` grid so the UI's hover inspector can look up a
-  cell locally without a worker round trip per hover.
+  the design doc's order — `stepRadiators` takes the point-heat-source slot conduction previously shared
+  with the cursor-driven burner/coolant tool), and talks to the main thread over `postMessage`. Paint
+  messages carry only a `specId`; the worker derives the painted cell's initial `U`/phase from ambient
+  temperature via `heat.ts`. A radiator is placed via a separate `paintRadiator` message into
+  `grid.radiatorRadius`/`radiatorTargetK` instead, since it's a non-physical overlay, not a wall specId.
+  M4 adds: `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x —
+  implemented as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling
+  `TICK_MS`, which would make the swap-probability-per-tick physics run at different real rates instead of
+  different simulated rates), and `stir`. Frame messages carry `phase` and a derived `tempK` grid so the
+  UI's hover inspector can look up a cell locally without a worker round trip per hover.
 
 ## `src/render` and `src/ui`
 
@@ -165,15 +166,17 @@ probability gating, energy bookkeeping).
   nearest-filtered texture blit of the frame's `specId` grid. No per-cell geometry (see the design doc's
   "PixiJS was dropped").
 - **`ui/app.ts`** (M4) — the full v1 tool set as plain DOM (no framework, per the design doc): paint
-  (per-species), erase, wall materials (including heater-glass/cooler-glass — painted like any other wall,
-  no special-case tool logic needed since `applyTool`'s `'wall'` case already just sends a `paint`
-  message), and mixer, plus pause/single-step/speed controls. Tool-specific settings live in a right-hand
-  side panel that rebuilds to match the selected tool (`updateSidePanel`): every tool gets a brush-width
-  slider (the same `radius` used for paint/erase/stir/grab), and selecting a heater-glass/cooler-glass wall
-  additionally shows the radiation-radius slider, sent to the worker via `setRadiationRadius` — this
+  (per-species), erase, wall materials (painted like any other wall, no special-case tool logic needed
+  since `applyTool`'s `'wall'` case already just sends a `paint` message), a unified radiator tool, and
+  mixer, plus pause/single-step/speed controls. Tool-specific settings live in a right-hand side panel that
+  rebuilds to match the selected tool: every tool gets a brush-width slider (the same `radius` used for
+  paint/erase/stir/grab), and the radiator tool additionally shows radiation-radius and target-temperature
+  sliders, sent to the worker via a `paintRadiator` message rather than the plain `paint` message — this
   replaced an earlier fixed toolbar radius slider plus a separate burner/coolant tool pair that injected
-  heat at the cursor only while held down; baking the wattage into the wall material itself (`walls.ts`'s
-  `radiatorWatts`) instead means a placed radiator keeps working for as long as it's on the grid. A hover
+  heat at the cursor only while held down, and (later) a heater-glass/cooler-glass wall-material design;
+  baking the target/radius into a per-cell overlay (`grid.radiatorRadius`/`radiatorTargetK`) captured once
+  at paint time instead means a placed radiator keeps working for as long as it's on the grid, with no
+  collision. A hover
   inspector panel is always active regardless of the selected tool (shows formula/wall label, temperature
   in K, and phase for the cell under the cursor) — probe isn't a separate selectable tool since hovering is
   unambiguous and doesn't compete with a click-drag tool the way paint/erase would. Reaction products can
