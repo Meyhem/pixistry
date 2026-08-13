@@ -1,8 +1,8 @@
 // The right-hand card describing the active tool: swatch/label/category
 // chip, species melt/boil/phase readout when relevant, brush width, brush
-// temperature, and (for the heater/cooler radiator tools) radiation radius +
-// target temperature. Rebuilt wholesale whenever the active tool or any of
-// its settings change -- see app.ts's render().
+// temperature, and (for the radiator tool) radiation radius + target
+// temperature. Rebuilt wholesale whenever the active tool or any of its
+// settings change -- see app.ts's render().
 import { formatCelsius } from './format';
 
 export interface ToolMeta {
@@ -14,7 +14,6 @@ export interface ToolMeta {
   boilLabel: string;
   phaseLabel: string;
   isThermal: boolean;
-  isHeater: boolean;
 }
 
 export interface SidePanelCallbacks {
@@ -142,9 +141,8 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     const hintTitle = el('div', 'setting-hint-title');
     hintTitle.textContent = 'HOW IT WORKS';
     const hintBody = el('p', 'setting-hint');
-    hintBody.textContent = meta.isHeater
-      ? 'Placed radiator heats nearby cells every tick, up to the target temperature -- pure radiation, no collision.'
-      : 'Placed radiator cools nearby cells every tick, down to the target temperature -- pure radiation, no collision.';
+    hintBody.textContent =
+      'Radiates toward the target temperature every tick, within the radiation radius -- heats cells below it, cools cells above it. Pure radiation, no collision. These settings are captured when you paint, so changing them afterward won\'t affect radiators already placed.';
     hint.appendChild(hintTitle);
     hint.appendChild(hintBody);
     container.appendChild(hint);

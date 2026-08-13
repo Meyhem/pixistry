@@ -7,19 +7,17 @@
 // the rest of src/ui, and cheap at this element count.
 import type { PaletteEntry } from '../sim/species';
 import type { WallMaterial } from '../sim/walls';
-import type { RadiatorKind, RadiatorSign } from '../sim/radiators';
+import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 
 export interface ToolbarCallbacks {
   isPaintActive(specId: number): boolean;
   isWallActive(specId: number): boolean;
-  isRadiatorActive(sign: RadiatorSign): boolean;
-  isToolActive(kind: 'erase' | 'mixer' | 'grabber'): boolean;
+  isToolActive(kind: 'radiator' | 'erase' | 'mixer' | 'grabber'): boolean;
   isPinned(label: string): boolean;
   onSelectPaint(specId: number): void;
   onSelectWall(specId: number): void;
-  onSelectRadiator(sign: RadiatorSign): void;
-  onSelectTool(kind: 'erase' | 'mixer' | 'grabber'): void;
+  onSelectTool(kind: 'radiator' | 'erase' | 'mixer' | 'grabber'): void;
   onTogglePin(label: string): void;
   onOpenPeriodicTable(): void;
   running: boolean;
@@ -84,7 +82,6 @@ export function buildToolbar(
   container: HTMLElement,
   palette: PaletteEntry[],
   walls: readonly WallMaterial[],
-  radiators: readonly RadiatorKind[],
   pinnedLabels: readonly string[],
   cb: ToolbarCallbacks,
 ): void {
@@ -111,11 +108,9 @@ export function buildToolbar(
   for (const wall of walls) {
     apparatus.items.appendChild(makePaletteButton(wall.label, wall.color, cb.isWallActive(wall.specId), () => cb.onSelectWall(wall.specId)));
   }
-  for (const radiator of radiators) {
-    apparatus.items.appendChild(
-      makePaletteButton(radiator.label, radiator.color, cb.isRadiatorActive(radiator.sign), () => cb.onSelectRadiator(radiator.sign)),
-    );
-  }
+  apparatus.items.appendChild(
+    makePaletteButton(RADIATOR_LABEL, RADIATOR_COLOR, cb.isToolActive('radiator'), () => cb.onSelectTool('radiator')),
+  );
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');

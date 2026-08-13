@@ -13,7 +13,7 @@ import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
 import { getWall, wallList } from '../sim/walls';
-import { RADIATORS, radiatorFor, type RadiatorSign } from '../sim/radiators';
+import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { buildToolbar, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type SidePanelCallbacks, type ToolMeta } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
@@ -22,11 +22,7 @@ import { formatCelsius } from './format';
 
 const DEFAULT_RADIUS = 2;
 const DEFAULT_RADIATION_RADIUS = 3;
-// Matches the worker's own defaults (see worker.ts's DEFAULT_HEATER_TARGET_K
-// / DEFAULT_COOLER_TARGET_K) so the side panel's slider starts in sync with
-// what a freshly placed radiator is already doing.
-const DEFAULT_HEATER_TARGET_C = 100;
-const DEFAULT_COOLER_TARGET_C = -20;
+const DEFAULT_RADIATOR_TARGET_C = 100;
 const DEFAULT_BRUSH_TEMP_C = Math.round(kelvinToCelsius(AMBIENT_TEMPERATURE_K));
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
@@ -35,7 +31,7 @@ type Tool =
   | { kind: 'paint'; specId: number }
   | { kind: 'erase' }
   | { kind: 'wall'; specId: number }
-  | { kind: 'radiator'; sign: RadiatorSign }
+  | { kind: 'radiator' }
   | { kind: 'mixer' }
   | { kind: 'grabber' };
 
@@ -147,8 +143,7 @@ export function mountApp(root: HTMLElement): void {
   let brushWidth = DEFAULT_RADIUS;
   let brushTempC = DEFAULT_BRUSH_TEMP_C;
   let radiationRadius = DEFAULT_RADIATION_RADIUS;
-  let heaterTargetC = DEFAULT_HEATER_TARGET_C;
-  let coolerTargetC = DEFAULT_COOLER_TARGET_C;
+  let targetTempC = DEFAULT_RADIATOR_TARGET_C;
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
   let ptSelectedSymbol: string | null = null;
@@ -172,7 +167,8 @@ export function mountApp(root: HTMLElement): void {
   let lastSpecId: Uint16Array | null = null;
   let lastPhase: Uint8Array | null = null;
   let lastTempK: Float32Array | null = null;
-  let lastRadiator: Int16Array | null = null;
+  let lastRadiatorRadius: Uint8Array | null = null;
+  let lastRadiatorTargetK: Float32Array | null = null;
 
   function paletteEntryFor(specId: number): PaletteEntry | undefined {
     return palette.find((entry) => entry.specId === specId);
@@ -180,7 +176,7 @@ export function mountApp(root: HTMLElement): void {
 
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) {
-      return { label: 'No tool selected', color: '#3a3d3a', category: '', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, isHeater: false };
+      return { label: 'No tool selected', color: '#3a3d3a', category: '', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false };
     }
     if (t.kind === 'paint') {
       const entry = paletteEntryFor(t.specId);
@@ -194,7 +190,6 @@ export function mountApp(root: HTMLElement): void {
         boilLabel: formatCelsius(entry.boilingPointC),
         phaseLabel: PHASE_LABEL[entry.phase] ?? '',
         isThermal: false,
-        isHeater: false,
       };
     }
     if (t.kind === 'wall') {
@@ -208,21 +203,18 @@ export function mountApp(root: HTMLElement): void {
         boilLabel: '',
         phaseLabel: '',
         isThermal: false,
-        isHeater: false,
       };
     }
     if (t.kind === 'radiator') {
-      const radiator = radiatorFor(t.sign);
       return {
-        label: radiator.label,
-        color: radiator.color,
+        label: RADIATOR_LABEL,
+        color: RADIATOR_COLOR,
         category: 'APPARATUS',
         isSpecies: false,
         meltLabel: '',
         boilLabel: '',
         phaseLabel: '',
         isThermal: true,
-        isHeater: radiator.sign > 0,
       };
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
@@ -231,7 +223,7 @@ export function mountApp(root: HTMLElement): void {
       grabber: { label: 'Grabber', color: '#f2d94e' },
     };
     const info = TOOL_META[t.kind];
-    return { label: info.label, color: info.color, category: 'TOOL', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, isHeater: false };
+    return { label: info.label, color: info.color, category: 'TOOL', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false };
   }
 
   function setTool(next: Tool): void {
@@ -249,12 +241,10 @@ export function mountApp(root: HTMLElement): void {
     const toolbarCallbacks: ToolbarCallbacks = {
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
       isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
-      isRadiatorActive: (sign) => tool?.kind === 'radiator' && tool.sign === sign,
       isToolActive: (kind) => tool?.kind === kind,
       isPinned: (label) => pinnedLabels.includes(label),
       onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
       onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
-      onSelectRadiator: (sign) => setTool({ kind: 'radiator', sign }),
       onSelectTool: (kind) => setTool({ kind }),
       onTogglePin: togglePin,
       onOpenPeriodicTable: () => {
@@ -275,10 +265,14 @@ export function mountApp(root: HTMLElement): void {
         render();
       },
     };
-    buildToolbar(toolbar, palette, wallList(), RADIATORS, pinnedLabels, toolbarCallbacks);
+    buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
 
     const meta = describeToolMeta(tool);
-    const isHeaterActive = tool?.kind === 'radiator' && tool.sign > 0;
+    // The radiator tool's settings are only ever read at paint time (see
+    // applyTool's 'radiator' case) -- adjusting these sliders is local UI
+    // state until the next paint, and never retroactively touches radiators
+    // already placed on the grid (see grid.ts's radiatorRadius/
+    // radiatorTargetK doc comment).
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
       onSetBrushWidth: (value) => {
@@ -291,14 +285,10 @@ export function mountApp(root: HTMLElement): void {
       radiationRadius,
       onSetRadiationRadius: (value) => {
         radiationRadius = value;
-        renderer?.setRadiationRadius(value);
-        send({ type: 'setRadiationRadius', radius: value });
       },
-      targetTempC: isHeaterActive ? heaterTargetC : coolerTargetC,
+      targetTempC,
       onSetTargetTemp: (value) => {
-        if (isHeaterActive) heaterTargetC = value;
-        else coolerTargetC = value;
-        send({ type: 'setTargetTempC', kind: isHeaterActive ? 'heater' : 'cooler', celsius: value });
+        targetTempC = value;
       },
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
@@ -349,7 +339,7 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'paint', x, y, radius: brushWidth, specId: tool.specId, tempC: brushTempC });
         break;
       case 'radiator':
-        send({ type: 'paintRadiator', x, y, radius: brushWidth, watts: radiatorFor(tool.sign).watts });
+        send({ type: 'paintRadiator', x, y, brushRadius: brushWidth, radiationRadius, targetTempC });
         break;
       case 'erase':
         send({ type: 'erase', x, y, radius: brushWidth });
@@ -371,8 +361,8 @@ export function mountApp(root: HTMLElement): void {
     }
     const idx = y * gridWidth + x;
     const specId = lastSpecId[idx] as number;
-    const radWatts = lastRadiator ? (lastRadiator[idx] as number) : 0;
-    const radiatorNote = radWatts > 0 ? ' · radiating heat' : radWatts < 0 ? ' · radiating cold' : '';
+    const hasRadiator = lastRadiatorRadius ? (lastRadiatorRadius[idx] as number) > 0 : false;
+    const radiatorNote = hasRadiator && lastRadiatorTargetK ? ` · radiator target ${formatCelsius(kelvinToCelsius(lastRadiatorTargetK[idx] as number))}` : '';
     if (specId === EMPTY) {
       inspector.classList.add('empty');
       inspectorText.textContent = `empty${radiatorNote}`;
@@ -427,7 +417,6 @@ export function mountApp(root: HTMLElement): void {
       gridHeight = msg.height;
       palette = msg.palette;
       renderer = createRenderer(canvas, gridWidth, gridHeight);
-      renderer.setRadiationRadius(radiationRadius);
       for (const entry of msg.palette) {
         renderer.setColorForSpec(entry.specId, entry.color);
         labelBySpecId.set(entry.specId, entry.label);
@@ -443,8 +432,15 @@ export function mountApp(root: HTMLElement): void {
       lastSpecId = msg.specId;
       lastPhase = msg.phase;
       lastTempK = msg.tempK;
-      lastRadiator = msg.radiator;
-      renderer?.drawFrame({ specId: msg.specId, phase: msg.phase, tempK: msg.tempK, radiator: msg.radiator });
+      lastRadiatorRadius = msg.radiatorRadius;
+      lastRadiatorTargetK = msg.radiatorTargetK;
+      renderer?.drawFrame({
+        specId: msg.specId,
+        phase: msg.phase,
+        tempK: msg.tempK,
+        radiatorRadius: msg.radiatorRadius,
+        radiatorTargetK: msg.radiatorTargetK,
+      });
     }
   };
 }

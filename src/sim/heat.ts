@@ -10,6 +10,7 @@
 // relative rate constant between cells, not a literal W/(m*K) transport
 // calculation over a real distance.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { RADIATOR_WATTS } from './radiators';
 import type { SpeciesTable, ThermalProfile } from './species';
 
 export const CELL_VOLUME_CM3 = 1;
@@ -149,15 +150,18 @@ function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Arr
 }
 
 /**
- * Point heat source primitive (M4): injects (or removes, for negative
- * watts) a fixed power into every non-empty cell within `radius` of
- * (cx, cy), converted to joules via the tick's real duration -- watts, not
- * a raw temperature snap, so energy accounting stays correct and boiling a
- * painted liquid still takes real simulated time. `targetK` is a
- * thermostat cutoff layered on top: a cell already at or past the target
- * (hot enough for a heater, cold enough for a cooler) is skipped that
- * tick, so the radiator settles at its setpoint instead of heating/cooling
- * forever. Shared by stepGlassRadiators below, one call per radiator cell.
+ * Point heat source primitive (M4): a bidirectional thermostat that moves a
+ * fixed magnitude of power (`watts`, always >= 0) into or out of every
+ * non-empty cell within `radius` of (cx, cy), converted to joules via the
+ * tick's real duration -- watts, not a raw temperature snap, so energy
+ * accounting stays correct and boiling a painted liquid still takes real
+ * simulated time. Direction is decided per cell by comparing its own
+ * temperature to `targetK`: a colder cell gets heated, a hotter cell gets
+ * cooled, and a cell already at the target is left alone that tick -- so
+ * the radiator settles at its setpoint instead of heating/cooling forever,
+ * and a single radiator can act as a heater for some neighbors and a
+ * cooler for others depending on which side of the target they're on.
+ * Shared by stepRadiators below, one call per radiator cell.
  */
 export function applyPointHeatSource(
   grid: SimGrid,
@@ -169,7 +173,7 @@ export function applyPointHeatSource(
   targetK: number,
   dtSeconds: number,
 ): void {
-  const joulesPerCell = watts * dtSeconds;
+  const joulesPerCell = Math.abs(watts) * dtSeconds;
   if (joulesPerCell === 0) return;
   const r2 = radius * radius;
   for (let dy = -radius; dy <= radius; dy++) {
@@ -185,43 +189,41 @@ export function applyPointHeatSource(
       const mass = massOf(species, specId as number);
       const thermal = species.thermalOf(specId as number);
       const { tempK } = temperatureOf(thermal, mass, grid.u[idx] as number);
-      if (joulesPerCell > 0 ? tempK >= targetK : tempK <= targetK) continue;
+      // A tolerance rather than exact equality: grid.u is Float32Array (see
+      // grid.ts), whose ~1.19e-7 relative precision means a cell seeded
+      // exactly at targetK can round-trip through energyForTemperature/
+      // temperatureOf up to ~1e-3 K off at the sim's largest temperatures
+      // (10000K) -- without slack that sliver would get (mis)diagnosed as
+      // "needs a full tick of heating/cooling" instead of "already at
+      // target". 0.01K is comfortably above that float32 noise floor while
+      // staying far below any real target gap the sim cares about.
+      if (Math.abs(tempK - targetK) < 0.01) continue;
+      const direction = tempK < targetK ? 1 : -1;
 
-      const newU = (grid.u[idx] as number) + joulesPerCell;
+      const newU = (grid.u[idx] as number) + direction * joulesPerCell;
       grid.u[idx] = Math.max(0, newU);
     }
   }
 }
 
 /**
- * Heater/cooler radiator support: every cell with a nonzero grid.radiator
- * value (see radiators.ts -- a background field, not a grid.specId
- * occupant, so it has no collision) radiates its fixed wattage into cells
- * within `radiationRadius` of itself, every tick, until a warmed/cooled
- * cell reaches that radiator kind's target temperature -- unlike the old
- * cursor-anchored burner/coolant tool, this is anchored to the placed
- * radiator cells themselves, so a radiator keeps working for as long as
- * it's marked on the grid. `radiationRadius` is a single player-configurable
- * value shared by every radiator cell (both heater and cooler);
- * `heaterTargetK`/`coolerTargetK` are separate per-kind setpoints, all set
- * via the UI's side panel.
+ * Heater/cooler radiator support: every cell with a nonzero
+ * grid.radiatorRadius (see radiators.ts and grid.ts -- a background field,
+ * not a grid.specId occupant, so it has no collision) radiates
+ * RADIATOR_WATTS into cells within its own radiatorRadius, every tick,
+ * driving them toward its own radiatorTargetK -- both values are a
+ * per-cell snapshot captured at paint time, so a radiator keeps working
+ * exactly as configured for as long as it's marked on the grid, regardless
+ * of what the side panel's sliders do afterward.
  */
-export function stepRadiators(
-  grid: SimGrid,
-  species: SpeciesTable,
-  radiationRadius: number,
-  heaterTargetK: number,
-  coolerTargetK: number,
-  dtSeconds: number,
-): void {
-  if (radiationRadius <= 0) return;
-  for (let idx = 0; idx < grid.radiator.length; idx++) {
-    const watts = grid.radiator[idx] as number;
-    if (watts === 0) continue;
-    const targetK = watts > 0 ? heaterTargetK : coolerTargetK;
+export function stepRadiators(grid: SimGrid, species: SpeciesTable, dtSeconds: number): void {
+  for (let idx = 0; idx < grid.radiatorRadius.length; idx++) {
+    const radius = grid.radiatorRadius[idx] as number;
+    if (radius <= 0) continue;
+    const targetK = grid.radiatorTargetK[idx] as number;
     const x = idx % grid.width;
     const y = Math.floor(idx / grid.width);
-    applyPointHeatSource(grid, species, x, y, radiationRadius, watts, targetK, dtSeconds);
+    applyPointHeatSource(grid, species, x, y, radius, RADIATOR_WATTS, targetK, dtSeconds);
   }
 }
 

@@ -1,10 +1,11 @@
 // Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
 // thread over postMessage. Tick order follows the design doc's movement ->
 // heat -> react. M4 added tools (walls reuse the plain paint/erase messages
-// since SpeciesTable branches transparently on wall specIds; heater/cooler
-// radiators are painted via a separate paintRadiator message into
-// grid.radiator, a non-physical overlay -- see radiators.ts; mixer stirs)
-// and time controls (single-step, speed multiplier). M5 wires the static
+// since SpeciesTable branches transparently on wall specIds; the heater/
+// cooler radiator tool is painted via a separate paintRadiator message into
+// grid.radiatorRadius/grid.radiatorTargetK, a non-physical overlay snapshot
+// taken once at paint time -- see radiators.ts; mixer stirs) and time
+// controls (single-step, speed multiplier). M5 wires the static
 // reaction table into the grid (react.ts) -- this is what makes an ionic
 // solid painted next to water actually dissolve into aqueous ions on-grid.
 // Pixistry is just pixels of elements and compounds with a temperature
@@ -28,17 +29,23 @@ import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
-  | { type: 'frame'; specId: Uint16Array; phase: Uint8Array; tempK: Float32Array; radiator: Int16Array; tick: number };
+  | {
+      type: 'frame';
+      specId: Uint16Array;
+      phase: Uint8Array;
+      tempK: Float32Array;
+      radiatorRadius: Uint8Array;
+      radiatorTargetK: Float32Array;
+      tick: number;
+    };
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
-  | { type: 'paintRadiator'; x: number; y: number; radius: number; watts: number }
+  | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
-  | { type: 'setRadiationRadius'; radius: number }
-  | { type: 'setTargetTempC'; kind: 'heater' | 'cooler'; celsius: number }
   | { type: 'stir'; x: number; y: number; radius: number }
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
@@ -50,15 +57,6 @@ const TICK_MS = 1000 / 60;
 const TICK_DT_SECONDS = TICK_MS / 1000;
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 4;
-// Matches the UI's own default (see app.ts's DEFAULT_RADIATION_RADIUS) so
-// heater-glass/cooler-glass radiate at a sensible radius even before the
-// player has touched the side panel's slider.
-const DEFAULT_RADIATION_RADIUS = 3;
-// Matches the UI's own defaults (see app.ts's DEFAULT_HEATER_TARGET_C /
-// DEFAULT_COOLER_TARGET_C) so a freshly placed radiator has a sensible
-// setpoint before the player touches the side panel's target-temp slider.
-const DEFAULT_HEATER_TARGET_K = celsiusToKelvin(100);
-const DEFAULT_COOLER_TARGET_K = celsiusToKelvin(-20);
 
 const palette = buildPalette();
 const species = new SpeciesTable();
@@ -69,18 +67,6 @@ let tick = 0;
 let running = true;
 let speed = 1;
 let tickAccumulator = 0;
-
-// How far (in cells) every radiator cell currently on the grid radiates
-// into its surroundings each tick -- see heat.ts's stepRadiators. A single
-// shared value for all radiator cells, player-adjustable via the side panel
-// while a radiator tool is selected.
-let radiationRadius = DEFAULT_RADIATION_RADIUS;
-
-// Per-kind thermostat setpoints for stepRadiators -- see heat.ts's
-// applyPointHeatSource: a radiator stops adding/removing energy once a
-// cell it's reaching is at or past its kind's target.
-let heaterTargetK = DEFAULT_HEATER_TARGET_K;
-let coolerTargetK = DEFAULT_COOLER_TARGET_K;
 
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
@@ -107,7 +93,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 
 function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
-  stepRadiators(grid, species, radiationRadius, heaterTargetK, coolerTargetK, TICK_DT_SECONDS);
+  stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
   stepReactions(grid, species, rng);
 }
@@ -143,9 +129,10 @@ function postFrame(): void {
   const specId = grid.specId.slice();
   const phase = grid.phase.slice();
   const tempK = computeTempGrid();
-  const radiator = grid.radiator.slice();
+  const radiatorRadius = grid.radiatorRadius.slice();
+  const radiatorTargetK = grid.radiatorTargetK.slice();
   overlayGrabbedCells(specId, phase, tempK);
-  post({ type: 'frame', specId, phase, tempK, radiator, tick });
+  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, tick });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -159,15 +146,19 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
       break;
     }
-    case 'paintRadiator':
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
-        grid.radiator[grid.index(px, py)] = msg.watts;
+    case 'paintRadiator': {
+      const targetK = celsiusToKelvin(msg.targetTempC);
+      paintCircle(msg.x, msg.y, msg.brushRadius, (px, py) => {
+        const idx = grid.index(px, py);
+        grid.radiatorRadius[idx] = msg.radiationRadius;
+        grid.radiatorTargetK[idx] = targetK;
       });
       break;
+    }
     case 'erase':
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.clear(px, py);
-        grid.radiator[grid.index(px, py)] = 0;
+        grid.radiatorRadius[grid.index(px, py)] = 0;
       });
       break;
     case 'setRunning':
@@ -179,13 +170,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'setSpeed':
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
-      break;
-    case 'setRadiationRadius':
-      radiationRadius = msg.radius;
-      break;
-    case 'setTargetTempC':
-      if (msg.kind === 'heater') heaterTargetK = celsiusToKelvin(msg.celsius);
-      else coolerTargetK = celsiusToKelvin(msg.celsius);
       break;
     case 'stir':
       stirRegion(grid, rng, msg.x, msg.y, msg.radius);

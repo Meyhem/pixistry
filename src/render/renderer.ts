@@ -20,15 +20,12 @@ export interface FrameData {
   specId: Uint16Array;
   phase: Uint8Array;
   tempK: Float32Array;
-  radiator: Int16Array;
+  radiatorRadius: Uint8Array;
+  radiatorTargetK: Float32Array;
 }
 
 export interface Renderer {
   setColorForSpec(specId: number, hex: string): void;
-  /** Mirrors the UI's radiation-radius setting so the persistent
-   * heater/cooler glow (see accumulateGlow) is sized to match what
-   * stepRadiators is actually doing on the grid. */
-  setRadiationRadius(radius: number): void;
   drawFrame(frame: FrameData): void;
 }
 
@@ -173,37 +170,40 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
 
   // Per-grid-cell (not per-subpixel) glow strength, recomputed every frame
   // from the current radiator overlay -- cheap since it only walks radiator
-  // cells and their (small, player-bounded) radius, same cost class as
-  // heat.ts's own applyPointHeatSource.
-  let radiationRadius = 0;
+  // cells and each one's own (small, player-bounded) radius, same cost
+  // class as heat.ts's own applyPointHeatSource. Since the radiator tool no
+  // longer has separate heater/cooler kinds, which bucket a given radiator
+  // falls into for coloring purposes is derived from its own target
+  // relative to ambient (see AMBIENT_TEMPERATURE_K) rather than a stored
+  // sign.
   let heaterGlow = new Float32Array(width * height);
   let coolerGlow = new Float32Array(width * height);
 
-  function accumulateGlow(radiatorGrid: Int16Array): void {
+  function accumulateGlow(radiatorRadius: Uint8Array, radiatorTargetK: Float32Array): void {
     heaterGlow.fill(0);
     coolerGlow.fill(0);
-    if (radiationRadius <= 0) return;
-    const r2 = radiationRadius * radiationRadius;
 
-    for (let i = 0; i < radiatorGrid.length; i++) {
-      const watts = radiatorGrid[i] as number;
-      if (watts === 0) continue;
+    for (let i = 0; i < radiatorRadius.length; i++) {
+      const radius = radiatorRadius[i] as number;
+      if (radius <= 0) continue;
 
       const cx = i % width;
       const cy = Math.floor(i / width);
-      const glow = watts > 0 ? heaterGlow : coolerGlow;
+      const targetK = radiatorTargetK[i] as number;
+      const glow = targetK >= AMBIENT_TEMPERATURE_K ? heaterGlow : coolerGlow;
+      const r2 = radius * radius;
 
-      const minX = Math.max(0, cx - radiationRadius);
-      const maxX = Math.min(width - 1, cx + radiationRadius);
-      const minY = Math.max(0, cy - radiationRadius);
-      const maxY = Math.min(height - 1, cy + radiationRadius);
+      const minX = Math.max(0, cx - radius);
+      const maxX = Math.min(width - 1, cx + radius);
+      const minY = Math.max(0, cy - radius);
+      const maxY = Math.min(height - 1, cy + radius);
       for (let y = minY; y <= maxY; y++) {
         for (let x = minX; x <= maxX; x++) {
           const dx = x - cx;
           const dy = y - cy;
           const d2 = dx * dx + dy * dy;
           if (d2 > r2) continue;
-          const falloff = 1 - Math.sqrt(d2) / radiationRadius;
+          const falloff = 1 - Math.sqrt(d2) / radius;
           const idx = y * width + x;
           if (falloff > (glow[idx] as number)) glow[idx] = falloff;
         }
@@ -216,12 +216,8 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    setRadiationRadius(radius: number): void {
-      radiationRadius = radius;
-    },
-
-    drawFrame({ specId: specIdGrid, tempK, radiator }: FrameData): void {
-      accumulateGlow(radiator);
+    drawFrame({ specId: specIdGrid, tempK, radiatorRadius, radiatorTargetK }: FrameData): void {
+      accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
         for (let cx = 0; cx < width; cx++) {

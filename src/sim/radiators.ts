@@ -1,33 +1,19 @@
-// Heater/cooler apparatus -- pure radiation, no collision. A placed
-// radiator is NOT matter: it doesn't occupy grid.specId at all, so nothing
-// falls onto it, displaces it, or is blocked by it -- a particle simply
-// passes through (or rests on top of, or sits inside) the same cell, and
-// that's what changes its temperature. The wattage is tracked in
-// SimGrid.radiator, a background field independent of specId/phase/u; see
-// heat.ts's stepRadiators, which reads that array directly every tick and
-// radiates into cells within the player-configurable radiation radius, the
-// same way the earlier heater-glass/cooler-glass wall materials did (see
-// walls.ts's header) -- only the "occupies a cell and blocks movement" part
-// was removed.
-export type RadiatorSign = 1 | -1;
-
-export interface RadiatorKind {
-  readonly sign: RadiatorSign;
-  readonly label: string;
-  readonly color: string;
-  readonly watts: number;
-}
-
-export const HEATER_WATTS = 400;
-export const COOLER_WATTS = -400;
-
-export const RADIATORS: readonly RadiatorKind[] = [
-  { sign: 1, label: 'Heater', color: '#ff9d5c', watts: HEATER_WATTS },
-  { sign: -1, label: 'Cooler', color: '#5cc8ff', watts: COOLER_WATTS },
-];
-
-export function radiatorFor(sign: RadiatorSign): RadiatorKind {
-  const found = RADIATORS.find((r) => r.sign === sign);
-  if (!found) throw new Error(`no radiator kind for sign ${sign}`);
-  return found;
-}
+// Heater/cooler apparatus, merged into a single "Radiator" tool -- pure
+// radiation, no collision. A placed radiator is NOT matter: it doesn't
+// occupy grid.specId at all, so nothing falls onto it, displaces it, or is
+// blocked by it -- a particle simply passes through (or rests on top of, or
+// sits inside) the same cell, and that's what changes its temperature.
+//
+// There's no separate heater/cooler kind anymore: a radiator just carries a
+// target temperature (grid.radiatorTargetK) and drives every cell within
+// its reach (grid.radiatorRadius) toward that target every tick -- heating
+// cells below it, cooling cells above it (see heat.ts's
+// applyPointHeatSource) -- so whether a given placement acts as a heater or
+// a cooler falls out of the target the player picked, not a separate tool.
+// Both fields are captured once, at paint time, from whatever the side
+// panel's radiation-radius/target-temperature sliders read at that moment
+// (see worker.ts's 'paintRadiator' handler), so moving those sliders
+// afterward never changes a radiator already placed on the grid.
+export const RADIATOR_WATTS = 400;
+export const RADIATOR_LABEL = 'Radiator';
+export const RADIATOR_COLOR = 'linear-gradient(135deg, #ff9d5c 0%, #5cc8ff 100%)';

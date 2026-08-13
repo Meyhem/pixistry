@@ -18,13 +18,19 @@ export class SimGrid {
   readonly specId: Uint16Array;
   readonly u: Float32Array;
   readonly phase: Uint8Array;
-  /** Heater/cooler radiator wattage per cell (0 = none, sign gives
-   * heater/cooler) -- entirely separate from specId/phase/u and deliberately
-   * untouched by set/clear/swap, so a radiator is a fixed background field
-   * rather than matter: it doesn't move, doesn't occupy the movement grid's
-   * collision slot, and coexists with whatever species (or nothing) passes
-   * through the same cell. See heat.ts's stepRadiators and radiators.ts. */
-  readonly radiator: Int16Array;
+  /** Heater/cooler radiator overlay -- entirely separate from specId/phase/u
+   * and deliberately untouched by set/clear/swap, so a radiator is a fixed
+   * background field rather than matter: it doesn't move, doesn't occupy
+   * the movement grid's collision slot, and coexists with whatever species
+   * (or nothing) passes through the same cell. radiatorRadius is 0 where no
+   * radiator is placed; where nonzero it's that cell's radiation reach, and
+   * radiatorTargetK is its target temperature -- both are a snapshot of the
+   * side panel's sliders taken once, at paint time (see worker.ts's
+   * 'paintRadiator' handler), so moving those sliders afterward never
+   * retroactively changes a radiator already on the grid. See heat.ts's
+   * stepRadiators and radiators.ts. */
+  readonly radiatorRadius: Uint8Array;
+  readonly radiatorTargetK: Float32Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -33,7 +39,8 @@ export class SimGrid {
     this.specId = new Uint16Array(size).fill(EMPTY);
     this.u = new Float32Array(size);
     this.phase = new Uint8Array(size);
-    this.radiator = new Int16Array(size);
+    this.radiatorRadius = new Uint8Array(size);
+    this.radiatorTargetK = new Float32Array(size);
   }
 
   index(x: number, y: number): number {
