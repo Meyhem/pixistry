@@ -83,6 +83,32 @@ const PHASE_LABEL: Record<number, string> = {
   [PhaseCode.Gas]: 'gas',
 };
 
+/** Baseline every describeToolMeta branch starts from -- most fields are
+ * "off"/empty for most tools, so each branch below only lists what it
+ * overrides instead of spelling out all twelve fields every time. */
+const TOOL_META_DEFAULTS: ToolMeta = {
+  label: '',
+  color: '',
+  category: '',
+  isSpecies: false,
+  meltLabel: '',
+  boilLabel: '',
+  phaseLabel: '',
+  isThermal: false,
+  showBrushTemp: false,
+  showBrushWidth: true,
+  funnelPanel: 'none',
+  tubePanel: 'none',
+};
+
+/** The three tools with no per-instance config of their own -- just a
+ * label/swatch, everything else the same as TOOL_META_DEFAULTS. */
+const SIMPLE_TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
+  erase: { label: 'Erase', color: '#8a8a8a' },
+  mixer: { label: 'Mix', color: '#c9a8ff' },
+  grabber: { label: 'Grab', color: '#f2d94e' },
+};
+
 function loadPinnedLabels(): string[] {
   try {
     const raw = localStorage.getItem(PINNED_STORAGE_KEY);
@@ -323,26 +349,12 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function describeToolMeta(t: Tool | null): ToolMeta {
-    if (!t) {
-      return {
-        label: 'No tool selected',
-        color: '#3a3d3a',
-        category: '',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: false,
-        showBrushWidth: true,
-        funnelPanel: 'none',
-        tubePanel: 'none',
-      };
-    }
+    if (!t) return { ...TOOL_META_DEFAULTS, label: 'No tool selected', color: '#3a3d3a' };
     if (t.kind === 'paint') {
       const entry = paletteEntryFor(t.specId);
       if (!entry) return describeToolMeta(null);
       return {
+        ...TOOL_META_DEFAULTS,
         label: entry.label,
         color: entry.color,
         category: isElementLabel(entry.label) ? 'ELEMENT' : 'COMPOUND',
@@ -350,133 +362,57 @@ export function mountApp(root: HTMLElement): void {
         meltLabel: formatCelsius(entry.meltingPointC),
         boilLabel: formatCelsius(entry.boilingPointC),
         phaseLabel: PHASE_LABEL[entry.phase] ?? '',
-        isThermal: false,
         showBrushTemp: true,
-        showBrushWidth: true,
-        funnelPanel: 'none',
-        tubePanel: 'none',
       };
     }
     if (t.kind === 'wall') {
       const wall = getWall(t.specId);
-      return {
-        label: wall.label,
-        color: wall.color,
-        category: 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: true,
-        showBrushWidth: true,
-        funnelPanel: 'none',
-        tubePanel: 'none',
-      };
+      return { ...TOOL_META_DEFAULTS, label: wall.label, color: wall.color, category: 'APPARATUS', showBrushTemp: true };
     }
     if (t.kind === 'radiator') {
-      return {
-        label: RADIATOR_LABEL,
-        color: RADIATOR_COLOR,
-        category: 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: true,
-        showBrushTemp: false,
-        showBrushWidth: true,
-        funnelPanel: 'none',
-        tubePanel: 'none',
-      };
+      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', isThermal: true };
     }
     if (t.kind === 'funnel') {
       return {
+        ...TOOL_META_DEFAULTS,
         label: FUNNEL_LABEL,
         color: FUNNEL_COLOR,
         category: 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: false,
         showBrushWidth: false,
         funnelPanel: 'config',
-        tubePanel: 'none',
       };
     }
     if (t.kind === 'tube') {
       return {
+        ...TOOL_META_DEFAULTS,
         label: TUBE_LABEL,
         color: TUBE_COLOR,
         category: 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: false,
         showBrushWidth: false,
-        funnelPanel: 'none',
         tubePanel: 'config',
       };
     }
     if (t.kind === 'stirrer') {
-      return {
-        label: STIRRER_LABEL,
-        color: STIRRER_COLOR,
-        category: 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: false,
-        showBrushWidth: true,
-        funnelPanel: 'none',
-        tubePanel: 'none',
-      };
+      return { ...TOOL_META_DEFAULTS, label: STIRRER_LABEL, color: STIRRER_COLOR, category: 'APPARATUS' };
     }
     if (t.kind === 'select-apparatus') {
+      // The only branch that depends on live selection state rather than
+      // just the tool kind, so it stays logic instead of a static table row.
       const selectedFunnel = findFunnel(selectedFunnelId);
       const selectedTube = selectedFunnel ? undefined : findTube(selectedTubeId);
       const nothingSelected = !selectedFunnel && !selectedTube;
       return {
+        ...TOOL_META_DEFAULTS,
         label: selectedFunnel ? FUNNEL_LABEL : selectedTube ? TUBE_LABEL : SELECT_APPARATUS_LABEL,
         color: selectedFunnel ? FUNNEL_COLOR : selectedTube ? TUBE_COLOR : SELECT_APPARATUS_COLOR,
         category: nothingSelected ? 'TOOL' : 'APPARATUS',
-        isSpecies: false,
-        meltLabel: '',
-        boilLabel: '',
-        phaseLabel: '',
-        isThermal: false,
-        showBrushTemp: false,
         showBrushWidth: false,
         funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
         tubePanel: selectedTube ? 'edit' : 'none',
       };
     }
-    const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
-      erase: { label: 'Erase', color: '#8a8a8a' },
-      mixer: { label: 'Mix', color: '#c9a8ff' },
-      grabber: { label: 'Grab', color: '#f2d94e' },
-    };
-    const info = TOOL_META[t.kind];
-    return {
-      label: info.label,
-      color: info.color,
-      category: 'TOOL',
-      isSpecies: false,
-      meltLabel: '',
-      boilLabel: '',
-      phaseLabel: '',
-      isThermal: false,
-      showBrushTemp: false,
-      showBrushWidth: true,
-      funnelPanel: 'none',
-      tubePanel: 'none',
-    };
+    const info = SIMPLE_TOOL_META[t.kind];
+    return { ...TOOL_META_DEFAULTS, label: info.label, color: info.color, category: 'TOOL' };
   }
 
   function setTool(next: Tool): void {
