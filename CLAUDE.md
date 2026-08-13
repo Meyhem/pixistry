@@ -38,6 +38,10 @@ npm run dev               # vite dev server
 Run a single test file: `npx vitest run src/sim/react.test.ts`
 Run tests by name: `npx vitest run -t "NaCl"`
 
+Start the dev server (via the Browser pane's `preview_start`, not Bash) at the beginning of a session and
+leave it running in the background — including after a feature is complete — rather than stopping it once
+the task is done.
+
 Both `npm run typecheck` and `npm test` passing is the gate before any change lands.
 
 ## Git workflow

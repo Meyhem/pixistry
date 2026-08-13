@@ -410,6 +410,11 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function render(): void {
+    renderToolbar();
+    renderSidePanel();
+  }
+
+  function renderToolbar(): void {
     const toolbarCallbacks: ToolbarCallbacks = {
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
       isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
@@ -439,7 +444,9 @@ export function mountApp(root: HTMLElement): void {
       },
     };
     buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
+  }
 
+  function renderSidePanel(): void {
     const meta = describeToolMeta(tool);
     const isEditMode = tool?.kind === 'select-apparatus';
     const selectedFunnel = isEditMode ? findFunnel(selectedFunnelId) : undefined;
@@ -853,10 +860,10 @@ export function mountApp(root: HTMLElement): void {
         funnelFillSpecId: msg.funnelFillSpecId,
       });
       // The select-apparatus tool's edit panel shows a placed funnel's live
-      // "Remaining" count and needs to reflect Reset immediately -- full
-      // render() is only paid here, in this one deliberately-chosen,
-      // non-default tool mode, not on every frame regardless of tool.
-      if (tool?.kind === 'select-apparatus') render();
+      // "Remaining" count and needs to reflect Reset immediately -- only the
+      // side panel is rebuilt here, not the toolbar, so a rapid succession of
+      // frame ticks can't blow away a toolbar button mid-click.
+      if (tool?.kind === 'select-apparatus') renderSidePanel();
       else updateSelectionBox();
     }
   };
