@@ -89,10 +89,19 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[], coneSize: nu
   const conePullTargetIdx: number[] = [];
   if (openEnds) {
     const mouthCell = openEnds.mouthCell;
+    // A cone cell whose one-step-toward-the-mouth target lands on the
+    // tube's own wall would be permanently stuck once stampTubeGeometry
+    // flags it Cone (see movement.ts -- a Cone cell can only move via this
+    // pull, and a wall cell is never empty, so that pull would never fire).
+    // Excluded from coneSrcIdx entirely rather than marked Cone with nowhere
+    // to go, so ordinary gravity/spread still governs it and it can settle
+    // or drift somewhere the cone *can* reach.
+    const wallSet = new Set(wallCells.map((c) => `${c.x},${c.y}`));
     for (const cell of cone) {
       const srcI = idx(grid, cell);
       if (srcI === null) continue;
       const target = stepToward(cell, mouthCell);
+      if (wallSet.has(`${target.x},${target.y}`)) continue;
       const targetI = idx(grid, target);
       if (targetI === null) continue;
       coneSrcIdx.push(srcI);

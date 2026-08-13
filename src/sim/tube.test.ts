@@ -49,6 +49,17 @@ describe('placeTubeInstance', () => {
     }
   });
 
+  it('never gives a cone cell a pull target that lands on the tube wall (would be permanently stuck since movement.ts blocks Cone cells from moving on their own)', () => {
+    const grid = new SimGrid(100, 100);
+    for (const coneSize of [1, 2, 3, 5, 8]) {
+      const instance = place(grid, STRAIGHT, { coneSize });
+      const wallSet = new Set(instance.geometry.wallCells.map((c) => grid.index(c.x, c.y)));
+      for (const target of instance.geometry.conePullTargetIdx) {
+        expect(wallSet.has(target)).toBe(false);
+      }
+    }
+  });
+
   it('never lets the wall ring overlap the lumen', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);

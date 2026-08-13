@@ -231,6 +231,37 @@ describe('stepMovement', () => {
     expect(grid.specId[grid.index(1, 2)]).toBe(iron.specId);
   });
 
+  it('never moves a cell that is itself inside a tube suction cone -- only stepTubes may pull it out', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const water = findEntry(palette, 'H2O');
+
+    // Empty space all around so ordinary gravity/lateral spread would
+    // otherwise happily move this liquid every which way.
+    const grid = new SimGrid(5, 5);
+    grid.set(2, 2, water.specId, water.phase);
+    grid.tubeMask[grid.index(2, 2)] = TubeMaskValue.Cone;
+    const rng = mulberry32(1);
+
+    for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
+    expect(grid.specId[grid.index(2, 2)]).toBe(water.specId);
+  });
+
+  it('still lets ordinary movement fall/spread INTO a cone cell from outside it', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const water = findEntry(palette, 'H2O');
+
+    const grid = new SimGrid(3, 5);
+    grid.set(1, 0, water.specId, water.phase);
+    grid.tubeMask[grid.index(1, 1)] = TubeMaskValue.Cone;
+    const rng = mulberry32(2);
+
+    stepMovement(grid, species, rng, 0);
+    expect(grid.specId[grid.index(1, 1)]).toBe(water.specId);
+    expect(grid.isEmptyAt(grid.index(1, 0))).toBe(true);
+  });
+
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(4, 4);

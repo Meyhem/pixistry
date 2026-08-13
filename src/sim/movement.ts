@@ -246,11 +246,16 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       // infinitely-dense solid, since that would still cost a canDisplace
       // check every tick for no benefit.
       if (isWallSpecId(specId)) continue;
-      // A cell inside a tube's lumen only moves via stepTubes' own
-      // exit-first advance (tube.ts) -- ordinary gravity/buoyancy is
-      // suppressed there so contents can't fall/rise out of the lumen
-      // sideways before the tube gets a chance to walk them along its path.
-      if ((grid.tubeMask[idx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
+      // A cell inside a tube's lumen or suction cone only moves via
+      // stepTubes' own exit-first advance / mouth-outward pull (tube.ts) --
+      // ordinary gravity/buoyancy is suppressed there so contents can't
+      // fall/spread sideways out of the lumen, or escape the cone once
+      // grabbed by it, before the tube gets a chance to walk them inward.
+      // Cone cells are still a normal (unblocked) *target* for ordinary
+      // movement below -- this only stops a cell already inside the cone
+      // from wandering back out, it doesn't stop new matter falling in.
+      const idxTubeMask = grid.tubeMask[idx] as TubeMaskValue;
+      if (idxTubeMask === TubeMaskValue.Lumen || idxTubeMask === TubeMaskValue.Cone) continue;
       const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true);
