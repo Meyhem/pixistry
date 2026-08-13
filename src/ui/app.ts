@@ -22,7 +22,8 @@ import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
-import { ApparatusSelection } from './apparatus-selection';
+import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
+import { installDebugHook } from './debug-hook';
 import { isElementLabel } from './species-classify';
 import { buildSpeciesLookup } from './species-lookup';
 import { formatCelsius } from './format';
@@ -226,12 +227,16 @@ export function mountApp(root: HTMLElement): void {
   // Addition-funnel tool config (pre-placement) -- captured into the
   // instance at placement time, same "settings are a snapshot, not
   // retroactive" convention as the radiator's sliders (see
-  // describeToolMeta's radiator case).
-  let funnelSpecId = 0;
-  let funnelTempC = DEFAULT_BRUSH_TEMP_C;
-  let funnelRatePerMinute = DEFAULT_FUNNEL_RATE_PER_MINUTE;
-  let funnelTotalMode: 'finite' | 'infinite' = 'finite';
-  let funnelTotalAmount = DEFAULT_FUNNEL_TOTAL_AMOUNT;
+  // describeToolMeta's radiator case). Same shape as ApparatusSelection's
+  // FunnelEditDraft (a placed funnel's live edit draft) so funnelSetter
+  // below can write through either one uniformly.
+  const funnelDraft: FunnelEditDraft = {
+    specId: 0,
+    tempC: DEFAULT_BRUSH_TEMP_C,
+    ratePerMinute: DEFAULT_FUNNEL_RATE_PER_MINUTE,
+    totalMode: 'finite',
+    totalAmount: DEFAULT_FUNNEL_TOTAL_AMOUNT,
+  };
   let funnelFacing: FunnelFacing = 'down';
   let lastHoverX = 0;
   let lastHoverY = 0;
@@ -241,9 +246,10 @@ export function mountApp(root: HTMLElement): void {
   const apparatusSelection = new ApparatusSelection();
 
   // Conveyor-tube tool config (pre-placement) -- same "captured at placement
-  // time" convention as the funnel's config above.
-  let tubeConeSize = DEFAULT_TUBE_CONE_SIZE;
-  let tubeFilter: Set<number> | null = null; // null = accept every species
+  // time" convention as the funnel's config above, and same shape as
+  // ApparatusSelection's TubeEditDraft for the same reason (see
+  // funnelDraft/funnelSetter). null filter = accept every species.
+  const tubeDraft: TubeEditDraft = { coneSize: DEFAULT_TUBE_CONE_SIZE, filter: null };
 
   // In-progress polygon draw (tool === 'tube'): points already committed by
   // a click, plus a live rubber-band preview point tracking the cursor
@@ -430,7 +436,7 @@ export function mountApp(root: HTMLElement): void {
         tempC: selectedFunnel.tempC,
         ratePerMinute: selectedFunnel.ratePerMinute,
         totalMode: selectedFunnel.total === null ? 'infinite' : 'finite',
-        totalAmount: selectedFunnel.total ?? funnelTotalAmount,
+        totalAmount: selectedFunnel.total ?? funnelDraft.totalAmount,
       };
     }
     if (isEditMode && selectedTube && !apparatusSelection.tubeEditDraft) {
@@ -441,7 +447,7 @@ export function mountApp(root: HTMLElement): void {
     }
     const isTubeEditMode = isEditMode && !!selectedTube;
     const tubeFields: TubeFieldValues =
-      isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : { coneSize: tubeConeSize, filter: tubeFilter };
+      isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : tubeDraft;
 
     const funnelFields: FunnelFieldValues =
       isEditMode && apparatusSelection.editDraft
@@ -455,12 +461,12 @@ export function mountApp(root: HTMLElement): void {
             remaining: selectedFunnel?.remaining ?? null,
           }
         : {
-            specLabel: speciesLookup.labelOf(funnelSpecId) ?? `spec ${funnelSpecId}`,
-            specColor: speciesLookup.colorOf(funnelSpecId) ?? '#888',
-            tempC: funnelTempC,
-            ratePerMinute: funnelRatePerMinute,
-            totalMode: funnelTotalMode,
-            totalAmount: funnelTotalAmount,
+            specLabel: speciesLookup.labelOf(funnelDraft.specId) ?? `spec ${funnelDraft.specId}`,
+            specColor: speciesLookup.colorOf(funnelDraft.specId) ?? '#888',
+            tempC: funnelDraft.tempC,
+            ratePerMinute: funnelDraft.ratePerMinute,
+            totalMode: funnelDraft.totalMode,
+            totalAmount: funnelDraft.totalAmount,
             remaining: null,
           };
 
@@ -471,6 +477,54 @@ export function mountApp(root: HTMLElement): void {
     // radiatorTargetK doc comment). The funnel tool's config works the same
     // way pre-placement; once placed, select-apparatus edits go live
     // instead (see sendFunnelUpdate).
+    //
+    // Writes through whichever draft is live -- a placed funnel's
+    // apparatusSelection.editDraft in edit mode, or the pre-placement
+    // funnelDraft otherwise -- and pushes the change to the worker
+    // immediately when editing a placed funnel. No render() by default: a
+    // rebuild mid-drag would replace the slider DOM node under the
+    // browser's own drag gesture, killing it (the slider's own oninput
+    // already updates its displayed value in place -- see side-panel.ts's
+    // addSlider). Pass { render: true } for a field whose panel layout
+    // itself depends on the value (see onSetFunnelTotalMode below).
+    function funnelSetter<K extends keyof FunnelEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FunnelEditDraft[K]) => void {
+      return (value) => {
+        if (isEditMode && apparatusSelection.editDraft) {
+          apparatusSelection.editDraft[key] = value;
+          sendFunnelUpdate();
+        } else {
+          funnelDraft[key] = value;
+        }
+        if (opts.render) render();
+      };
+    }
+
+    /** Toggles specId's membership in a species filter set -- null means
+     * "accept every species" (the default), so toggling one off from that
+     * state first materializes the full palette into a real Set to remove
+     * it from. Shared by both branches (a placed tube's live filter, or the
+     * pre-placement one) of onToggleTubeFilterSpecies below. */
+    function toggleFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> {
+      const next = new Set(filter ?? palette.map((p) => p.specId));
+      if (next.has(specId)) next.delete(specId);
+      else next.add(specId);
+      return next;
+    }
+
+    /** Same convention as funnelSetter, for the tube tool's coneSize/filter
+     * fields. */
+    function tubeSetter<K extends keyof TubeEditDraft>(key: K, opts: { render?: boolean } = {}): (value: TubeEditDraft[K]) => void {
+      return (value) => {
+        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
+          apparatusSelection.tubeEditDraft[key] = value;
+          sendTubeUpdate();
+        } else {
+          tubeDraft[key] = value;
+        }
+        if (opts.render) render();
+      };
+    }
+
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
       onSetBrushWidth: (value) => {
@@ -494,75 +548,31 @@ export function mountApp(root: HTMLElement): void {
         ptOpen = true;
         render();
       },
-      onSetFunnelTemp: (value) => {
-        if (isEditMode && apparatusSelection.editDraft) {
-          apparatusSelection.editDraft.tempC = value;
-          sendFunnelUpdate();
-        } else {
-          funnelTempC = value;
-        }
-      },
-      onSetFunnelRate: (value) => {
-        if (isEditMode && apparatusSelection.editDraft) {
-          apparatusSelection.editDraft.ratePerMinute = value;
-          sendFunnelUpdate();
-        } else {
-          funnelRatePerMinute = value;
-        }
-      },
-      onSetFunnelTotalMode: (mode) => {
-        if (isEditMode && apparatusSelection.editDraft) {
-          apparatusSelection.editDraft.totalMode = mode;
-          sendFunnelUpdate();
-        } else {
-          funnelTotalMode = mode;
-        }
-        render();
-      },
-      onSetFunnelTotalAmount: (value) => {
-        if (isEditMode && apparatusSelection.editDraft) {
-          apparatusSelection.editDraft.totalAmount = value;
-          sendFunnelUpdate();
-        } else {
-          funnelTotalAmount = value;
-        }
-      },
+      onSetFunnelTemp: funnelSetter('tempC'),
+      onSetFunnelRate: funnelSetter('ratePerMinute'),
+      // Unlike the other three fields (sliders, which rebuild-on-input would
+      // fight the browser's native drag gesture -- see funnelSetter's doc
+      // comment), totalMode is a discrete button toggle: switching finite
+      // <-> infinite shows/hides the Amount field, so this one needs a
+      // render to update the panel's layout.
+      onSetFunnelTotalMode: funnelSetter('totalMode', { render: true }),
+      onSetFunnelTotalAmount: funnelSetter('totalAmount'),
       onResetFunnel: () => {
         if (apparatusSelection.selectedFunnelId !== null) send({ type: 'resetFunnel', id: apparatusSelection.selectedFunnelId });
       },
       tubeFields,
       tubePalette: palette,
-      onSetTubeConeSize: (value) => {
-        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          apparatusSelection.tubeEditDraft.coneSize = value;
-          sendTubeUpdate();
-        } else {
-          tubeConeSize = value;
-        }
-      },
+      onSetTubeConeSize: tubeSetter('coneSize'),
       onToggleTubeFilterSpecies: (specId) => {
         if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          const draft = apparatusSelection.tubeEditDraft;
-          if (draft.filter === null) draft.filter = new Set(palette.map((p) => p.specId));
-          if (draft.filter.has(specId)) draft.filter.delete(specId);
-          else draft.filter.add(specId);
+          apparatusSelection.tubeEditDraft.filter = toggleFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
           sendTubeUpdate();
         } else {
-          if (tubeFilter === null) tubeFilter = new Set(palette.map((p) => p.specId));
-          if (tubeFilter.has(specId)) tubeFilter.delete(specId);
-          else tubeFilter.add(specId);
+          tubeDraft.filter = toggleFilterSpecies(tubeDraft.filter, specId);
         }
         render();
       },
-      onClearTubeFilter: () => {
-        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          apparatusSelection.tubeEditDraft.filter = null;
-          sendTubeUpdate();
-        } else {
-          tubeFilter = null;
-        }
-        render();
-      },
+      onClearTubeFilter: () => tubeSetter('filter', { render: true })(null),
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -577,7 +587,7 @@ export function mountApp(root: HTMLElement): void {
         },
         onSelectSpecies: (specId) => {
           if (ptTarget === 'funnel-config') {
-            funnelSpecId = specId;
+            funnelDraft.specId = specId;
           } else if (ptTarget === 'funnel-edit' && apparatusSelection.editDraft) {
             apparatusSelection.editDraft.specId = specId;
             sendFunnelUpdate();
@@ -714,7 +724,7 @@ export function mountApp(root: HTMLElement): void {
    * click with nothing to commit yet. */
   function finishTubeDraw(): void {
     if (tubeDrawPoints.length >= 2) {
-      send({ type: 'placeTube', points: tubeDrawPoints, coneSize: tubeConeSize, filter: tubeFilter ? [...tubeFilter] : null });
+      send({ type: 'placeTube', points: tubeDrawPoints, coneSize: tubeDraft.coneSize, filter: tubeDraft.filter ? [...tubeDraft.filter] : null });
     }
     cancelTubeDraw();
   }
@@ -780,10 +790,10 @@ export function mountApp(root: HTMLElement): void {
           x,
           y,
           facing: funnelFacing,
-          specId: funnelSpecId,
-          tempC: funnelTempC,
-          ratePerMinute: funnelRatePerMinute,
-          total: funnelTotalMode === 'infinite' ? null : funnelTotalAmount,
+          specId: funnelDraft.specId,
+          tempC: funnelDraft.tempC,
+          ratePerMinute: funnelDraft.ratePerMinute,
+          total: funnelDraft.totalMode === 'infinite' ? null : funnelDraft.totalAmount,
         });
         break;
       case 'tube': {
@@ -920,7 +930,7 @@ export function mountApp(root: HTMLElement): void {
       const initial = firstPinned ?? palette[0];
       if (initial) {
         tool = { kind: 'paint', specId: initial.specId };
-        funnelSpecId = initial.specId;
+        funnelDraft.specId = initial.specId;
       }
       render();
     } else if (msg.type === 'frame') {
@@ -960,66 +970,31 @@ export function mountApp(root: HTMLElement): void {
     }
   };
 
-  // Dev-only debug hook for inspecting/driving the sim from outside the UI
-  // (browser devtools console, or an automated tool poking window.__pixistry)
-  // -- exposes the same paint/erase/setRunning/step messages the toolbar
-  // sends, plus read-only access to the latest frame the renderer already
-  // keeps around for the hover inspector. Not part of the app's real API,
-  // never imported by app code -- purely a debugging aid.
-  if (import.meta.env.DEV) {
-    (window as unknown as { __pixistry: unknown }).__pixistry = {
-      pause: () => {
-        running = false;
-        send({ type: 'setRunning', running });
-        render();
-      },
-      resume: () => {
-        running = true;
-        send({ type: 'setRunning', running });
-        render();
-      },
-      step: () => send({ type: 'step' }),
-      setSpeed: (value: number) => {
-        speed = value;
-        send({ type: 'setSpeed', speed });
-        render();
-      },
-      isRunning: () => running,
-      getTick: () => lastTick,
-      size: () => ({ width: gridWidth, height: gridHeight }),
-      getCell: (x: number, y: number) => {
-        if (!lastSpecId || !lastPhase || !lastTempK || x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) return null;
-        const idx = y * gridWidth + x;
-        const specId = lastSpecId[idx] ?? EMPTY;
-        const tempK = lastTempK[idx] ?? 0;
-        const phaseCode = lastPhase[idx] ?? PhaseCode.Empty;
-        return {
-          x,
-          y,
-          specId,
-          label: specId === EMPTY ? null : (speciesLookup.labelOf(specId) ?? null),
-          tempK,
-          tempC: kelvinToCelsius(tempK),
-          phase: PHASE_LABEL[phaseCode] ?? 'unknown',
-          radiatorRadius: lastRadiatorRadius?.[idx] ?? 0,
-          radiatorTargetK: lastRadiatorTargetK?.[idx] ?? 0,
-        };
-      },
-      dumpGrid: () => {
-        if (!lastSpecId || !lastPhase || !lastTempK) return null;
-        return {
-          width: gridWidth,
-          height: gridHeight,
-          tick: lastTick,
-          specId: Array.from(lastSpecId),
-          phase: Array.from(lastPhase, (p) => PHASE_LABEL[p] ?? 'unknown'),
-          tempC: Array.from(lastTempK, kelvinToCelsius),
-        };
-      },
-      findSpecId: (label: string) => palette.find((entry) => entry.label === label)?.specId,
-      paint: (x: number, y: number, specId: number, opts: { radius?: number; tempC?: number } = {}) =>
-        send({ type: 'paint', x, y, radius: opts.radius ?? 0, specId, tempC: opts.tempC ?? brushTempC }),
-      erase: (x: number, y: number, radius = 0) => send({ type: 'erase', x, y, radius }),
-    };
-  }
+  // Dev-only debug hook (see debug-hook.ts) -- not part of the app's real
+  // API, never imported by app code, purely a debugging aid.
+  installDebugHook({
+    send,
+    render,
+    getState: () => ({
+      running,
+      speed,
+      tick: lastTick,
+      gridWidth,
+      gridHeight,
+      specId: lastSpecId,
+      phase: lastPhase,
+      tempK: lastTempK,
+      radiatorRadius: lastRadiatorRadius,
+      radiatorTargetK: lastRadiatorTargetK,
+      brushTempC,
+      palette,
+    }),
+    setRunning: (value) => {
+      running = value;
+    },
+    setSpeed: (value) => {
+      speed = value;
+    },
+    labelOf: (specId) => speciesLookup.labelOf(specId),
+  });
 }
