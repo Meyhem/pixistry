@@ -17,6 +17,7 @@ import {
   energyForTemperature,
   MAX_TEMP_K,
   massOf,
+  stepAmbient,
   stepConduction,
   stepRadiators,
   temperatureOf,
@@ -95,6 +96,7 @@ function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
+  stepAmbient(grid, species, TICK_DT_SECONDS);
   stepReactions(grid, species, rng);
 }
 

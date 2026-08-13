@@ -14,7 +14,16 @@ import { RADIATOR_WATTS } from './radiators';
 import type { SpeciesTable, ThermalProfile } from './species';
 
 export const CELL_VOLUME_CM3 = 1;
-export const AMBIENT_TEMPERATURE_K = 298.15;
+export const AMBIENT_TEMPERATURE_K = celsiusToKelvin(21);
+
+// Every occupied cell drifts toward AMBIENT_TEMPERATURE_K regardless of how
+// it got hot/cold (painted, radiator, reaction, conduction) -- otherwise a
+// cell that's drifted away from any heat source holds its temperature
+// forever. Capped at 1K/tick-second so it reads as a slow room-temperature
+// equalization, not an instant snap, and so it doesn't fight a nearby
+// radiator/reaction for control of a cell's temperature within a single
+// tick.
+const AMBIENT_CONVERGENCE_K_PER_SEC = 1;
 
 /** All display-facing temperature is Celsius (see app.ts); internal storage
  * and every energy/conduction/phase-change calculation stays Kelvin, since
@@ -278,5 +287,41 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
     grid.u[idx] = newU;
 
     grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
+  }
+}
+
+/**
+ * Ambient equalization (M?): every occupied cell drifts toward
+ * AMBIENT_TEMPERATURE_K at a flat rate capped by
+ * AMBIENT_CONVERGENCE_K_PER_SEC, independent of conduction/radiators/
+ * reactions -- so a cell that's cooled or heated away from room temperature
+ * (painted hot, boiled, product of an exothermic reaction, ...) settles
+ * back to ambient over real simulated time once nothing else is actively
+ * driving its temperature, instead of holding whatever energy it last had
+ * forever. Runs after stepConduction so it acts on that tick's settled
+ * temperature.
+ */
+export function stepAmbient(grid: SimGrid, species: SpeciesTable, dtSeconds: number): void {
+  const maxDeltaT = AMBIENT_CONVERGENCE_K_PER_SEC * dtSeconds;
+  if (maxDeltaT <= 0) return;
+
+  for (let idx = 0; idx < grid.u.length; idx++) {
+    if (grid.specId[idx] === EMPTY) continue;
+    const specId = grid.specId[idx] as number;
+    const mass = massOf(species, specId);
+    const thermal = species.thermalOf(specId);
+    const currentU = grid.u[idx] as number;
+    const { tempK } = temperatureOf(thermal, mass, currentU);
+
+    if (tempK === AMBIENT_TEMPERATURE_K) continue;
+
+    const targetK =
+      tempK > AMBIENT_TEMPERATURE_K
+        ? Math.max(AMBIENT_TEMPERATURE_K, tempK - maxDeltaT)
+        : Math.min(AMBIENT_TEMPERATURE_K, tempK + maxDeltaT);
+
+    const { u: newU, phase } = energyForTemperature(thermal, mass, targetK);
+    grid.u[idx] = newU;
+    grid.phase[idx] = phase;
   }
 }
