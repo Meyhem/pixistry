@@ -18,11 +18,11 @@ export type FunnelFacing = 'down' | 'left' | 'up' | 'right';
 
 export const FUNNEL_FACINGS: readonly FunnelFacing[] = ['down', 'left', 'up', 'right'];
 
-const MOUTH_RADIUS = 19; // half-width at the wide mouth -> 39px across
+const MOUTH_RADIUS = 4; // half-width at the wide mouth -> 9px across
 const NECK_HALF_WIDTH = 1; // half-width of the straight neck tube -> 3px across
-const TAPER_ROWS: number = 25; // rows over which the mouth narrows down to the neck
-const NECK_ROWS = 13; // straight rows of neck tube below the taper
-const BODY_ROWS = TAPER_ROWS + NECK_ROWS; // rows of glass above the anchor's spout pixel
+const TAPER_ROWS: number = 19; // rows over which the mouth narrows down to the neck
+const NECK_ROWS = 10; // straight rows of neck tube below the taper
+const BODY_ROWS = TAPER_ROWS + NECK_ROWS; // rows of glass above the anchor's spout pixel (29 + 1 spout = 30px tall)
 
 /** Canonical "facing down" outline: body above the anchor (dy < 0), a single
  * protruding spout pixel AT the anchor (dy = 0, narrower than the neck tube

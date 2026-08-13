@@ -29,10 +29,12 @@ describe('apparatus-shapes', () => {
     expect(new Set(counts).size).toBe(1);
   });
 
-  it('is roughly 40px across at the mouth, matching the requested size', () => {
+  it('is roughly 10x30px, matching the requested size', () => {
     const bounds = funnelBounds(funnelShapeFor('down'));
-    expect(bounds.maxDx - bounds.minDx).toBeGreaterThanOrEqual(35);
-    expect(bounds.maxDy - bounds.minDy).toBeGreaterThanOrEqual(35);
+    expect(bounds.maxDx - bounds.minDx).toBeGreaterThanOrEqual(8);
+    expect(bounds.maxDx - bounds.minDx).toBeLessThanOrEqual(12);
+    expect(bounds.maxDy - bounds.minDy).toBeGreaterThanOrEqual(28);
+    expect(bounds.maxDy - bounds.minDy).toBeLessThanOrEqual(32);
   });
 
   it('cycles through all 4 facings and wraps in both directions', () => {
