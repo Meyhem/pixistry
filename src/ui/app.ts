@@ -177,6 +177,7 @@ export function mountApp(root: HTMLElement): void {
   let lastTempK: Float32Array | null = null;
   let lastRadiatorRadius: Uint8Array | null = null;
   let lastRadiatorTargetK: Float32Array | null = null;
+  let lastTick = 0;
 
   function paletteEntryFor(specId: number): PaletteEntry | undefined {
     return palette.find((entry) => entry.specId === specId);
@@ -469,6 +470,7 @@ export function mountApp(root: HTMLElement): void {
       lastTempK = msg.tempK;
       lastRadiatorRadius = msg.radiatorRadius;
       lastRadiatorTargetK = msg.radiatorTargetK;
+      lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,
         phase: msg.phase,
@@ -478,4 +480,67 @@ export function mountApp(root: HTMLElement): void {
       });
     }
   };
+
+  // Dev-only debug hook for inspecting/driving the sim from outside the UI
+  // (browser devtools console, or an automated tool poking window.__pixistry)
+  // -- exposes the same paint/erase/setRunning/step messages the toolbar
+  // sends, plus read-only access to the latest frame the renderer already
+  // keeps around for the hover inspector. Not part of the app's real API,
+  // never imported by app code -- purely a debugging aid.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __pixistry: unknown }).__pixistry = {
+      pause: () => {
+        running = false;
+        send({ type: 'setRunning', running });
+        render();
+      },
+      resume: () => {
+        running = true;
+        send({ type: 'setRunning', running });
+        render();
+      },
+      step: () => send({ type: 'step' }),
+      setSpeed: (value: number) => {
+        speed = value;
+        send({ type: 'setSpeed', speed });
+        render();
+      },
+      isRunning: () => running,
+      getTick: () => lastTick,
+      size: () => ({ width: gridWidth, height: gridHeight }),
+      getCell: (x: number, y: number) => {
+        if (!lastSpecId || !lastPhase || !lastTempK || x < 0 || y < 0 || x >= gridWidth || y >= gridHeight) return null;
+        const idx = y * gridWidth + x;
+        const specId = lastSpecId[idx] ?? EMPTY;
+        const tempK = lastTempK[idx] ?? 0;
+        const phaseCode = lastPhase[idx] ?? PhaseCode.Empty;
+        return {
+          x,
+          y,
+          specId,
+          label: specId === EMPTY ? null : (labelBySpecId.get(specId) ?? null),
+          tempK,
+          tempC: kelvinToCelsius(tempK),
+          phase: PHASE_LABEL[phaseCode] ?? 'unknown',
+          radiatorRadius: lastRadiatorRadius?.[idx] ?? 0,
+          radiatorTargetK: lastRadiatorTargetK?.[idx] ?? 0,
+        };
+      },
+      dumpGrid: () => {
+        if (!lastSpecId || !lastPhase || !lastTempK) return null;
+        return {
+          width: gridWidth,
+          height: gridHeight,
+          tick: lastTick,
+          specId: Array.from(lastSpecId),
+          phase: Array.from(lastPhase, (p) => PHASE_LABEL[p] ?? 'unknown'),
+          tempC: Array.from(lastTempK, kelvinToCelsius),
+        };
+      },
+      findSpecId: (label: string) => palette.find((entry) => entry.label === label)?.specId,
+      paint: (x: number, y: number, specId: number, opts: { radius?: number; tempC?: number } = {}) =>
+        send({ type: 'paint', x, y, radius: opts.radius ?? 0, specId, tempC: opts.tempC ?? brushTempC }),
+      erase: (x: number, y: number, radius = 0) => send({ type: 'erase', x, y, radius }),
+    };
+  }
 }
