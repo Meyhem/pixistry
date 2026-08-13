@@ -115,6 +115,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
   const radiatorTargetK = grid.radiatorTargetK.slice();
   const stirrerMask = grid.stirrerMask.slice();
   const tubeMask = grid.tubeMask.slice();
+  const filterMask = grid.filterMask.slice();
   const funnelFillSpecId = computeFunnelFill(grid, state.funnels);
   overlayGrabbedCells(grid, species, state.grabState, specId, phase, tempK);
   return {
@@ -126,6 +127,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     radiatorTargetK,
     stirrerMask,
     tubeMask,
+    filterMask,
     funnelFillSpecId,
     funnels: funnelSnapshots(state.funnels),
     tubes: tubeSnapshots(state.tubes),

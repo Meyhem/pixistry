@@ -40,6 +40,11 @@ export interface FrameData {
    * cargo cell's own species color is drawn over it, since the lumen shape
    * is otherwise only implied by its wall ring. */
   tubeMask: Uint8Array;
+  /** Filter apparatus overlay (see grid.ts's filterMask) -- nonzero where a
+   * filter membrane has been painted. Like the stirrer mask, this isn't
+   * matter and has no color of its own, so without this a drawn filter line
+   * would be invisible once painted. */
+  filterMask: Uint8Array;
 }
 
 export interface Renderer {
@@ -159,6 +164,13 @@ const TUBE_LUMEN_TINT_RGB: [number, number, number] = [169, 214, 232];
 const TUBE_LUMEN_TINT_STRENGTH = 0.18;
 const TUBE_CONE_TINT_STRENGTH = 0.35;
 
+// Filter apparatus overlay tint: a flat, weak wash (same "halo not repaint"
+// restraint as the stirrer/tube tints above) in a distinct pale-green hue so
+// a drawn filter line reads apart from glass-blue/stirrer-purple regardless
+// of what's currently passing through it.
+const FILTER_TINT_RGB: [number, number, number] = [140, 224, 150];
+const FILTER_TINT_STRENGTH = 0.3;
+
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
   return [
@@ -267,7 +279,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, tubeMask, funnelFillSpecId }: FrameData): void {
+    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, tubeMask, filterMask, funnelFillSpecId }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -303,6 +315,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           const tube = tubeMask[i] as TubeMaskValue;
           if (tube === TubeMaskValue.Lumen) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
           else if (tube === TubeMaskValue.Cone) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_CONE_TINT_STRENGTH);
+          if ((filterMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, FILTER_TINT_RGB, FILTER_TINT_STRENGTH);
 
           let ringRgba = interiorRgba;
           if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);

@@ -38,6 +38,7 @@ export type WorkerToMainMessage =
       radiatorTargetK: Float32Array;
       stirrerMask: Uint8Array;
       tubeMask: Uint8Array;
+      filterMask: Uint8Array;
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
       tubes: TubeSnapshot[];
@@ -48,6 +49,8 @@ export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
   | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
   | { type: 'paintStirrer'; x: number; y: number; radius: number }
+  | { type: 'paintFilter'; x: number; y: number; radius: number }
+  | { type: 'setFilterSpecies'; species: number[] }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }

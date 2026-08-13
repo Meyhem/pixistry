@@ -87,6 +87,14 @@ let funnels: FunnelInstance[] = [];
 // representable as a value per grid cell.
 let tubes: TubeInstance[] = [];
 
+// Filter apparatus's global species allow-list (see grid.ts's filterMask):
+// unlike the tube's per-instance filter, every drawn filter line shares this
+// one Set -- empty means "blocks everything", the opposite default from the
+// tube's null-means-accept-all, since an unconfigured Filter should read as
+// "just drew an impermeable line" rather than a no-op. Passed into
+// stepMovement every tick (see runOneTick).
+let filterAllowSpecies = new Set<number>();
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -112,7 +120,7 @@ function withTube(id: number, fn: (instance: TubeInstance) => void): void {
 
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
-  stepMovement(grid, species, rng, tick++);
+  stepMovement(grid, species, rng, tick++, filterAllowSpecies);
   stepTubes(grid, tubes);
   if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
   stepStirrers(grid, rng);
@@ -155,12 +163,21 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.stirrerMask[grid.index(px, py)] = 1;
       });
       break;
+    case 'paintFilter':
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        grid.filterMask[grid.index(px, py)] = 1;
+      });
+      break;
+    case 'setFilterSpecies':
+      filterAllowSpecies = new Set(msg.species);
+      break;
     case 'erase':
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.clear(px, py);
         grid.radiatorRadius[grid.index(px, py)] = 0;
         grid.stirrerMask[grid.index(px, py)] = 0;
         grid.tubeMask[grid.index(px, py)] = 0;
+        grid.filterMask[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the

@@ -17,6 +17,7 @@ import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
+import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
@@ -47,15 +48,17 @@ type Tool =
   | { kind: 'funnel' }
   | { kind: 'stirrer' }
   | { kind: 'tube' }
+  | { kind: 'filter' }
   | { kind: 'select-apparatus' };
 
-/** Wall-drawing tools (Glass/Insulator) want the brush-width slider's
- * minimum (1) to paint exactly one pixel, for drawing precise vessel walls
- * -- forEachCellInRadius's radius is one less than the displayed width for
- * these tools only. Species/erase/radiator/stirrer keep radius === width
- * unchanged, since a wider default splash is what those actually want. */
+/** Wall-drawing tools (Glass/Insulator, and Filter -- also drawn as a
+ * precise line) want the brush-width slider's minimum (1) to paint exactly
+ * one pixel, for drawing precise vessel walls -- forEachCellInRadius's
+ * radius is one less than the displayed width for these tools only.
+ * Species/erase/radiator/stirrer keep radius === width unchanged, since a
+ * wider default splash is what those actually want. */
 function wallBrushRadius(tool: Tool | null, width: number): number {
-  return tool?.kind === 'wall' ? Math.max(0, width - 1) : width;
+  return tool?.kind === 'wall' || tool?.kind === 'filter' ? Math.max(0, width - 1) : width;
 }
 
 const PHASE_LABEL: Record<number, string> = {
@@ -81,6 +84,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   showBrushWidth: true,
   funnelPanel: 'none',
   tubePanel: 'none',
+  filterPanel: 'none',
 };
 
 /** The three tools with no per-instance config of their own -- just a
@@ -224,7 +228,7 @@ export function mountApp(root: HTMLElement): void {
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
   let ptSelectedSymbol: string | null = null;
-  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' = 'paint';
+  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' = 'paint';
   let isPointerDown = false;
   let isGrabbing = false;
   // The mixer tool's active brush stroke: while held, position updates go
@@ -259,6 +263,16 @@ export function mountApp(root: HTMLElement): void {
   // ApparatusSelection's TubeEditDraft for the same reason (see
   // funnelDraft/funnelSetter). null filter = accept every species.
   const tubeDraft: TubeEditDraft = { coneSize: DEFAULT_TUBE_CONE_SIZE, filter: null };
+
+  // Filter apparatus's global species allow-list -- unlike the funnel/tube
+  // drafts above, this isn't captured at placement time: it's a live global
+  // gate (see worker.ts's filterAllowSpecies) sent to the worker immediately
+  // on every add/remove via sendFilterSpecies, since it affects every filter
+  // line already drawn on the grid, not just future placements.
+  let filterSpecies = new Set<number>();
+  function sendFilterSpecies(): void {
+    send({ type: 'setFilterSpecies', species: [...filterSpecies] });
+  }
 
   // In-progress polygon draw (tool === 'tube'): points already committed by
   // a click, plus a live rubber-band preview point tracking the cursor
@@ -326,6 +340,9 @@ export function mountApp(root: HTMLElement): void {
     }
     if (t.kind === 'stirrer') {
       return { ...TOOL_META_DEFAULTS, label: STIRRER_LABEL, color: STIRRER_COLOR, category: 'APPARATUS' };
+    }
+    if (t.kind === 'filter') {
+      return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', filterPanel: 'config' };
     }
     if (t.kind === 'select-apparatus') {
       // The only branch that depends on live selection state rather than
@@ -598,6 +615,18 @@ export function mountApp(root: HTMLElement): void {
         }
         render();
       },
+      filterSpecies,
+      filterPalette: palette,
+      onOpenFilterSpeciesPicker: () => {
+        ptTarget = 'filter-add';
+        ptOpen = true;
+        render();
+      },
+      onRemoveFilterSpecies: (specId) => {
+        filterSpecies.delete(specId);
+        sendFilterSpecies();
+        render();
+      },
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -621,6 +650,9 @@ export function mountApp(root: HTMLElement): void {
           } else if (ptTarget === 'tube-filter-edit-add' && apparatusSelection.tubeEditDraft) {
             apparatusSelection.tubeEditDraft.filter = addFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
             sendTubeUpdate();
+          } else if (ptTarget === 'filter-add') {
+            filterSpecies.add(specId);
+            sendFilterSpecies();
           } else {
             setTool({ kind: 'paint', specId });
           }
@@ -813,6 +845,9 @@ export function mountApp(root: HTMLElement): void {
       case 'stirrer':
         send({ type: 'paintStirrer', x, y, radius: brushWidth });
         break;
+      case 'filter':
+        send({ type: 'paintFilter', x, y, radius: wallBrushRadius(tool, brushWidth) });
+        break;
       case 'grabber':
         break;
       case 'funnel':
@@ -981,6 +1016,7 @@ export function mountApp(root: HTMLElement): void {
         radiatorTargetK: msg.radiatorTargetK,
         stirrerMask: msg.stirrerMask,
         tubeMask: msg.tubeMask,
+        filterMask: msg.filterMask,
         funnelFillSpecId: msg.funnelFillSpecId,
       });
       // The select-apparatus tool's edit panel shows a placed funnel's live

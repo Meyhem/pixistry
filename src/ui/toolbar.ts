@@ -11,10 +11,11 @@ import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
+import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 
-export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'tube' | 'select-apparatus';
+export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'tube' | 'filter' | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
 export const SELECT_APPARATUS_COLOR = '#4da3ff';
@@ -121,6 +122,7 @@ export function buildToolbar(
     makePaletteButton(STIRRER_LABEL, STIRRER_COLOR, cb.isToolActive('stirrer'), () => cb.onSelectTool('stirrer')),
   );
   apparatus.items.appendChild(makePaletteButton(TUBE_LABEL, TUBE_COLOR, cb.isToolActive('tube'), () => cb.onSelectTool('tube')));
+  apparatus.items.appendChild(makePaletteButton(FILTER_LABEL, FILTER_COLOR, cb.isToolActive('filter'), () => cb.onSelectTool('filter')));
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');

@@ -53,6 +53,16 @@ export class SimGrid {
    * stepTubes (which walks the lumen and pulls matching cells through the
    * cone). TubeMaskValue.None everywhere a tube isn't drawn. */
   readonly tubeMask: Uint8Array;
+  /** Filter apparatus overlay -- same "fixed background field, not matter"
+   * convention as stirrerMask/tubeMask above: painted by the filter tool's
+   * brush (see worker.ts's 'paintFilter' handler) into a per-cell flag
+   * (nonzero = a filter membrane occupies this cell), left untouched by
+   * set/clear/swap, and read every tick by movement.ts to gate entry: a
+   * filtered cell is a valid destination only for species in the current
+   * global filter allow-list (see worker.ts's filterAllowSpecies), exactly
+   * like a wall otherwise. Unlike tubeMask there's no "kind" distinction --
+   * every filtered cell behaves the same regardless of what's drawn there. */
+  readonly filterMask: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -65,6 +75,7 @@ export class SimGrid {
     this.radiatorTargetK = new Float32Array(size);
     this.stirrerMask = new Uint8Array(size);
     this.tubeMask = new Uint8Array(size);
+    this.filterMask = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {

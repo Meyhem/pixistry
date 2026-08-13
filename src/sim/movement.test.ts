@@ -262,6 +262,70 @@ describe('stepMovement', () => {
     expect(grid.isEmptyAt(grid.index(1, 0))).toBe(true);
   });
 
+  it('blocks a solid from falling straight into a filtered cell unless its species is allowed', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(1, 2);
+    grid.set(0, 0, iron.specId, iron.phase);
+    grid.filterMask[grid.index(0, 1)] = 1;
+    const rng = mulberry32(1);
+
+    stepMovement(grid, species, rng, 0);
+    expect(grid.specId[grid.index(0, 0)]).toBe(iron.specId); // no allow-list -- blocked, stayed put
+
+    stepMovement(grid, species, rng, 1, new Set([iron.specId]));
+    expect(grid.specId[grid.index(0, 1)]).toBe(iron.specId); // now allowed -- passed through
+  });
+
+  it('blocks a gas from rising straight into a filtered cell unless its species is allowed', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const hydrogen = findEntry(palette, 'H2');
+
+    const grid = new SimGrid(1, 2);
+    grid.set(0, 1, hydrogen.specId, hydrogen.phase);
+    grid.filterMask[grid.index(0, 0)] = 1;
+    const rng = mulberry32(2);
+
+    stepMovement(grid, species, rng, 0);
+    expect(grid.specId[grid.index(0, 1)]).toBe(hydrogen.specId); // no allow-list -- blocked
+
+    stepMovement(grid, species, rng, 1, new Set([hydrogen.specId]));
+    expect(grid.specId[grid.index(0, 0)]).toBe(hydrogen.specId); // now allowed -- passed through
+  });
+
+  it('blocks lateral liquid spread into a filtered cell unless its species is allowed', () => {
+    // moveFalling's lateral-spread loop checks isEmptyAt/isWallSpecId
+    // directly rather than going through canDisplace/blockedTarget, so this
+    // exercises a different code path than the straight-fall test above.
+    const species = new SpeciesTable();
+
+    function run(filterAllow: ReadonlySet<number> | undefined): { reachedFiltered: boolean; reachedOpen: boolean } {
+      const grid = new SimGrid(5, 2);
+      for (let x = 0; x < 5; x++) grid.set(x, 1, SpeciesId.Fe, PhaseCode.Solid);
+      grid.set(2, 0, SpeciesId.H2O, PhaseCode.Liquid);
+      grid.filterMask[grid.index(1, 0)] = 1; // left neighbor is filtered, right neighbor is open
+      const rng = mulberry32(42);
+      let reachedFiltered = false;
+      let reachedOpen = false;
+      for (let tick = 0; tick < 300; tick++) {
+        stepMovement(grid, species, rng, tick, filterAllow);
+        if (grid.specId[grid.index(1, 0)] === SpeciesId.H2O) reachedFiltered = true;
+        if (grid.specId[grid.index(3, 0)] === SpeciesId.H2O) reachedOpen = true;
+      }
+      return { reachedFiltered, reachedOpen };
+    }
+
+    const blocked = run(undefined);
+    expect(blocked.reachedFiltered).toBe(false);
+    expect(blocked.reachedOpen).toBe(true); // spread still works on the unfiltered side, proving movement wasn't just frozen
+
+    const allowed = run(new Set([SpeciesId.H2O]));
+    expect(allowed.reachedFiltered).toBe(true);
+  });
+
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(4, 4);

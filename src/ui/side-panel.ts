@@ -34,6 +34,10 @@ export interface ToolMeta {
    * apparatus with nothing selected looks the same regardless of which
    * kind of apparatus the player might click next). */
   tubePanel: 'none' | 'config' | 'edit';
+  /** The Filter tool's allow-list panel -- only 2 states (no placed-instance
+   * "edit" mode, since a filter line isn't a tracked instance: its
+   * allow-list is one global config, live-edited straight from the tool). */
+  filterPanel: 'none' | 'config';
 }
 
 export interface TubeFieldValues {
@@ -75,6 +79,12 @@ export interface SidePanelCallbacks {
   onSetTubeConeSize(value: number): void;
   onOpenTubeFilterPicker(): void;
   onRemoveTubeFilterSpecies(specId: number): void;
+  /** The Filter apparatus's current global allow-list. */
+  filterSpecies: ReadonlySet<number>;
+  /** Every paintable species, for the Filter apparatus's chip-list picker. */
+  filterPalette: readonly PaletteEntry[];
+  onOpenFilterSpeciesPicker(): void;
+  onRemoveFilterSpecies(specId: number): void;
 }
 
 const MIN_RADIUS = 1;
@@ -254,6 +264,31 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   );
 }
 
+function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
+  if (meta.filterPanel === 'none') return;
+  addDivider(container);
+
+  const wrap = el('div', 'setting');
+  const label = el('span', 'setting-label');
+  label.textContent = 'Allowed species';
+  wrap.appendChild(label);
+  if (cb.filterSpecies.size === 0) {
+    wrap.appendChild(hintBox('No species added -- every species is blocked.'));
+  }
+  buildSpeciesChipList(wrap, cb.filterPalette, cb.filterSpecies, {
+    onAdd: cb.onOpenFilterSpeciesPicker,
+    onRemove: cb.onRemoveFilterSpecies,
+  });
+  container.appendChild(wrap);
+
+  container.appendChild(
+    hintBox(
+      "Draw a filter line like a wall. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. One shared allow-list applies to every filter line on the grid.",
+      'HOW IT WORKS',
+    ),
+  );
+}
+
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   container.innerHTML = '';
 
@@ -313,4 +348,5 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
 
   addFunnelPanel(container, meta, cb);
   addTubePanel(container, meta, cb);
+  addFilterPanel(container, meta, cb);
 }

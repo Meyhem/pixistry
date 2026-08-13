@@ -33,6 +33,16 @@ type TargetStatus =
   | { kind: 'empty' }
   | { kind: 'occupied'; specId: number; phase: PhaseCode };
 
+/** A cell with the filter apparatus's overlay (grid.filterMask) is only a
+ * valid destination for species in the current global allow-list -- for
+ * every other species it's blocked exactly like a wall, regardless of
+ * whether the cell is itself empty or occupied. A cell with no filter drawn
+ * (mask is 0) is always unaffected. */
+function canEnterFiltered(grid: SimGrid, filterAllow: ReadonlySet<number>, targetIdx: number, fromSpecId: number): boolean {
+  if ((grid.filterMask[targetIdx] as number) === 0) return true;
+  return filterAllow.has(fromSpecId);
+}
+
 /** The shared head of canDisplace/canRiseThroughLiquid below: a tube's
  * lumen is only ever entered via its own suction cone (see tube.ts's
  * stepTubes), never by ordinary falling-sand displacement -- otherwise
@@ -43,8 +53,9 @@ type TargetStatus =
  * canRiseThroughLiquid doesn't -- liquids don't spontaneously rise into open
  * air), so that decision stays with each predicate rather than being folded
  * in here. */
-function blockedTarget(grid: SimGrid, targetIdx: number): TargetStatus {
+function blockedTarget(grid: SimGrid, targetIdx: number, fromSpecId: number, filterAllow: ReadonlySet<number>): TargetStatus {
   if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return { kind: 'blocked' };
+  if (!canEnterFiltered(grid, filterAllow, targetIdx, fromSpecId)) return { kind: 'blocked' };
   if (grid.isEmptyAt(targetIdx)) return { kind: 'empty' };
   const specId = grid.specId[targetIdx] as number;
   if (isWallSpecId(specId)) return { kind: 'blocked' };
@@ -59,8 +70,9 @@ function canDisplace(
   fromPhase: PhaseCode,
   targetIdx: number,
   direction: 'down' | 'up',
+  filterAllow: ReadonlySet<number>,
 ): boolean {
-  const target = blockedTarget(grid, targetIdx);
+  const target = blockedTarget(grid, targetIdx, fromSpecId, filterAllow);
   if (target.kind === 'blocked') return false;
   if (target.kind === 'empty') return true;
   // Density sorting is a liquid/gas thing -- two solid grains never swap
@@ -87,8 +99,9 @@ function canRiseThroughLiquid(
   fromSpecId: number,
   fromPhase: PhaseCode,
   targetIdx: number,
+  filterAllow: ReadonlySet<number>,
 ): boolean {
-  const target = blockedTarget(grid, targetIdx);
+  const target = blockedTarget(grid, targetIdx, fromSpecId, filterAllow);
   if (target.kind !== 'occupied' || target.phase !== PhaseCode.Liquid) return false;
   const fromDensity = displaceDensity(grid, species, fromIdx, fromSpecId, fromPhase);
   const targetDensity = displaceDensity(grid, species, targetIdx, target.specId, target.phase);
@@ -144,15 +157,16 @@ function moveFalling(
   fromPhase: PhaseCode,
   rng: Rng,
   canSpreadHorizontally: boolean,
+  filterAllow: ReadonlySet<number>,
 ): void {
   const belowY = y + 1;
   if (grid.inBounds(x, belowY)) {
     const belowIdx = grid.index(x, belowY);
-    if (canDisplace(grid, species, idx, specId, fromPhase, belowIdx, 'down')) {
+    if (canDisplace(grid, species, idx, specId, fromPhase, belowIdx, 'down', filterAllow)) {
       commitSwap(grid, moved, idx, belowIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, belowY, rng, (t) => canDisplace(grid, species, idx, specId, fromPhase, t, 'down'))) return;
+    if (tryDiagonal(grid, moved, idx, x, belowY, rng, (t) => canDisplace(grid, species, idx, specId, fromPhase, t, 'down', filterAllow))) return;
   }
 
   if (!canSpreadHorizontally) return;
@@ -163,11 +177,11 @@ function moveFalling(
   const aboveY = y - 1;
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
-    if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, aboveIdx)) {
+    if (canRiseThroughLiquid(grid, species, idx, specId, fromPhase, aboveIdx, filterAllow)) {
       commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canRiseThroughLiquid(grid, species, idx, specId, fromPhase, t))) return;
+    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canRiseThroughLiquid(grid, species, idx, specId, fromPhase, t, filterAllow))) return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {
@@ -176,6 +190,7 @@ function moveFalling(
     const nIdx = grid.index(nx, y);
     if (moved[nIdx]) continue;
     if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
+    if (!canEnterFiltered(grid, filterAllow, nIdx, specId)) continue;
     if (grid.isEmptyAt(nIdx)) {
       if (rng() < LIQUID_SPREAD_P) {
         commitSwap(grid, moved, idx, nIdx);
@@ -207,15 +222,16 @@ function moveRising(
   idx: number,
   specId: number,
   rng: Rng,
+  filterAllow: ReadonlySet<number>,
 ): void {
   const aboveY = y - 1;
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
-    if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, aboveIdx, 'up')) {
+    if (canDisplace(grid, species, idx, specId, PhaseCode.Gas, aboveIdx, 'up', filterAllow)) {
       commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canDisplace(grid, species, idx, specId, PhaseCode.Gas, t, 'up'))) return;
+    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canDisplace(grid, species, idx, specId, PhaseCode.Gas, t, 'up', filterAllow))) return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {
@@ -224,6 +240,7 @@ function moveRising(
     const nIdx = grid.index(nx, y);
     if (moved[nIdx]) continue;
     if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
+    if (!canEnterFiltered(grid, filterAllow, nIdx, specId)) continue;
     if (grid.isEmptyAt(nIdx) && rng() < GAS_SPREAD_P) {
       commitSwap(grid, moved, idx, nIdx);
       return;
@@ -231,8 +248,13 @@ function moveRising(
   }
 }
 
-/** One movement tick. Mutates grid in place. */
-export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number): void {
+const NO_FILTER_ALLOW: ReadonlySet<number> = new Set();
+
+/** One movement tick. Mutates grid in place. `filterAllow` is the Filter
+ * apparatus's current global species allow-list (see worker.ts) -- defaults
+ * to "blocks everything" so callers with no filter drawn on the grid (every
+ * test but movement.test.ts's own filter coverage) don't need to pass one. */
+export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number, filterAllow: ReadonlySet<number> = NO_FILTER_ALLOW): void {
   const { width, height } = grid;
   const leftToRight = tick % 2 === 0;
   const moved = new Uint8Array(width * height);
@@ -260,9 +282,9 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       const idxTubeMask = grid.tubeMask[idx] as TubeMaskValue;
       if (idxTubeMask === TubeMaskValue.Lumen || idxTubeMask === TubeMaskValue.Cone) continue;
       const phase = grid.phase[idx] as PhaseCode;
-      if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false);
-      else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true);
-      else if (phase === PhaseCode.Gas) moveRising(grid, species, moved, x, y, idx, specId, rng);
+      if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false, filterAllow);
+      else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true, filterAllow);
+      else if (phase === PhaseCode.Gas) moveRising(grid, species, moved, x, y, idx, specId, rng, filterAllow);
     }
   }
 }
