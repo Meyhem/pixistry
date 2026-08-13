@@ -36,10 +36,15 @@ export const REACTIONS: readonly ReactionRule[] = [
   { reactants: [S.N2, S.H2], products: [S.NH3], deltaH: -45.9, minTempK: 700, probability: 0.1 },
   { reactants: [S.Na, S.H2O], products: [S.NaOH, S.H2], deltaH: -400, probability: 0.3 },
   { reactants: [S.HCl, S.NaOH], products: [S.NaCl, S.H2O], deltaH: -57, probability: 0.6 },
-  { reactants: [S.NaCl, S.H2O], products: [S.NaPlusAq, S.ClMinusAq], deltaH: 4, probability: 0.4 },
-  { reactants: [S.KCl, S.H2O], products: [S.KPlusAq, S.ClMinusAq], deltaH: 17, probability: 0.4 },
-  { reactants: [S.CaCl2, S.H2O], products: [S.Ca2PlusAq, S.ClMinusAq], deltaH: -82, probability: 0.4 },
-  { reactants: [S.MgCl2, S.H2O], products: [S.Mg2PlusAq, S.ClMinusAq], deltaH: -155, probability: 0.4 },
+  // Dissolution collapses reactant cell + water cell into a single aqueous
+  // product cell (same "2 reactants -> 1 product, extra cell vanishes"
+  // convention as H2+O2->H2O above) rather than splitting into a
+  // cation/anion pixel pair -- see NaCl(aq) etc.'s doc comment in
+  // species-data.ts.
+  { reactants: [S.NaCl, S.H2O], products: [S.NaClAq], deltaH: 4, probability: 0.4 },
+  { reactants: [S.KCl, S.H2O], products: [S.KClAq], deltaH: 17, probability: 0.4 },
+  { reactants: [S.CaCl2, S.H2O], products: [S.CaCl2Aq], deltaH: -82, probability: 0.4 },
+  { reactants: [S.MgCl2, S.H2O], products: [S.MgCl2Aq], deltaH: -155, probability: 0.4 },
   // No AgCl + H2O rule -- deliberately preserves the NaCl-dissolves/AgCl-
   // doesn't calibration point from the old dissolution.ts.
 ];

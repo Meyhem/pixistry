@@ -83,12 +83,17 @@ export const SPECIES: readonly SpeciesData[] = [
   { name: 'MgCl2', molarMass: 95.21, color: '#e8e8e8', density: 2.32, phaseAtSTP: 'solid', meltingPointC: 714, boilingPointC: 1412, specificHeatSolid: 0.72, specificHeatLiquid: 0.72, specificHeatGas: 0.72, heatOfFusion: 0, heatOfVaporization: 0, thermalConductivitySolid: 1.0, thermalConductivityLiquid: 1.0, thermalConductivityGas: 1.0, paintable: false },
   { name: 'KCl', molarMass: 74.55, color: '#e8e8e8', density: 1.98, phaseAtSTP: 'solid', meltingPointC: 770, boilingPointC: 1420, specificHeatSolid: 0.69, specificHeatLiquid: 0.69, specificHeatGas: 0.69, heatOfFusion: 0, heatOfVaporization: 0, thermalConductivitySolid: 6.4, thermalConductivityLiquid: 6.4, thermalConductivityGas: 6.4, paintable: false },
 
-  // -- aqueous dissolution products, borrow water's thermal profile wholesale --
-  { name: 'Na+(aq)', molarMass: 22.990, color: '#7ec9ff', density: 1.0, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
-  { name: 'Cl-(aq)', molarMass: 35.45, color: '#c8e070', density: 1.0, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
-  { name: 'K+(aq)', molarMass: 39.098, color: '#c9a8ff', density: 1.0, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
-  { name: 'Ca2+(aq)', molarMass: 40.078, color: '#a8d8b0', density: 1.0, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
-  { name: 'Mg2+(aq)', molarMass: 24.305, color: '#b0e0c0', density: 1.0, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
+  // -- aqueous dissolution products: one pixel per dissolved salt (not a
+  // separate cation/anion pair -- this is a per-pixel automaton, not a
+  // mole-balanced solution, so "dissolved NaCl" is modeled as a single
+  // liquid species). Borrows water's thermal profile wholesale since it's
+  // overwhelmingly water by mass, but with a real brine density (denser
+  // than pure water) so dissolved salt sinks and stratifies by species
+  // under movement.ts's density-based liquid sorting. --
+  { name: 'NaCl(aq)', molarMass: 58.44, color: '#4a7ab5', density: 1.19, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
+  { name: 'KCl(aq)', molarMass: 74.55, color: '#4a6fb5', density: 1.15, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
+  { name: 'CaCl2(aq)', molarMass: 110.98, color: '#3f68a8', density: 1.32, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
+  { name: 'MgCl2(aq)', molarMass: 95.21, color: '#3f60a0', density: 1.30, phaseAtSTP: 'aqueous', ...WATER_THERMAL, paintable: false },
 ];
 
 export const SpeciesId = {
@@ -96,5 +101,5 @@ export const SpeciesId = {
   Ca: 10, Fe: 11, Cu: 12, Zn: 13, Ag: 14,
   H2O: 15, NaCl: 16, AgCl: 17, CO2: 18, HCl: 19, NH3: 20, H2O2: 21, O3: 22,
   Fe2O3: 23, Al2O3: 24, FeS: 25, CuO: 26, ZnO: 27, NaOH: 28, CaCl2: 29, MgCl2: 30, KCl: 31,
-  NaPlusAq: 32, ClMinusAq: 33, KPlusAq: 34, Ca2PlusAq: 35, Mg2PlusAq: 36,
+  NaClAq: 32, KClAq: 33, CaCl2Aq: 34, MgCl2Aq: 35,
 } as const;

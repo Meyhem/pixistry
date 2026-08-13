@@ -22,7 +22,7 @@ const alwaysFire = () => 0;
 const neverFire = () => 1;
 
 describe('stepReactions', () => {
-  it('dissolves solid NaCl adjacent to water into aqueous Na+/Cl- ions', () => {
+  it('dissolves solid NaCl adjacent to water into a single aqueous NaCl pixel', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(2, 1);
 
@@ -33,10 +33,9 @@ describe('stepReactions', () => {
 
     const i = grid.index(0, 0);
     const j = grid.index(1, 0);
-    const products = [grid.specId[i], grid.specId[j]].sort();
-    expect(products).toEqual([SpeciesId.ClMinusAq, SpeciesId.NaPlusAq].sort());
+    expect(grid.specId[i]).toBe(SpeciesId.NaClAq);
     expect(grid.phase[i]).toBe(PhaseCode.Liquid);
-    expect(grid.phase[j]).toBe(PhaseCode.Liquid);
+    expect(grid.specId[j]).toBe(EMPTY);
   });
 
   it('leaves insoluble AgCl next to water untouched (no dissolution rule for it)', () => {

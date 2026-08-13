@@ -16,12 +16,17 @@ function canDisplace(
   grid: SimGrid,
   species: SpeciesTable,
   fromSpecId: number,
+  fromPhase: PhaseCode,
   targetIdx: number,
   direction: 'down' | 'up',
 ): boolean {
   if (grid.isEmptyAt(targetIdx)) return true;
   const targetSpecId = grid.specId[targetIdx] as number;
   if (isWallSpecId(targetSpecId)) return false;
+  // Density sorting is a liquid/gas thing -- two solid grains never swap
+  // places by density, they just pile up static once resting, so a denser
+  // solid can't tunnel through a lighter one underneath it.
+  if (fromPhase === PhaseCode.Solid && (grid.phase[targetIdx] as PhaseCode) === PhaseCode.Solid) return false;
   const fromDensity = species.densityOf(fromSpecId);
   const targetDensity = species.densityOf(targetSpecId);
   return direction === 'down' ? fromDensity > targetDensity : fromDensity < targetDensity;
@@ -39,13 +44,14 @@ function moveFalling(
   y: number,
   idx: number,
   specId: number,
+  fromPhase: PhaseCode,
   rng: Rng,
   canSpreadHorizontally: boolean,
 ): void {
   const belowY = y + 1;
   if (grid.inBounds(x, belowY)) {
     const belowIdx = grid.index(x, belowY);
-    if (canDisplace(grid, species, specId, belowIdx, 'down')) {
+    if (canDisplace(grid, species, specId, fromPhase, belowIdx, 'down')) {
       grid.swap(idx, belowIdx);
       moved[idx] = 1;
       moved[belowIdx] = 1;
@@ -57,7 +63,7 @@ function moveFalling(
       if (!grid.inBounds(nx, belowY)) continue;
       const nIdx = grid.index(nx, belowY);
       if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, specId, nIdx, 'down') && rng() < DIAGONAL_P) {
+      if (canDisplace(grid, species, specId, fromPhase, nIdx, 'down') && rng() < DIAGONAL_P) {
         grid.swap(idx, nIdx);
         moved[idx] = 1;
         moved[nIdx] = 1;
@@ -94,7 +100,7 @@ function moveRising(
   const aboveY = y - 1;
   if (grid.inBounds(x, aboveY)) {
     const aboveIdx = grid.index(x, aboveY);
-    if (canDisplace(grid, species, specId, aboveIdx, 'up')) {
+    if (canDisplace(grid, species, specId, PhaseCode.Gas, aboveIdx, 'up')) {
       grid.swap(idx, aboveIdx);
       moved[idx] = 1;
       moved[aboveIdx] = 1;
@@ -106,7 +112,7 @@ function moveRising(
       if (!grid.inBounds(nx, aboveY)) continue;
       const nIdx = grid.index(nx, aboveY);
       if (moved[nIdx]) continue;
-      if (canDisplace(grid, species, specId, nIdx, 'up') && rng() < DIAGONAL_P) {
+      if (canDisplace(grid, species, specId, PhaseCode.Gas, nIdx, 'up') && rng() < DIAGONAL_P) {
         grid.swap(idx, nIdx);
         moved[idx] = 1;
         moved[nIdx] = 1;
@@ -148,8 +154,8 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       // check every tick for no benefit.
       if (isWallSpecId(specId)) continue;
       const phase = grid.phase[idx] as PhaseCode;
-      if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, rng, false);
-      else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, rng, true);
+      if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false);
+      else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true);
       else if (phase === PhaseCode.Gas) moveRising(grid, species, moved, x, y, idx, specId, rng);
     }
   }

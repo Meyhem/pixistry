@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY, SimGrid } from './grid';
+import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
+import { SpeciesId } from './species-data';
 
 function findEntry(palette: PaletteEntry[], label: string): PaletteEntry {
   const entry = palette.find((p) => p.label === label);
@@ -68,6 +69,39 @@ describe('stepMovement', () => {
 
     expect(grid.specId[grid.index(0, 1)]).toBe(iron.specId);
     expect(grid.specId[grid.index(0, 0)]).toBe(water.specId);
+  });
+
+  it('does not let a denser solid sink through a lighter solid -- solids stay statically mixed', () => {
+    const species = new SpeciesTable();
+    const palette = buildPalette();
+    const silver = findEntry(palette, 'Ag'); // density 10.49
+    const sodium = findEntry(palette, 'Na'); // density 0.97
+    expect(species.densityOf(silver.specId)).toBeGreaterThan(species.densityOf(sodium.specId));
+
+    const grid = new SimGrid(1, 2);
+    grid.set(0, 0, silver.specId, silver.phase);
+    grid.set(0, 1, sodium.specId, sodium.phase);
+    const rng = mulberry32(6);
+
+    for (let tick = 0; tick < 10; tick++) stepMovement(grid, species, rng, tick);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(silver.specId);
+    expect(grid.specId[grid.index(0, 1)]).toBe(sodium.specId);
+  });
+
+  it('sinks a denser liquid below a lighter one', () => {
+    const species = new SpeciesTable();
+    expect(species.densityOf(SpeciesId.NaClAq)).toBeGreaterThan(species.densityOf(SpeciesId.H2O));
+
+    const grid = new SimGrid(1, 2);
+    grid.set(0, 0, SpeciesId.NaClAq, PhaseCode.Liquid);
+    grid.set(0, 1, SpeciesId.H2O, PhaseCode.Liquid);
+    const rng = mulberry32(7);
+
+    stepMovement(grid, species, rng, 0);
+
+    expect(grid.specId[grid.index(0, 1)]).toBe(SpeciesId.NaClAq);
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.H2O);
   });
 
   it('conserves the number of occupied cells', () => {
