@@ -26,7 +26,7 @@ body {
 
 #app {
   width: 100%;
-  padding: 28px 28px 60px;
+  padding: 16px 28px 60px;
   box-sizing: border-box;
 }
 
@@ -34,20 +34,20 @@ body {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding-bottom: 16px;
-  margin-bottom: 20px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
   border-bottom: 1px solid var(--panel-border);
 }
 
 .app-title {
   font-family: var(--mono);
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.06em;
 }
 
 .app-subtitle {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
@@ -55,10 +55,10 @@ body {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: 14px;
-  padding: 16px 18px;
+  padding: 8px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .control-row {
@@ -69,7 +69,7 @@ body {
 }
 
 .control-row + .control-row {
-  padding-top: 12px;
+  padding-top: 6px;
   border-top: 1px solid var(--panel-border);
 }
 
@@ -95,7 +95,7 @@ body {
 }
 
 .palette-btn {
-  height: 34px;
+  height: 28px;
   padding: 0 12px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -149,7 +149,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 34px;
+  height: 28px;
   padding: 0 14px;
   border-radius: 8px;
   border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
@@ -177,7 +177,7 @@ body {
 
 .pause-btn,
 .step-btn {
-  height: 34px;
+  height: 28px;
   padding: 0 14px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -194,7 +194,7 @@ body {
 }
 
 .speed-select {
-  height: 34px;
+  height: 28px;
   padding: 0 10px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -205,7 +205,7 @@ body {
 }
 
 .flask-select {
-  height: 34px;
+  height: 28px;
   padding: 0 10px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -220,7 +220,7 @@ body {
 .workspace {
   display: flex;
   gap: 20px;
-  margin-top: 20px;
+  margin-top: 12px;
   align-items: flex-start;
 }
 
