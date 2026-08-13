@@ -204,6 +204,19 @@ body {
   font-size: 12px;
 }
 
+.flask-select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #1e2120;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .workspace {
   display: flex;
   gap: 20px;

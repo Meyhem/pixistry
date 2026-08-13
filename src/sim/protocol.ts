@@ -4,6 +4,7 @@
 // types from a plain data module instead of reaching into the worker's own
 // entry point -- worker.ts re-exports nothing.
 import type { FunnelFacing } from './apparatus-shapes';
+import type { FlaskFacing } from './flask-shapes';
 import type { PaletteEntry } from './species';
 import type { Point } from './tube-shapes';
 
@@ -77,4 +78,5 @@ export type MainToWorkerMessage =
   | { type: 'placeTube'; points: Point[]; coneSize: number; filter: number[] | null }
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
-  | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null };
+  | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
+  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean };

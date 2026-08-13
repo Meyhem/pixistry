@@ -19,6 +19,7 @@ import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
+import { DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
@@ -49,6 +50,7 @@ type Tool =
   | { kind: 'stirrer' }
   | { kind: 'tube' }
   | { kind: 'filter' }
+  | { kind: 'flask'; stirred: boolean }
   | { kind: 'select-apparatus' };
 
 /** Wall-drawing tools (Glass/Insulator, and Filter -- also drawn as a
@@ -85,6 +87,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   funnelPanel: 'none',
   tubePanel: 'none',
   filterPanel: 'none',
+  flaskPanel: 'none',
 };
 
 /** The three tools with no per-instance config of their own -- just a
@@ -254,6 +257,12 @@ export function mountApp(root: HTMLElement): void {
   let lastHoverX = 0;
   let lastHoverY = 0;
 
+  // Flask apparatus config (pre-placement) -- same "captured at placement
+  // time" convention as funnelFacing/funnelDraft above. Facing rotates in
+  // 45-degree steps (8 facings), unlike the funnel's 4.
+  let flaskFacing: FlaskFacing = 'up';
+  let flaskSizeScale = DEFAULT_FLASK_SIZE_SCALE;
+
   // select-apparatus tool's selection/edit-draft/drag state for both
   // apparatus types -- see apparatus-selection.ts.
   const apparatusSelection = new ApparatusSelection();
@@ -344,6 +353,16 @@ export function mountApp(root: HTMLElement): void {
     if (t.kind === 'filter') {
       return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', filterPanel: 'config' };
     }
+    if (t.kind === 'flask') {
+      return {
+        ...TOOL_META_DEFAULTS,
+        label: t.stirred ? 'Erlenmeyer (stirred)' : 'Erlenmeyer',
+        color: FUNNEL_COLOR,
+        category: 'APPARATUS',
+        showBrushWidth: false,
+        flaskPanel: 'config',
+      };
+    }
     if (t.kind === 'select-apparatus') {
       // The only branch that depends on live selection state rather than
       // just the tool kind, so it stays logic instead of a static table row.
@@ -418,11 +437,19 @@ export function mountApp(root: HTMLElement): void {
     const toolbarCallbacks: ToolbarCallbacks = {
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
       isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
-      isToolActive: (kind) => tool?.kind === kind,
+      isToolActive: (kind) => {
+        if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && !tool.stirred;
+        if (kind === 'flask-erlenmeyer-stirred') return tool?.kind === 'flask' && tool.stirred;
+        return tool?.kind === kind;
+      },
       isPinned: (label) => pinnedLabels.includes(label),
       onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
       onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
-      onSelectTool: (kind) => setTool({ kind }),
+      onSelectTool: (kind) => {
+        if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', stirred: false });
+        else if (kind === 'flask-erlenmeyer-stirred') setTool({ kind: 'flask', stirred: true });
+        else setTool({ kind });
+      },
       onTogglePin: togglePin,
       onOpenPeriodicTable: () => {
         ptTarget = 'paint';
@@ -627,6 +654,10 @@ export function mountApp(root: HTMLElement): void {
         sendFilterSpecies();
         render();
       },
+      flaskSizeScale,
+      onSetFlaskSize: (value) => {
+        flaskSizeScale = value;
+      },
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -741,9 +772,10 @@ export function mountApp(root: HTMLElement): void {
    * cheap, since it only runs on hover/wheel, not every tick. */
   function updateApparatusOverlay(x: number, y: number): void {
     const showFunnelGhost = tool?.kind === 'funnel';
+    const showFlaskGhost = tool?.kind === 'flask';
     const showTubeDraw = tool?.kind === 'tube' && tubeDrawPoints.length > 0;
     const editingTube = tool?.kind === 'select-apparatus' ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
-    if ((!showFunnelGhost && !showTubeDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
+    if ((!showFunnelGhost && !showFlaskGhost && !showTubeDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
     }
@@ -764,6 +796,16 @@ export function mountApp(root: HTMLElement): void {
     if (showFunnelGhost) {
       previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
       const shape = funnelShapeFor(funnelFacing);
+      for (const cell of shape.cells) {
+        const px = x + cell.dx;
+        const py = y + cell.dy;
+        previewCtx.fillRect(px * cellPxX, py * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+      }
+    }
+
+    if (showFlaskGhost) {
+      previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
+      const shape = flaskShapeFor(flaskFacing, flaskSizeScale);
       for (const cell of shape.cells) {
         const px = x + cell.dx;
         const py = y + cell.dy;
@@ -847,6 +889,9 @@ export function mountApp(root: HTMLElement): void {
         break;
       case 'filter':
         send({ type: 'paintFilter', x, y, radius: wallBrushRadius(tool, brushWidth) });
+        break;
+      case 'flask':
+        send({ type: 'placeFlask', x, y, facing: flaskFacing, sizeScale: flaskSizeScale, stirred: tool.stirred });
         break;
       case 'grabber':
         break;
@@ -949,10 +994,15 @@ export function mountApp(root: HTMLElement): void {
   canvas.addEventListener(
     'wheel',
     (event) => {
-      if (tool?.kind !== 'funnel') return;
-      event.preventDefault();
-      funnelFacing = nextFunnelFacing(funnelFacing, event.deltaY > 0 ? 1 : -1);
-      updateApparatusOverlay(lastHoverX, lastHoverY);
+      if (tool?.kind === 'funnel') {
+        event.preventDefault();
+        funnelFacing = nextFunnelFacing(funnelFacing, event.deltaY > 0 ? 1 : -1);
+        updateApparatusOverlay(lastHoverX, lastHoverY);
+      } else if (tool?.kind === 'flask') {
+        event.preventDefault();
+        flaskFacing = nextFlaskFacing(flaskFacing, event.deltaY > 0 ? 1 : -1);
+        updateApparatusOverlay(lastHoverX, lastHoverY);
+      }
     },
     { passive: false },
   );

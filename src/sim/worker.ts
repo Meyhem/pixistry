@@ -44,6 +44,8 @@ import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable } from './species';
 import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
+import { flaskShapeFor } from './flask-shapes';
+import { stampGlass } from './apparatus';
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -265,6 +267,26 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'updateTube':
       withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
       break;
+    case 'placeFlask': {
+      // A placed flask isn't tracked state like a funnel/tube -- it's a
+      // one-shot stamp (real glass walls, plus stirrerMask for the stirred
+      // variant), same as painting a wall material. No instance array, no
+      // per-tick step function.
+      const shape = flaskShapeFor(msg.facing, msg.sizeScale);
+      stampGlass(
+        grid,
+        species,
+        shape.cells.map((cell) => ({ x: msg.x + cell.dx, y: msg.y + cell.dy })),
+      );
+      if (msg.stirred) {
+        for (const cell of shape.reservoirCells) {
+          const x = msg.x + cell.dx;
+          const y = msg.y + cell.dy;
+          if (grid.inBounds(x, y)) grid.stirrerMask[grid.index(x, y)] = 1;
+        }
+      }
+      break;
+    }
   }
 };
 

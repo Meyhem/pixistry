@@ -13,6 +13,7 @@ import { formatCelsius } from './format';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el, hintBox, propRow } from './dom';
 import { buildSpeciesChipList } from './species-chip-list';
+import { MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE } from '../sim/flask-shapes';
 
 export interface ToolMeta {
   label: string;
@@ -38,6 +39,10 @@ export interface ToolMeta {
    * "edit" mode, since a filter line isn't a tracked instance: its
    * allow-list is one global config, live-edited straight from the tool). */
   filterPanel: 'none' | 'config';
+  /** The flask tool's size panel -- same 2-state convention as filterPanel:
+   * a placed flask isn't a tracked instance either, so there's no "edit"
+   * mode, only pre-placement config. */
+  flaskPanel: 'none' | 'config';
 }
 
 export interface TubeFieldValues {
@@ -85,6 +90,8 @@ export interface SidePanelCallbacks {
   filterPalette: readonly PaletteEntry[];
   onOpenFilterSpeciesPicker(): void;
   onRemoveFilterSpecies(specId: number): void;
+  flaskSizeScale: number;
+  onSetFlaskSize(value: number): void;
 }
 
 const MIN_RADIUS = 1;
@@ -289,6 +296,20 @@ function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   );
 }
 
+function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
+  if (meta.flaskPanel === 'none') return;
+  addDivider(container);
+
+  addSlider(container, 'Size', MIN_FLASK_SIZE_SCALE, MAX_FLASK_SIZE_SCALE, 0.1, cb.flaskSizeScale, (v) => `${v.toFixed(1)}x`, cb.onSetFlaskSize);
+
+  container.appendChild(
+    hintBox(
+      'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor.',
+      'HOW IT WORKS',
+    ),
+  );
+}
+
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   container.innerHTML = '';
 
@@ -349,4 +370,5 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   addFunnelPanel(container, meta, cb);
   addTubePanel(container, meta, cb);
   addFilterPanel(container, meta, cb);
+  addFlaskPanel(container, meta, cb);
 }

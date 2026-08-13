@@ -15,7 +15,18 @@ import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 
-export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'tube' | 'filter' | 'select-apparatus';
+export type ToolKind =
+  | 'radiator'
+  | 'erase'
+  | 'mixer'
+  | 'grabber'
+  | 'funnel'
+  | 'stirrer'
+  | 'tube'
+  | 'filter'
+  | 'flask-erlenmeyer'
+  | 'flask-erlenmeyer-stirred'
+  | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
 export const SELECT_APPARATUS_COLOR = '#4da3ff';
@@ -123,6 +134,28 @@ export function buildToolbar(
   );
   apparatus.items.appendChild(makePaletteButton(TUBE_LABEL, TUBE_COLOR, cb.isToolActive('tube'), () => cb.onSelectTool('tube')));
   apparatus.items.appendChild(makePaletteButton(FILTER_LABEL, FILTER_COLOR, cb.isToolActive('filter'), () => cb.onSelectTool('filter')));
+
+  const flaskSelect = el('select', 'flask-select');
+  const flaskPlaceholder = el('option');
+  flaskPlaceholder.value = '';
+  flaskPlaceholder.textContent = 'Flasks';
+  flaskPlaceholder.disabled = true;
+  flaskSelect.appendChild(flaskPlaceholder);
+  const flaskOptions: { value: 'flask-erlenmeyer' | 'flask-erlenmeyer-stirred'; label: string }[] = [
+    { value: 'flask-erlenmeyer', label: 'Erlenmeyer' },
+    { value: 'flask-erlenmeyer-stirred', label: 'Erlenmeyer (stirred)' },
+  ];
+  for (const opt of flaskOptions) {
+    const option = el('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    flaskSelect.appendChild(option);
+  }
+  const activeFlask = flaskOptions.find((opt) => cb.isToolActive(opt.value));
+  flaskSelect.value = activeFlask ? activeFlask.value : '';
+  flaskSelect.onchange = () => cb.onSelectTool(flaskSelect.value as ToolKind);
+  apparatus.items.appendChild(flaskSelect);
+
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');
