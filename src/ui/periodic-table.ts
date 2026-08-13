@@ -8,6 +8,7 @@ import type { PaletteEntry } from '../sim/species';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { formatCelsius } from './format';
 import { CATEGORY_HUE, CATEGORY_LABEL, COMPOUNDS_FOR_ELEMENT, ELEMENTS, PURE_FOR_ELEMENT } from './periodic-data';
+import { el, propRow } from './dom';
 
 export interface PeriodicTableCallbacks {
   selectedSymbol: string | null;
@@ -16,12 +17,6 @@ export interface PeriodicTableCallbacks {
   onSelectSpecies(specId: number): void;
   onTogglePin(label: string): void;
   onClose(): void;
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  return node;
 }
 
 export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[], cb: PeriodicTableCallbacks): void {
@@ -110,19 +105,8 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
     detail.appendChild(divider1);
 
     const props = el('div', 'prop-list');
-    for (const [label, value] of [
-      ['Melting point', formatCelsius(pureEntry.meltingPointC)],
-      ['Boiling point', formatCelsius(pureEntry.boilingPointC)],
-    ] as const) {
-      const row = el('div', 'prop-row');
-      const l = el('span', 'prop-label');
-      l.textContent = label;
-      const v = el('span', 'prop-value');
-      v.textContent = value;
-      row.appendChild(l);
-      row.appendChild(v);
-      props.appendChild(row);
-    }
+    props.appendChild(propRow('Melting point', formatCelsius(pureEntry.meltingPointC)));
+    props.appendChild(propRow('Boiling point', formatCelsius(pureEntry.boilingPointC)));
     detail.appendChild(props);
   }
 

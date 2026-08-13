@@ -11,6 +11,7 @@
 import type { PaletteEntry } from '../sim/species';
 import { formatCelsius } from './format';
 import { contrastTextColor, contrastTextShadow } from './contrast';
+import { el, hintBox, propRow } from './dom';
 
 export interface ToolMeta {
   label: string;
@@ -86,12 +87,6 @@ const MIN_FUNNEL_RATE = 1;
 const MAX_FUNNEL_RATE = 600;
 const MIN_TUBE_CONE_SIZE = 0;
 const MAX_TUBE_CONE_SIZE = 10;
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  return node;
-}
 
 function addSlider(
   container: HTMLElement,
@@ -196,11 +191,7 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   addDivider(container);
 
   if (meta.funnelPanel === 'edit-empty') {
-    const hint = el('div', 'setting-hint-box');
-    const body = el('p', 'setting-hint');
-    body.textContent = 'Click a placed apparatus on the grid to select it.';
-    hint.appendChild(body);
-    container.appendChild(hint);
+    container.appendChild(hintBox('Click a placed apparatus on the grid to select it.'));
     return;
   }
 
@@ -214,14 +205,7 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   }
 
   if (meta.funnelPanel === 'edit') {
-    const status = el('div', 'prop-row');
-    const l = el('span', 'prop-label');
-    l.textContent = 'Remaining';
-    const v = el('span', 'prop-value');
-    v.textContent = f.remaining === null ? 'infinite' : String(f.remaining);
-    status.appendChild(l);
-    status.appendChild(v);
-    container.appendChild(status);
+    container.appendChild(propRow('Remaining', f.remaining === null ? 'infinite' : String(f.remaining)));
 
     const resetBtn = el('button', 'funnel-reset-btn');
     resetBtn.textContent = 'Reset';
@@ -229,17 +213,14 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
     container.appendChild(resetBtn);
   }
 
-  const hint = el('div', 'setting-hint-box');
-  const hintTitle = el('div', 'setting-hint-title');
-  hintTitle.textContent = 'HOW IT WORKS';
-  const hintBody = el('p', 'setting-hint');
-  hintBody.textContent =
-    meta.funnelPanel === 'config'
-      ? 'Rotate with the scroll wheel while hovering the grid, then click to place. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
-      : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it.";
-  hint.appendChild(hintTitle);
-  hint.appendChild(hintBody);
-  container.appendChild(hint);
+  container.appendChild(
+    hintBox(
+      meta.funnelPanel === 'config'
+        ? 'Rotate with the scroll wheel while hovering the grid, then click to place. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
+        : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it.",
+      'HOW IT WORKS',
+    ),
+  );
 }
 
 function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
@@ -282,17 +263,14 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   filterWrap.appendChild(list);
   container.appendChild(filterWrap);
 
-  const hint = el('div', 'setting-hint-box');
-  const hintTitle = el('div', 'setting-hint-title');
-  hintTitle.textContent = 'HOW IT WORKS';
-  const hintBody = el('p', 'setting-hint');
-  hintBody.textContent =
-    meta.tubePanel === 'config'
-      ? 'Click to place each knee, right-click to finish (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
-      : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. These settings only affect this tube's future suction, not cargo already inside.";
-  hint.appendChild(hintTitle);
-  hint.appendChild(hintBody);
-  container.appendChild(hint);
+  container.appendChild(
+    hintBox(
+      meta.tubePanel === 'config'
+        ? 'Click to place each knee, right-click to finish (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
+        : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. These settings only affect this tube's future suction, not cargo already inside.",
+      'HOW IT WORKS',
+    ),
+  );
 }
 
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
@@ -317,20 +295,9 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
 
   if (meta.isSpecies) {
     const props = el('div', 'prop-list');
-    for (const [label, value] of [
-      ['Melting point', meta.meltLabel],
-      ['Boiling point', meta.boilLabel],
-      ['Phase at 20°C', meta.phaseLabel],
-    ] as const) {
-      const row = el('div', 'prop-row');
-      const l = el('span', 'prop-label');
-      l.textContent = label;
-      const v = el('span', 'prop-value');
-      v.textContent = value;
-      row.appendChild(l);
-      row.appendChild(v);
-      props.appendChild(row);
-    }
+    props.appendChild(propRow('Melting point', meta.meltLabel));
+    props.appendChild(propRow('Boiling point', meta.boilLabel));
+    props.appendChild(propRow('Phase at 20°C', meta.phaseLabel));
     container.appendChild(props);
     addDivider(container);
   }
@@ -355,15 +322,12 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     );
     addSlider(container, 'Target temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, cb.targetTempC, formatCelsius, cb.onSetTargetTemp);
 
-    const hint = el('div', 'setting-hint-box');
-    const hintTitle = el('div', 'setting-hint-title');
-    hintTitle.textContent = 'HOW IT WORKS';
-    const hintBody = el('p', 'setting-hint');
-    hintBody.textContent =
-      'Radiates toward the target temperature every tick, within the radiation radius -- heats cells below it, cools cells above it. Pure radiation, no collision. These settings are captured when you paint, so changing them afterward won\'t affect radiators already placed.';
-    hint.appendChild(hintTitle);
-    hint.appendChild(hintBody);
-    container.appendChild(hint);
+    container.appendChild(
+      hintBox(
+        "Radiates toward the target temperature every tick, within the radiation radius -- heats cells below it, cools cells above it. Pure radiation, no collision. These settings are captured when you paint, so changing them afterward won't affect radiators already placed.",
+        'HOW IT WORKS',
+      ),
+    );
   }
 
   addFunnelPanel(container, meta, cb);

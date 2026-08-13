@@ -12,6 +12,7 @@ import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { contrastTextColor, contrastTextShadow } from './contrast';
+import { el } from './dom';
 
 export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'tube' | 'select-apparatus';
 
@@ -36,12 +37,6 @@ export interface ToolbarCallbacks {
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  return node;
-}
 
 function makeRow(label: string): { row: HTMLDivElement; items: HTMLDivElement } {
   const row = el('div', 'control-row');
