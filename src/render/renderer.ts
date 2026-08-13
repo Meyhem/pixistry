@@ -11,7 +11,7 @@
 // so each grid cell ends up as a crisp SUPERSAMPLE x SUPERSAMPLE block of
 // screen pixels with the border as its outer ring and the pure species
 // color in the middle.
-import { EMPTY, PhaseCode } from '../sim/grid';
+import { EMPTY, PhaseCode, TubeMaskValue } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
 
 export const SUPERSAMPLE = 3;
@@ -33,6 +33,13 @@ export interface FrameData {
    * reduced strength (see FUNNEL_FILL_STRENGTH) so it reads as "container
    * contents" rather than being visually identical to a real painted cell. */
   funnelFillSpecId: Uint16Array;
+  /** Conveyor-tube overlay (see grid.ts's tubeMask) -- TubeMaskValue.Lumen
+   * inside the tube's transport path, .Cone in its suction cone, .None
+   * elsewhere. Like the stirrer mask, this isn't matter and has no color
+   * of its own; unlike the stirrer mask it must stay visible even when a
+   * cargo cell's own species color is drawn over it, since the lumen shape
+   * is otherwise only implied by its wall ring. */
+  tubeMask: Uint8Array;
 }
 
 export interface Renderer {
@@ -144,6 +151,14 @@ const FUNNEL_FILL_STRENGTH = 0.6;
 const STIRRER_GLOW_RGB: [number, number, number] = [168, 119, 240];
 const STIRRER_GLOW_STRENGTH = 0.2;
 
+// Conveyor-tube overlay tint: the lumen gets a faint glass-blue wash (same
+// hue family as the tube's own glass walls) so its path reads even while
+// occupied by cargo of any color; the cone is tinted more strongly since
+// it's otherwise invisible open space with no wall ring to imply its shape.
+const TUBE_LUMEN_TINT_RGB: [number, number, number] = [169, 214, 232];
+const TUBE_LUMEN_TINT_STRENGTH = 0.18;
+const TUBE_CONE_TINT_STRENGTH = 0.35;
+
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
   return [
@@ -252,7 +267,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, funnelFillSpecId }: FrameData): void {
+    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, tubeMask, funnelFillSpecId }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -285,6 +300,9 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           if (hGlow > 0) interiorRgba = tintTowards(interiorRgba, HOT_MID_RGB, hGlow * GLOW_MAX_STRENGTH);
           if (cGlow > 0) interiorRgba = tintTowards(interiorRgba, COLD_MID_RGB, cGlow * GLOW_MAX_STRENGTH);
           if ((stirrerMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, STIRRER_GLOW_RGB, STIRRER_GLOW_STRENGTH);
+          const tube = tubeMask[i] as TubeMaskValue;
+          if (tube === TubeMaskValue.Lumen) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
+          else if (tube === TubeMaskValue.Cone) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_CONE_TINT_STRENGTH);
 
           let ringRgba = interiorRgba;
           if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);

@@ -8,6 +8,7 @@
 // a remaining-supply readout are shown (meta.funnelPanel). Rebuilt wholesale
 // whenever the active tool or any of its settings change -- see app.ts's
 // render().
+import type { PaletteEntry } from '../sim/species';
 import { formatCelsius } from './format';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 
@@ -26,6 +27,17 @@ export interface ToolMeta {
    * funnel tool). 'edit-empty': select-apparatus tool with nothing selected
    * yet. 'edit': select-apparatus tool with a placed funnel selected. */
   funnelPanel: 'none' | 'config' | 'edit-empty' | 'edit';
+  /** Same 3-state convention as funnelPanel, for the conveyor-tube tool --
+   * 'edit-empty' is shared between the two apparatus types (select-
+   * apparatus with nothing selected looks the same regardless of which
+   * kind of apparatus the player might click next). */
+  tubePanel: 'none' | 'config' | 'edit';
+}
+
+export interface TubeFieldValues {
+  coneSize: number;
+  /** null = accept every species (the default). */
+  filter: ReadonlySet<number> | null;
 }
 
 export interface FunnelFieldValues {
@@ -55,6 +67,12 @@ export interface SidePanelCallbacks {
   onSetFunnelTotalMode(mode: 'finite' | 'infinite'): void;
   onSetFunnelTotalAmount(value: number): void;
   onResetFunnel(): void;
+  tubeFields: TubeFieldValues;
+  /** Every paintable species, for the filter's checkbox list. */
+  tubePalette: readonly PaletteEntry[];
+  onSetTubeConeSize(value: number): void;
+  onToggleTubeFilterSpecies(specId: number): void;
+  onClearTubeFilter(): void;
 }
 
 const MIN_RADIUS = 1;
@@ -66,6 +84,8 @@ const MAX_TEMP_C = 1500;
 const TEMP_STEP_C = 5;
 const MIN_FUNNEL_RATE = 1;
 const MAX_FUNNEL_RATE = 600;
+const MIN_TUBE_CONE_SIZE = 0;
+const MAX_TUBE_CONE_SIZE = 10;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -222,6 +242,59 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   container.appendChild(hint);
 }
 
+function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
+  if (meta.tubePanel === 'none') return;
+  addDivider(container);
+
+  const f = cb.tubeFields;
+  addSlider(container, 'Suction cone size', MIN_TUBE_CONE_SIZE, MAX_TUBE_CONE_SIZE, 1, f.coneSize, (v) => String(v), cb.onSetTubeConeSize);
+
+  const filterWrap = el('div', 'setting');
+  const filterHeader = el('div', 'setting-row');
+  const filterLabel = el('span', 'setting-label');
+  filterLabel.textContent = 'Species filter';
+  filterHeader.appendChild(filterLabel);
+  if (f.filter !== null) {
+    const clearBtn = el('button', 'funnel-toggle-btn');
+    clearBtn.textContent = 'All';
+    clearBtn.onclick = cb.onClearTubeFilter;
+    filterHeader.appendChild(clearBtn);
+  }
+  filterWrap.appendChild(filterHeader);
+
+  const list = el('div', 'tube-filter-list');
+  for (const entry of cb.tubePalette) {
+    const checked = f.filter === null || f.filter.has(entry.specId);
+    const row = el('label', 'tube-filter-item');
+    const checkbox = el('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = checked;
+    checkbox.onchange = () => cb.onToggleTubeFilterSpecies(entry.specId);
+    const swatch = el('span', 'tube-filter-swatch');
+    swatch.style.background = entry.color;
+    const name = el('span', 'tube-filter-name');
+    name.textContent = entry.label;
+    row.appendChild(checkbox);
+    row.appendChild(swatch);
+    row.appendChild(name);
+    list.appendChild(row);
+  }
+  filterWrap.appendChild(list);
+  container.appendChild(filterWrap);
+
+  const hint = el('div', 'setting-hint-box');
+  const hintTitle = el('div', 'setting-hint-title');
+  hintTitle.textContent = 'HOW IT WORKS';
+  const hintBody = el('p', 'setting-hint');
+  hintBody.textContent =
+    meta.tubePanel === 'config'
+      ? 'Click to place each knee, right-click to finish (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
+      : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. These settings only affect this tube's future suction, not cargo already inside.";
+  hint.appendChild(hintTitle);
+  hint.appendChild(hintBody);
+  container.appendChild(hint);
+}
+
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   container.innerHTML = '';
 
@@ -294,4 +367,5 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   }
 
   addFunnelPanel(container, meta, cb);
+  addTubePanel(container, meta, cb);
 }

@@ -2,7 +2,7 @@
 // design doc. Density (not a fixed solid > liquid > gas ranking) decides
 // whether a cell may displace its neighbour, so a denser gas can still sink
 // through a lighter one, etc. Swaps are probabilistic so mixing takes time.
-import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { massOf, temperatureOf } from './heat';
 import type { SpeciesTable } from './species';
 import { isWallSpecId } from './walls';
@@ -37,6 +37,11 @@ function canDisplace(
   targetIdx: number,
   direction: 'down' | 'up',
 ): boolean {
+  // A tube's lumen is only ever entered via its own suction cone (see
+  // tube.ts's stepTubes), never by ordinary falling-sand displacement --
+  // otherwise matter could fall/rise straight into the middle of a tube,
+  // bypassing the mouth and its species filter entirely.
+  if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return false;
   if (grid.isEmptyAt(targetIdx)) return true;
   const targetSpecId = grid.specId[targetIdx] as number;
   if (isWallSpecId(targetSpecId)) return false;
@@ -66,6 +71,7 @@ function canRiseThroughLiquid(
   fromPhase: PhaseCode,
   targetIdx: number,
 ): boolean {
+  if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return false;
   if (grid.isEmptyAt(targetIdx)) return false;
   const targetSpecId = grid.specId[targetIdx] as number;
   if (isWallSpecId(targetSpecId)) return false;
@@ -146,6 +152,7 @@ function moveFalling(
     if (!grid.inBounds(nx, y)) continue;
     const nIdx = grid.index(nx, y);
     if (moved[nIdx]) continue;
+    if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
     if (grid.isEmptyAt(nIdx)) {
       if (rng() < LIQUID_SPREAD_P) {
         grid.swap(idx, nIdx);
@@ -211,6 +218,7 @@ function moveRising(
     if (!grid.inBounds(nx, y)) continue;
     const nIdx = grid.index(nx, y);
     if (moved[nIdx]) continue;
+    if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
     if (grid.isEmptyAt(nIdx) && rng() < GAS_SPREAD_P) {
       grid.swap(idx, nIdx);
       moved[idx] = 1;
@@ -238,6 +246,11 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       // infinitely-dense solid, since that would still cost a canDisplace
       // check every tick for no benefit.
       if (isWallSpecId(specId)) continue;
+      // A cell inside a tube's lumen only moves via stepTubes' own
+      // exit-first advance (tube.ts) -- ordinary gravity/buoyancy is
+      // suppressed there so contents can't fall/rise out of the lumen
+      // sideways before the tube gets a chance to walk them along its path.
+      if ((grid.tubeMask[idx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
       const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true);

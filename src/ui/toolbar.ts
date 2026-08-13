@@ -10,9 +10,10 @@ import type { WallMaterial } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
+import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 
-export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'select-apparatus';
+export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'stirrer' | 'tube' | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
 export const SELECT_APPARATUS_COLOR = '#4da3ff';
@@ -124,6 +125,7 @@ export function buildToolbar(
   apparatus.items.appendChild(
     makePaletteButton(STIRRER_LABEL, STIRRER_COLOR, cb.isToolActive('stirrer'), () => cb.onSelectTool('stirrer')),
   );
+  apparatus.items.appendChild(makePaletteButton(TUBE_LABEL, TUBE_COLOR, cb.isToolActive('tube'), () => cb.onSelectTool('tube')));
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');

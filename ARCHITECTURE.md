@@ -130,6 +130,22 @@ probability gating, energy bookkeeping).
   decides its real resulting phase. The resulting energy is passed through `heat.ts`'s
   `clampEnergyToMaxTemp` (see above) before being written, so a cell that keeps getting re-ignited tick
   after tick can't climb unboundedly.
+- **`tube-shapes.ts`** / **`tube.ts`** — the conveyor-tube apparatus: a player-drawn, multi-segment
+  polyline (knees snapped to one of 8 directions from the previous knee, in `tube-shapes.ts`'s
+  `snapOctant`) turned into a cell-by-cell lumen path, a wall ring (every 8-neighbor of a lumen cell that
+  isn't itself lumen — watertight at any knee angle by construction, no per-angle special casing), and a
+  widening suction cone at the mouth. Unlike the funnel's glass outline, the lumen itself isn't stamped as
+  matter — only the wall ring is real glass — so a tube's lumen is a pure overlay (`grid.tubeMask`,
+  alongside `radiatorRadius`/`stirrerMask`'s "fixed background field" convention) and whatever real matter
+  sits in a lumen cell *is* the tube's cargo. `movement.ts` already knows to leave lumen cells alone as
+  both a mover and a destination, so `tube.ts`'s `stepTubes` is the only thing that ever moves them: an
+  exit-first backward pass (so a full column advances by exactly one cell per tick, not cascading) with
+  backpressure falling out for free when the exit or mouth is blocked, plus a mouth-outward cone-suction
+  pass pulling matching cells (per an optional species allowlist) one step toward the mouth per tick.
+  Editing a placed tube (dragging a knee or a whole segment with the select-apparatus tool) always keeps
+  every segment octant-aligned, even though a dragged knee generally can't land on an octant ray from both
+  its fixed neighbors at once — `resolveKneePosition` brute-forces the 8x8 direction-pair combinations and
+  picks the valid intersection closest to the cursor.
 - **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> radiate -> conduct -> react`, per
   the design doc's order — `stepGlassRadiators` takes the point-heat-source slot conduction previously
   shared with the cursor-driven burner/coolant tool), and talks to the main thread over `postMessage`.

@@ -12,6 +12,12 @@ export enum PhaseCode {
   Gas = 3,
 }
 
+export enum TubeMaskValue {
+  None = 0,
+  Lumen = 1,
+  Cone = 2,
+}
+
 export class SimGrid {
   readonly width: number;
   readonly height: number;
@@ -38,6 +44,15 @@ export class SimGrid {
    * read every tick by stirrer.ts's stepStirrers to keep randomizing
    * whatever liquid/gas cells sit inside it. */
   readonly stirrerMask: Uint8Array;
+  /** Conveyor-tube overlay -- same "fixed background field, not matter"
+   * convention as radiatorRadius/stirrerMask above: painted once by
+   * placeTubeInstance/moveTubeKnee/moveTubeSegment (see tube.ts), left
+   * untouched by set/clear/swap, and read every tick by both movement.ts
+   * (a lumen cell is never a valid destination for ordinary falling-sand
+   * movement -- only stepTubes moves matter along it) and tube.ts's
+   * stepTubes (which walks the lumen and pulls matching cells through the
+   * cone). TubeMaskValue.None everywhere a tube isn't drawn. */
+  readonly tubeMask: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -49,6 +64,7 @@ export class SimGrid {
     this.radiatorRadius = new Uint8Array(size);
     this.radiatorTargetK = new Float32Array(size);
     this.stirrerMask = new Uint8Array(size);
+    this.tubeMask = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {

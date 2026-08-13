@@ -41,6 +41,8 @@ import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 import { stepStirrers } from './stirrer';
+import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
+import type { Point } from './tube-shapes';
 
 export interface FunnelSnapshot {
   id: number;
@@ -54,6 +56,14 @@ export interface FunnelSnapshot {
   remaining: number | null;
 }
 
+export interface TubeSnapshot {
+  id: number;
+  points: Point[];
+  coneSize: number;
+  /** null = accept every species. */
+  filter: number[] | null;
+}
+
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
   | {
@@ -64,8 +74,10 @@ export type WorkerToMainMessage =
       radiatorRadius: Uint8Array;
       radiatorTargetK: Float32Array;
       stirrerMask: Uint8Array;
+      tubeMask: Uint8Array;
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
+      tubes: TubeSnapshot[];
       tick: number;
     };
 
@@ -95,7 +107,11 @@ export type MainToWorkerMessage =
     }
   | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
   | { type: 'resetFunnel'; id: number }
-  | { type: 'moveFunnel'; id: number; x: number; y: number };
+  | { type: 'moveFunnel'; id: number; x: number; y: number }
+  | { type: 'placeTube'; points: Point[]; coneSize: number; filter: number[] | null }
+  | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
+  | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
+  | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null };
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -134,6 +150,11 @@ let stirState: { x: number; y: number; radius: number } | null = null;
 // a plain array rather than a SimGrid field.
 let funnels: FunnelInstance[] = [];
 
+// Placed conveyor-tubes (see tube.ts) -- tracked the same way funnels are,
+// for the same reason: knee points/cone size/species filter aren't
+// representable as a value per grid cell.
+let tubes: TubeInstance[] = [];
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -154,6 +175,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++);
+  stepTubes(grid, tubes);
   if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
   stepStirrers(grid, rng);
   stepRadiators(grid, species, TICK_DT_SECONDS);
@@ -215,6 +237,15 @@ function funnelSnapshots(): FunnelSnapshot[] {
   }));
 }
 
+function tubeSnapshots(): TubeSnapshot[] {
+  return tubes.map((t) => ({
+    id: t.id,
+    points: t.points.map((p) => ({ x: p.x, y: p.y })),
+    coneSize: t.coneSize,
+    filter: t.filter ? [...t.filter] : null,
+  }));
+}
+
 function overlayGrabbedCells(specId: Uint16Array, phase: Uint8Array, tempK: Float32Array): void {
   if (!grabState) return;
   for (const cell of grabState.cells) {
@@ -237,9 +268,23 @@ function postFrame(): void {
   const radiatorRadius = grid.radiatorRadius.slice();
   const radiatorTargetK = grid.radiatorTargetK.slice();
   const stirrerMask = grid.stirrerMask.slice();
+  const tubeMask = grid.tubeMask.slice();
   const funnelFillSpecId = computeFunnelFill();
   overlayGrabbedCells(specId, phase, tempK);
-  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, stirrerMask, funnelFillSpecId, funnels: funnelSnapshots(), tick });
+  post({
+    type: 'frame',
+    specId,
+    phase,
+    tempK,
+    radiatorRadius,
+    radiatorTargetK,
+    stirrerMask,
+    tubeMask,
+    funnelFillSpecId,
+    funnels: funnelSnapshots(),
+    tubes: tubeSnapshots(),
+    tick,
+  });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -272,6 +317,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.clear(px, py);
         grid.radiatorRadius[grid.index(px, py)] = 0;
         grid.stirrerMask[grid.index(px, py)] = 0;
+        grid.tubeMask[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the
@@ -281,6 +327,18 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         const dx = f.anchorX - msg.x;
         const dy = f.anchorY - msg.y;
         return dx * dx + dy * dy > msg.radius * msg.radius;
+      });
+      // Same convention for a tube: erasing any one of its knee points
+      // deletes the whole instance (there's no dedicated delete button
+      // here either), rather than leaving a stale tracked path behind
+      // whenever the eraser only grazes a wall/lumen cell in its middle.
+      tubes = tubes.filter((t) => {
+        const hitKnee = t.points.some((p) => {
+          const dx = p.x - msg.x;
+          const dy = p.y - msg.y;
+          return dx * dx + dy * dy <= msg.radius * msg.radius;
+        });
+        return !hitKnee;
       });
       break;
     case 'setRunning':
@@ -346,6 +404,24 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'moveFunnel': {
       const instance = funnels.find((f) => f.id === msg.id);
       if (instance) moveFunnelInstance(grid, instance, msg.x, msg.y);
+      break;
+    }
+    case 'placeTube':
+      tubes.push(placeTubeInstance(grid, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
+      break;
+    case 'moveTubeKnee': {
+      const instance = tubes.find((t) => t.id === msg.id);
+      if (instance) moveTubeKnee(grid, instance, msg.kneeIndex, { x: msg.x, y: msg.y });
+      break;
+    }
+    case 'moveTubeSegment': {
+      const instance = tubes.find((t) => t.id === msg.id);
+      if (instance) moveTubeSegment(grid, instance, msg.segIndex, msg.dx, msg.dy);
+      break;
+    }
+    case 'updateTube': {
+      const instance = tubes.find((t) => t.id === msg.id);
+      if (instance) updateTubeInstance(grid, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null });
       break;
     }
   }

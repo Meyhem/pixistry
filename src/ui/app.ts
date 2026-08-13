@@ -8,7 +8,7 @@
 // together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
-import type { FunnelSnapshot, MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
+import type { FunnelSnapshot, MainToWorkerMessage, TubeSnapshot, WorkerToMainMessage } from '../sim/worker';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
@@ -16,9 +16,19 @@ import { getWall, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
+import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
+import {
+  lumenWallCells,
+  nearestKneeIndex,
+  nearestSegmentIndex,
+  pointSegmentDistance,
+  polylineToLumenPath,
+  snapOctant,
+  type Point,
+} from '../sim/tube-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
-import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta } from './side-panel';
+import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { isElementLabel } from './species-classify';
 import { SPECIES } from '../sim/species-data';
@@ -32,6 +42,12 @@ const DEFAULT_FUNNEL_RATE_PER_MINUTE = 60;
 const DEFAULT_FUNNEL_TOTAL_AMOUNT = 100;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
+// How close (in grid cells) a click/hover needs to be to grab a tube's knee
+// or segment with the select-apparatus tool -- knees get first refusal
+// (checked before segments) so a click near a knee never accidentally grabs
+// the segment it terminates instead.
+const TUBE_KNEE_HIT_RADIUS = 3;
+const TUBE_SEGMENT_HIT_RADIUS = 2;
 
 type Tool =
   | { kind: 'paint'; specId: number }
@@ -42,6 +58,7 @@ type Tool =
   | { kind: 'grabber' }
   | { kind: 'funnel' }
   | { kind: 'stirrer' }
+  | { kind: 'tube' }
   | { kind: 'select-apparatus' };
 
 /** Local draft for the select-apparatus tool's edit panel -- mirrors a
@@ -139,7 +156,7 @@ export function mountApp(root: HTMLElement): void {
   brushOutline.style.display = 'none';
   canvasWrap.appendChild(brushOutline);
 
-  // Ghost preview for the funnel tool (see updateFunnelPreview): a 2D
+  // Ghost preview for the funnel tool (see updateApparatusOverlay): a 2D
   // overlay canvas rather than the WebGL sim canvas, since it needs to draw
   // an unrotated-in-the-grid-sense but freely positioned pixel shape purely
   // client-side, redrawn on every mousemove/wheel without round-tripping
@@ -238,6 +255,38 @@ export function mountApp(root: HTMLElement): void {
   let dragOffsetX = 0;
   let dragOffsetY = 0;
 
+  // Conveyor-tube tool config (pre-placement) -- same "captured at placement
+  // time" convention as the funnel's config above.
+  let tubeConeSize = DEFAULT_TUBE_CONE_SIZE;
+  let tubeFilter: Set<number> | null = null; // null = accept every species
+
+  // In-progress polygon draw (tool === 'tube'): points already committed by
+  // a click, plus a live rubber-band preview point tracking the cursor
+  // (snapped from the last committed point -- see updateTubeDrawPreview).
+  // Cleared back to [] on right-click/Escape (see finishOrCancelTubeDraw).
+  let tubeDrawPoints: Point[] = [];
+  let tubeDrawPreview: Point | null = null;
+
+  // select-apparatus tube selection/edit -- mirrors selectedFunnelId/
+  // editDraft above, but a tube's own points only ever change through a
+  // knee/segment drag (moveTubeKnee/moveTubeSegment), never through the
+  // edit draft, so the draft here only covers coneSize/filter.
+  let selectedTubeId: number | null = null;
+  let tubeEditDraft: { coneSize: number; filter: Set<number> | null } | null = null;
+  let lastTubes: TubeSnapshot[] = [];
+
+  // select-apparatus tube drag state: which knee or segment (mutually
+  // exclusive) is being dragged, cleared on pointerup. Segment dragging
+  // tracks the last processed cursor cell so each pointermove can send just
+  // the incremental delta since the previous one (moveTubeSegment applies a
+  // relative translation) -- knee dragging needs no such tracking since
+  // moveTubeKnee already takes an absolute target and re-resolves fully
+  // from the tube's current neighbor points every call.
+  let draggingTubeKnee: number | null = null;
+  let draggingTubeSegment: number | null = null;
+  let tubeSegmentDragLastX = 0;
+  let tubeSegmentDragLastY = 0;
+
   // Label lookup for the probe: every species (SPECIES is a fully static
   // table shared by main thread and worker, so specIds are stable array
   // indices -- no need to round-trip through the worker) plus walls.
@@ -269,6 +318,10 @@ export function mountApp(root: HTMLElement): void {
     return id === null ? undefined : lastFunnels.find((f) => f.id === id);
   }
 
+  function findTube(id: number | null): TubeSnapshot | undefined {
+    return id === null ? undefined : lastTubes.find((t) => t.id === id);
+  }
+
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) {
       return {
@@ -283,6 +336,7 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: false,
         showBrushWidth: true,
         funnelPanel: 'none',
+        tubePanel: 'none',
       };
     }
     if (t.kind === 'paint') {
@@ -300,6 +354,7 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: true,
         showBrushWidth: true,
         funnelPanel: 'none',
+        tubePanel: 'none',
       };
     }
     if (t.kind === 'wall') {
@@ -316,6 +371,7 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: true,
         showBrushWidth: true,
         funnelPanel: 'none',
+        tubePanel: 'none',
       };
     }
     if (t.kind === 'radiator') {
@@ -331,6 +387,7 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: false,
         showBrushWidth: true,
         funnelPanel: 'none',
+        tubePanel: 'none',
       };
     }
     if (t.kind === 'funnel') {
@@ -346,6 +403,23 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: false,
         showBrushWidth: false,
         funnelPanel: 'config',
+        tubePanel: 'none',
+      };
+    }
+    if (t.kind === 'tube') {
+      return {
+        label: TUBE_LABEL,
+        color: TUBE_COLOR,
+        category: 'APPARATUS',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: false,
+        showBrushTemp: false,
+        showBrushWidth: false,
+        funnelPanel: 'none',
+        tubePanel: 'config',
       };
     }
     if (t.kind === 'stirrer') {
@@ -361,14 +435,17 @@ export function mountApp(root: HTMLElement): void {
         showBrushTemp: false,
         showBrushWidth: true,
         funnelPanel: 'none',
+        tubePanel: 'none',
       };
     }
     if (t.kind === 'select-apparatus') {
-      const selected = findFunnel(selectedFunnelId);
+      const selectedFunnel = findFunnel(selectedFunnelId);
+      const selectedTube = selectedFunnel ? undefined : findTube(selectedTubeId);
+      const nothingSelected = !selectedFunnel && !selectedTube;
       return {
-        label: selected ? FUNNEL_LABEL : SELECT_APPARATUS_LABEL,
-        color: selected ? FUNNEL_COLOR : SELECT_APPARATUS_COLOR,
-        category: selected ? 'APPARATUS' : 'TOOL',
+        label: selectedFunnel ? FUNNEL_LABEL : selectedTube ? TUBE_LABEL : SELECT_APPARATUS_LABEL,
+        color: selectedFunnel ? FUNNEL_COLOR : selectedTube ? TUBE_COLOR : SELECT_APPARATUS_COLOR,
+        category: nothingSelected ? 'TOOL' : 'APPARATUS',
         isSpecies: false,
         meltLabel: '',
         boilLabel: '',
@@ -376,7 +453,8 @@ export function mountApp(root: HTMLElement): void {
         isThermal: false,
         showBrushTemp: false,
         showBrushWidth: false,
-        funnelPanel: selected ? 'edit' : 'edit-empty',
+        funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
+        tubePanel: selectedTube ? 'edit' : 'none',
       };
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
@@ -397,10 +475,18 @@ export function mountApp(root: HTMLElement): void {
       showBrushTemp: false,
       showBrushWidth: true,
       funnelPanel: 'none',
+      tubePanel: 'none',
     };
   }
 
   function setTool(next: Tool): void {
+    // Switching away from the tube tool mid-draw discards whatever's been
+    // clicked so far rather than leaving it to silently reappear (still
+    // held in tubeDrawPoints) if the player switches back later.
+    if (tool?.kind === 'tube' && next.kind !== 'tube' && tubeDrawPoints.length > 0) {
+      tubeDrawPoints = [];
+      tubeDrawPreview = null;
+    }
     tool = next;
     render();
   }
@@ -429,6 +515,23 @@ export function mountApp(root: HTMLElement): void {
   function selectFunnel(id: number | null): void {
     selectedFunnelId = id;
     editDraft = null;
+    if (id !== null) selectTube(null);
+  }
+
+  function sendTubeUpdate(): void {
+    if (selectedTubeId === null || !tubeEditDraft) return;
+    send({
+      type: 'updateTube',
+      id: selectedTubeId,
+      coneSize: tubeEditDraft.coneSize,
+      filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null,
+    });
+  }
+
+  function selectTube(id: number | null): void {
+    selectedTubeId = id;
+    tubeEditDraft = null;
+    if (id !== null) selectFunnel(null);
   }
 
   function render(): void {
@@ -472,10 +575,12 @@ export function mountApp(root: HTMLElement): void {
     const meta = describeToolMeta(tool);
     const isEditMode = tool?.kind === 'select-apparatus';
     const selectedFunnel = isEditMode ? findFunnel(selectedFunnelId) : undefined;
+    const selectedTube = isEditMode && !selectedFunnel ? findTube(selectedTubeId) : undefined;
     // The select-apparatus tool's own selection can go stale (the selected
-    // funnel got erased, or depleted+erased) -- drop it rather than keep
-    // pointing an edit panel at nothing.
+    // funnel/tube got erased) -- drop it rather than keep pointing an edit
+    // panel at nothing.
     if (isEditMode && selectedFunnelId !== null && !selectedFunnel) selectFunnel(null);
+    if (isEditMode && selectedTubeId !== null && !selectedTube) selectTube(null);
     if (isEditMode && selectedFunnel && !editDraft) {
       editDraft = {
         specId: selectedFunnel.specId,
@@ -485,6 +590,14 @@ export function mountApp(root: HTMLElement): void {
         totalAmount: selectedFunnel.total ?? funnelTotalAmount,
       };
     }
+    if (isEditMode && selectedTube && !tubeEditDraft) {
+      tubeEditDraft = {
+        coneSize: selectedTube.coneSize,
+        filter: selectedTube.filter ? new Set(selectedTube.filter) : null,
+      };
+    }
+    const isTubeEditMode = isEditMode && !!selectedTube;
+    const tubeFields: TubeFieldValues = isTubeEditMode && tubeEditDraft ? tubeEditDraft : { coneSize: tubeConeSize, filter: tubeFilter };
 
     const funnelFields: FunnelFieldValues =
       isEditMode && editDraft
@@ -573,6 +686,38 @@ export function mountApp(root: HTMLElement): void {
       onResetFunnel: () => {
         if (selectedFunnelId !== null) send({ type: 'resetFunnel', id: selectedFunnelId });
       },
+      tubeFields,
+      tubePalette: palette,
+      onSetTubeConeSize: (value) => {
+        if (isTubeEditMode && tubeEditDraft) {
+          tubeEditDraft.coneSize = value;
+          sendTubeUpdate();
+        } else {
+          tubeConeSize = value;
+        }
+      },
+      onToggleTubeFilterSpecies: (specId) => {
+        if (isTubeEditMode && tubeEditDraft) {
+          if (tubeEditDraft.filter === null) tubeEditDraft.filter = new Set(palette.map((p) => p.specId));
+          if (tubeEditDraft.filter.has(specId)) tubeEditDraft.filter.delete(specId);
+          else tubeEditDraft.filter.add(specId);
+          sendTubeUpdate();
+        } else {
+          if (tubeFilter === null) tubeFilter = new Set(palette.map((p) => p.specId));
+          if (tubeFilter.has(specId)) tubeFilter.delete(specId);
+          else tubeFilter.add(specId);
+        }
+        render();
+      },
+      onClearTubeFilter: () => {
+        if (isTubeEditMode && tubeEditDraft) {
+          tubeEditDraft.filter = null;
+          sendTubeUpdate();
+        } else {
+          tubeFilter = null;
+        }
+        render();
+      },
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -612,6 +757,7 @@ export function mountApp(root: HTMLElement): void {
     }
 
     updateSelectionBox();
+    updateApparatusOverlay(lastHoverX, lastHoverY);
   }
 
   function gridCoordsFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -643,13 +789,43 @@ export function mountApp(root: HTMLElement): void {
     brushOutline.style.height = `${diameterY}px`;
   }
 
-  // Ghost preview for the funnel tool: draws the rotated glass outline at
-  // the hovered cell on a plain 2D overlay canvas (see apparatusPreview's
-  // creation comment). Resized to match the sim canvas's on-screen CSS size
-  // every call -- cheap, since it only happens on hover/wheel while the
-  // funnel tool is active, not every tick.
-  function updateFunnelPreview(x: number, y: number): void {
-    if (tool?.kind !== 'funnel' || gridWidth === 0 || gridHeight === 0) {
+  /** Draws a tube's lumen (translucent species-blue) and wall ring
+   * (translucent grey) plus a handle circle over each knee, onto the
+   * already-sized/cleared preview canvas -- shared by the in-progress draw
+   * (tool === 'tube') and the select-apparatus edit overlay for whichever
+   * tube is currently selected, so both read the same visual language. */
+  function drawTubeGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number, isDraft: boolean): void {
+    if (points.length === 0) return;
+    const lumen = polylineToLumenPath(points);
+    ctx.fillStyle = isDraft ? 'rgba(169, 214, 232, 0.45)' : 'rgba(169, 214, 232, 0.3)';
+    for (const cell of lumen) {
+      ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+    }
+    ctx.fillStyle = 'rgba(210, 210, 210, 0.55)';
+    for (const cell of lumenWallCells(lumen)) {
+      ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+    }
+    ctx.fillStyle = isDraft ? '#f2d94e' : '#4da3ff';
+    const handleR = Math.max(3, Math.min(cellPxX, cellPxY) * 0.7);
+    for (const p of points) {
+      ctx.beginPath();
+      ctx.arc((p.x + 0.5) * cellPxX, (p.y + 0.5) * cellPxY, handleR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Ghost preview overlay, drawn on the shared 2D canvas (see
+   * apparatusPreview's creation comment): the funnel tool's rotated glass
+   * outline at the hovered cell, the tube tool's in-progress polyline with
+   * a live rubber-band segment to the cursor, or the select-apparatus
+   * tool's knee/segment handles for whichever tube is currently selected.
+   * Resized to match the sim canvas's on-screen CSS size every call --
+   * cheap, since it only runs on hover/wheel, not every tick. */
+  function updateApparatusOverlay(x: number, y: number): void {
+    const showFunnelGhost = tool?.kind === 'funnel';
+    const showTubeDraw = tool?.kind === 'tube' && tubeDrawPoints.length > 0;
+    const editingTube = tool?.kind === 'select-apparatus' ? findTube(selectedTubeId) : undefined;
+    if ((!showFunnelGhost && !showTubeDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
     }
@@ -666,12 +842,25 @@ export function mountApp(root: HTMLElement): void {
     const cellPxX = rect.width / gridWidth;
     const cellPxY = rect.height / gridHeight;
     previewCtx.clearRect(0, 0, apparatusPreview.width, apparatusPreview.height);
-    previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
-    const shape = funnelShapeFor(funnelFacing);
-    for (const cell of shape.cells) {
-      const px = x + cell.dx;
-      const py = y + cell.dy;
-      previewCtx.fillRect(px * cellPxX, py * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+
+    if (showFunnelGhost) {
+      previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
+      const shape = funnelShapeFor(funnelFacing);
+      for (const cell of shape.cells) {
+        const px = x + cell.dx;
+        const py = y + cell.dy;
+        previewCtx.fillRect(px * cellPxX, py * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+      }
+    }
+
+    if (showTubeDraw) {
+      const last = tubeDrawPoints[tubeDrawPoints.length - 1] as Point;
+      tubeDrawPreview = snapOctant(last, { x, y });
+      drawTubeGhost(previewCtx, [...tubeDrawPoints, tubeDrawPreview], cellPxX, cellPxY, true);
+    }
+
+    if (editingTube) {
+      drawTubeGhost(previewCtx, editingTube.points, cellPxX, cellPxY, false);
     }
   }
 
@@ -688,6 +877,54 @@ export function mountApp(root: HTMLElement): void {
       }
     }
     return null;
+  }
+
+  /** Nearest knee across every placed tube within TUBE_KNEE_HIT_RADIUS, or
+   * null -- checked before hitTestTubeSegment by callers so a click near a
+   * knee never grabs the segment it terminates instead. */
+  function hitTestTubeKnee(x: number, y: number): { tubeId: number; kneeIndex: number } | null {
+    let best: { tubeId: number; kneeIndex: number; dist: number } | null = null;
+    for (const t of lastTubes) {
+      const kneeIndex = nearestKneeIndex(t.points, { x, y }, TUBE_KNEE_HIT_RADIUS);
+      if (kneeIndex === null) continue;
+      const p = t.points[kneeIndex] as Point;
+      const dist = Math.hypot(p.x - x, p.y - y);
+      if (!best || dist < best.dist) best = { tubeId: t.id, kneeIndex, dist };
+    }
+    return best;
+  }
+
+  /** Nearest segment across every placed tube within TUBE_SEGMENT_HIT_RADIUS,
+   * or null. */
+  function hitTestTubeSegment(x: number, y: number): { tubeId: number; segIndex: number } | null {
+    let best: { tubeId: number; segIndex: number; dist: number } | null = null;
+    for (const t of lastTubes) {
+      const segIndex = nearestSegmentIndex(t.points, { x, y }, TUBE_SEGMENT_HIT_RADIUS);
+      if (segIndex === null) continue;
+      const dist = pointSegmentDistance({ x, y }, t.points[segIndex] as Point, t.points[segIndex + 1] as Point);
+      if (!best || dist < best.dist) best = { tubeId: t.id, segIndex, dist };
+    }
+    return best;
+  }
+
+  /** Commits the in-progress tube draw (right-click): places a new tube if
+   * at least one full segment was drawn, or silently discards a lone mouth
+   * click with nothing to commit yet. */
+  function finishTubeDraw(): void {
+    if (tubeDrawPoints.length >= 2) {
+      send({ type: 'placeTube', points: tubeDrawPoints, coneSize: tubeConeSize, filter: tubeFilter ? [...tubeFilter] : null });
+    }
+    cancelTubeDraw();
+  }
+
+  /** Discards the in-progress tube draw entirely (Escape) -- unlike
+   * right-click, never places anything even if segments were already
+   * committed. */
+  function cancelTubeDraw(): void {
+    tubeDrawPoints = [];
+    tubeDrawPreview = null;
+    render();
+    updateApparatusOverlay(lastHoverX, lastHoverY);
   }
 
   /** Positions the select-apparatus tool's corner-bracket overlay over the
@@ -747,17 +984,51 @@ export function mountApp(root: HTMLElement): void {
           total: funnelTotalMode === 'infinite' ? null : funnelTotalAmount,
         });
         break;
+      case 'tube': {
+        const last = tubeDrawPoints[tubeDrawPoints.length - 1];
+        const snapped = last ? snapOctant(last, { x, y }) : { x, y };
+        tubeDrawPoints = [...tubeDrawPoints, snapped];
+        render();
+        break;
+      }
       case 'select-apparatus': {
-        const hitId = hitTestFunnel(x, y);
-        selectFunnel(hitId);
-        const hit = hitId === null ? undefined : findFunnel(hitId);
-        if (hit) {
-          draggingFunnelId = hitId;
-          dragOffsetX = x - hit.anchorX;
-          dragOffsetY = y - hit.anchorY;
-        } else {
-          draggingFunnelId = null;
+        draggingFunnelId = null;
+        draggingTubeKnee = null;
+        draggingTubeSegment = null;
+
+        const hitFunnelId = hitTestFunnel(x, y);
+        if (hitFunnelId !== null) {
+          selectFunnel(hitFunnelId);
+          const hit = findFunnel(hitFunnelId);
+          if (hit) {
+            draggingFunnelId = hitFunnelId;
+            dragOffsetX = x - hit.anchorX;
+            dragOffsetY = y - hit.anchorY;
+          }
+          render();
+          break;
         }
+
+        const kneeHit = hitTestTubeKnee(x, y);
+        if (kneeHit) {
+          selectTube(kneeHit.tubeId);
+          draggingTubeKnee = kneeHit.kneeIndex;
+          render();
+          break;
+        }
+
+        const segHit = hitTestTubeSegment(x, y);
+        if (segHit) {
+          selectTube(segHit.tubeId);
+          draggingTubeSegment = segHit.segIndex;
+          tubeSegmentDragLastX = x;
+          tubeSegmentDragLastY = y;
+          render();
+          break;
+        }
+
+        selectFunnel(null);
+        selectTube(null);
         render();
         break;
       }
@@ -813,13 +1084,24 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'stirMove', x, y });
       } else if (tool?.kind === 'select-apparatus') {
         // Selecting is a single-click action (applyTool already ran once on
-        // pointerdown), but if that click grabbed a funnel, dragging moves
-        // it -- offset-relative to where it was grabbed, not snapped to the
-        // cursor.
+        // pointerdown), but if that click grabbed a funnel or a tube
+        // knee/segment, dragging moves it -- offset-relative to where it
+        // was grabbed for a funnel/knee, incremental-delta for a segment
+        // (see moveTubeSegment's doc comment for why).
         if (draggingFunnelId !== null) {
           send({ type: 'moveFunnel', id: draggingFunnelId, x: x - dragOffsetX, y: y - dragOffsetY });
+        } else if (draggingTubeKnee !== null && selectedTubeId !== null) {
+          send({ type: 'moveTubeKnee', id: selectedTubeId, kneeIndex: draggingTubeKnee, x, y });
+        } else if (draggingTubeSegment !== null && selectedTubeId !== null) {
+          const dx = x - tubeSegmentDragLastX;
+          const dy = y - tubeSegmentDragLastY;
+          if (dx !== 0 || dy !== 0) {
+            send({ type: 'moveTubeSegment', id: selectedTubeId, segIndex: draggingTubeSegment, dx, dy });
+            tubeSegmentDragLastX = x;
+            tubeSegmentDragLastY = y;
+          }
         }
-      } else if (tool?.kind !== 'funnel') {
+      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'tube') {
         // Single-click action (place once) rather than a brush --
         // applyTool already ran once on pointerdown, so a drag shouldn't
         // re-place on every move.
@@ -828,7 +1110,7 @@ export function mountApp(root: HTMLElement): void {
     }
     updateInspector(x, y);
     updateBrushOutline(event);
-    updateFunnelPreview(x, y);
+    updateApparatusOverlay(x, y);
   });
   canvas.addEventListener('pointerleave', () => {
     inspector.classList.add('empty');
@@ -842,10 +1124,22 @@ export function mountApp(root: HTMLElement): void {
       if (tool?.kind !== 'funnel') return;
       event.preventDefault();
       funnelFacing = nextFunnelFacing(funnelFacing, event.deltaY > 0 ? 1 : -1);
-      updateFunnelPreview(lastHoverX, lastHoverY);
+      updateApparatusOverlay(lastHoverX, lastHoverY);
     },
     { passive: false },
   );
+  // Right-click finishes the in-progress tube draw (commits every already-
+  // clicked segment) rather than opening the browser context menu.
+  canvas.addEventListener('contextmenu', (event) => {
+    if (tool?.kind !== 'tube') return;
+    event.preventDefault();
+    finishTubeDraw();
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && tool?.kind === 'tube' && tubeDrawPoints.length > 0) {
+      cancelTubeDraw();
+    }
+  });
   window.addEventListener('pointerup', () => {
     if (isGrabbing) {
       send({ type: 'grabEnd' });
@@ -856,6 +1150,8 @@ export function mountApp(root: HTMLElement): void {
       isMixing = false;
     }
     draggingFunnelId = null;
+    draggingTubeKnee = null;
+    draggingTubeSegment = null;
     isPointerDown = false;
   });
 
@@ -887,6 +1183,7 @@ export function mountApp(root: HTMLElement): void {
       lastRadiatorRadius = msg.radiatorRadius;
       lastRadiatorTargetK = msg.radiatorTargetK;
       lastFunnels = msg.funnels;
+      lastTubes = msg.tubes;
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,
@@ -895,6 +1192,7 @@ export function mountApp(root: HTMLElement): void {
         radiatorRadius: msg.radiatorRadius,
         radiatorTargetK: msg.radiatorTargetK,
         stirrerMask: msg.stirrerMask,
+        tubeMask: msg.tubeMask,
         funnelFillSpecId: msg.funnelFillSpecId,
       });
       // The select-apparatus tool's edit panel shows a placed funnel's live

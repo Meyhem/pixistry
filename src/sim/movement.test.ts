@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
@@ -199,6 +199,36 @@ describe('stepMovement', () => {
     }
     expect(waterY).toBeGreaterThanOrEqual(0);
     expect(waterY).toBeLessThan(4); // it moved up off the floor, not stuck
+  });
+
+  it('never lets a falling solid displace into a tube lumen cell', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 5);
+    grid.set(1, 0, iron.specId, iron.phase);
+    grid.tubeMask[grid.index(1, 1)] = TubeMaskValue.Lumen;
+    const rng = mulberry32(1);
+
+    stepMovement(grid, species, rng, 0);
+    // The lumen cell directly below stays empty -- displacement straight
+    // down is blocked, though the solid may still fall diagonally past it.
+    expect(grid.isEmptyAt(grid.index(1, 1))).toBe(true);
+  });
+
+  it('never moves a cell that is itself inside a tube lumen', () => {
+    const palette = buildPalette();
+    const species = new SpeciesTable();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 5);
+    grid.set(1, 2, iron.specId, iron.phase);
+    grid.tubeMask[grid.index(1, 2)] = TubeMaskValue.Lumen;
+    const rng = mulberry32(1);
+
+    stepMovement(grid, species, rng, 0);
+    expect(grid.specId[grid.index(1, 2)]).toBe(iron.specId);
   });
 
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
