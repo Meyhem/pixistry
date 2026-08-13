@@ -40,6 +40,14 @@ Run tests by name: `npx vitest run -t "NaCl"`
 
 Both `npm run typecheck` and `npm test` passing is the gate before any change lands.
 
+## Git workflow
+
+Once a feature or fix is complete (typecheck and tests passing, and the UI verified in the browser when the
+change is UI-observable), commit it and push to `origin main` automatically — don't wait for the user to
+separately ask for a push each time. This repo has no PR/branch workflow; commits go straight to `main`.
+Still never force-push, never skip hooks, and still stop to ask before any other destructive or
+history-rewriting git operation.
+
 ## Architecture: the static chemistry data
 
 `src/sim/species-data.ts` exports `SPECIES: readonly SpeciesData[]` (34 plain-data entries: 15 pure
