@@ -227,6 +227,25 @@ export function mountApp(root: HTMLElement): void {
   `;
   canvasCol.appendChild(legend);
 
+  // Size canvasWrap to the largest box that (a) preserves the grid's aspect
+  // ratio and (b) fits the space canvas-col actually has left after the
+  // toolbar/legend/side-panel take their share -- plain CSS aspect-ratio
+  // auto-sizing doesn't reliably shrink a block to fit *both* axes at once
+  // (it'll happily overflow one dimension while respecting the other), so
+  // this is done in JS instead, re-run whenever canvas-col's box changes.
+  const fitCanvasWrap = (): void => {
+    const availW = canvasCol.clientWidth;
+    const availH = canvasCol.clientHeight - legend.getBoundingClientRect().height - 12; // 12 = legend's margin-top
+    if (availW <= 0 || availH <= 0) return;
+    const ratio = gridWidth > 0 && gridHeight > 0 ? gridWidth / gridHeight : 1.6;
+    const width = Math.min(availW, availH * ratio);
+    const height = width / ratio;
+    canvasWrap.style.width = `${width}px`;
+    canvasWrap.style.height = `${height}px`;
+  };
+  new ResizeObserver(fitCanvasWrap).observe(canvasCol);
+  window.addEventListener('resize', fitCanvasWrap);
+
   const sidePanel = document.createElement('div');
   sidePanel.className = 'side-panel';
   workspace.appendChild(sidePanel);
@@ -464,6 +483,7 @@ export function mountApp(root: HTMLElement): void {
   function render(): void {
     renderToolbar();
     renderSidePanel();
+    fitCanvasWrap();
   }
 
   function renderToolbar(): void {
