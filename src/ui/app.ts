@@ -49,6 +49,15 @@ type Tool =
   | { kind: 'tube' }
   | { kind: 'select-apparatus' };
 
+/** Wall-drawing tools (Glass/Insulator) want the brush-width slider's
+ * minimum (1) to paint exactly one pixel, for drawing precise vessel walls
+ * -- forEachCellInRadius's radius is one less than the displayed width for
+ * these tools only. Species/erase/radiator/stirrer keep radius === width
+ * unchanged, since a wider default splash is what those actually want. */
+function wallBrushRadius(tool: Tool | null, width: number): number {
+  return tool?.kind === 'wall' ? Math.max(0, width - 1) : width;
+}
+
 const PHASE_LABEL: Record<number, string> = {
   [PhaseCode.Empty]: 'empty',
   [PhaseCode.Solid]: 'solid',
@@ -635,8 +644,9 @@ export function mountApp(root: HTMLElement): void {
     const { x, y } = gridCoordsFromEvent(event);
     const centerPxX = (x + 0.5) * cellPxX;
     const centerPxY = (y + 0.5) * cellPxY;
-    const diameterX = (2 * brushWidth + 1) * cellPxX;
-    const diameterY = (2 * brushWidth + 1) * cellPxY;
+    const radius = wallBrushRadius(tool, brushWidth);
+    const diameterX = (2 * radius + 1) * cellPxX;
+    const diameterY = (2 * radius + 1) * cellPxY;
     brushOutline.style.display = 'block';
     brushOutline.style.left = `${centerPxX - diameterX / 2}px`;
     brushOutline.style.top = `${centerPxY - diameterY / 2}px`;
@@ -765,7 +775,7 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'paint', x, y, radius: brushWidth, specId: tool.specId, tempC: brushTempC });
         break;
       case 'wall':
-        send({ type: 'paint', x, y, radius: brushWidth, specId: tool.specId, tempC: brushTempC });
+        send({ type: 'paint', x, y, radius: wallBrushRadius(tool, brushWidth), specId: tool.specId, tempC: brushTempC });
         break;
       case 'radiator':
         send({ type: 'paintRadiator', x, y, brushRadius: brushWidth, radiationRadius, targetTempC });
