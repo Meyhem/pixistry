@@ -101,9 +101,9 @@ probability gating, energy bookkeeping).
   radiating exactly as configured for as long as it's on the grid, regardless of what the sliders do
   afterward.
 - **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
-- **`walls.ts`** (M4) — glass/steel/insulator, a small fixed table of synthetic pseudo-species, *not*
-  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry) and "steel" isn't a
-  single compound anyway. specIds are reserved in a disjoint range (`0xff00..0xff02`, below the `EMPTY`
+- **`walls.ts`** (M4) — glass/insulator, a small fixed table of synthetic pseudo-species, *not*
+  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry). specIds are reserved
+  in a disjoint range (`0xff00..0xff01`, below the `EMPTY`
   sentinel `0xffff` and above the highest `species-data.ts` index), so `grid.specId` stays one flat
   `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to branch to
   the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 — `meltK` is set absurdly high so

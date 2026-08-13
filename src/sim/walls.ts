@@ -1,8 +1,9 @@
-// Synthetic wall materials (glass/steel/insulator) -- M4. These are NOT
+// Synthetic wall materials (glass/insulator) -- M4. These are NOT
 // chemistry molecules: the v1 element set has no silicon (so "glass"/SiO2
-// can't be interned) and "steel" isn't a single compound anyway. They live
-// as a small fixed table with their own thermal/physical constants, with no
-// InternedPool/MoleculeGraph involvement at all.
+// can't be interned). They live as a small fixed table with their own
+// thermal/physical constants, with no InternedPool/MoleculeGraph involvement
+// at all. (A "steel" wall material used to live here too; removed since it
+// wasn't a real compound and had no gameplay role distinct from insulator.)
 //
 // Heater/cooler apparatus used to live here too (as heater-glass/
 // cooler-glass wall materials), occupying grid.specId and blocking movement
@@ -10,7 +11,7 @@
 // overlay (SimGrid.radiator, see radiators.ts) so a placed heater/cooler no
 // longer collides with anything -- see radiators.ts for that model.
 //
-// specIds are reserved in a disjoint range (0xFF00..0xFF02), well above any
+// specIds are reserved in a disjoint range (0xFF00..0xFF01), well above any
 // real chemistry specId (InternedPool grows from 0, currently ~16 species)
 // and below EMPTY (0xffff), so grid.specId can stay one flat Uint16Array
 // and SpeciesTable/heat.ts/movement.ts just need one range check to branch.
@@ -19,7 +20,7 @@ import type { ThermalProfile } from './species';
 
 export const WALL_SPEC_BASE = 0xff00;
 
-export type WallKind = 'glass' | 'steel' | 'insulator';
+export type WallKind = 'glass' | 'insulator';
 
 export interface WallMaterial {
   readonly specId: number;
@@ -48,15 +49,6 @@ const WALLS: readonly WallMaterial[] = [
   },
   {
     specId: WALL_SPEC_BASE + 1,
-    kind: 'steel',
-    label: 'Steel',
-    color: '#8a8f96',
-    meltK: NEVER_MELTS_K,
-    thermalConductivity: 45,
-    density: 7.8,
-  },
-  {
-    specId: WALL_SPEC_BASE + 2,
     kind: 'insulator',
     label: 'Insulator',
     color: '#5a4632',

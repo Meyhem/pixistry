@@ -12,16 +12,16 @@ describe('walls', () => {
     }
   });
 
-  it('exposes exactly glass, steel, insulator', () => {
+  it('exposes exactly glass, insulator', () => {
     const kinds = wallList().map((w) => w.kind);
-    expect(kinds).toEqual(['glass', 'steel', 'insulator']);
+    expect(kinds).toEqual(['glass', 'insulator']);
   });
 
   it('isWallSpecId identifies the wall range and excludes chemistry/EMPTY specIds', () => {
     expect(isWallSpecId(0)).toBe(false);
     expect(isWallSpecId(15)).toBe(false);
     expect(isWallSpecId(WALL_SPEC_BASE)).toBe(true);
-    expect(isWallSpecId(WALL_SPEC_BASE + 2)).toBe(true);
+    expect(isWallSpecId(WALL_SPEC_BASE + 1)).toBe(true);
     expect(isWallSpecId(EMPTY)).toBe(false);
   });
 
@@ -36,10 +36,10 @@ describe('walls', () => {
   });
 
   it('produces a thermal profile with an unreachable melt/boil point', () => {
-    const steel = getWall(WALL_SPEC_BASE + 1);
-    const thermal = wallThermalProfile(steel);
+    const insulator = getWall(WALL_SPEC_BASE + 1);
+    const thermal = wallThermalProfile(insulator);
     expect(thermal.meltK).toBeGreaterThan(1e6);
-    expect(thermal.thermalConductivitySolid).toBe(steel.thermalConductivity);
-    expect(thermal.density).toBe(steel.density);
+    expect(thermal.thermalConductivitySolid).toBe(insulator.thermalConductivity);
+    expect(thermal.density).toBe(insulator.density);
   });
 });

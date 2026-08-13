@@ -336,7 +336,7 @@ describe('stepRadiators', () => {
     expect(grid.u[grid.index(2, 0)] as number).toBeLessThan(hot.u);
   });
 
-  it('does not radiate from passive wall materials (glass/steel/insulator)', () => {
+  it('does not radiate from passive wall materials (glass/insulator)', () => {
     const glass = wallList().find((w) => w.kind === 'glass');
     if (!glass) throw new Error('no glass wall material');
     const palette = buildPalette();
