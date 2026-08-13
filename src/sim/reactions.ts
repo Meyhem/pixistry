@@ -37,6 +37,9 @@ export const REACTIONS: readonly ReactionRule[] = [
   { reactants: [S.Na, S.H2O], products: [S.NaOH, S.H2], deltaH: -400, probability: 0.3 },
   { reactants: [S.HCl, S.NaOH], products: [S.NaCl, S.H2O], deltaH: -57, probability: 0.6 },
   { reactants: [S.NaCl, S.H2O], products: [S.NaPlusAq, S.ClMinusAq], deltaH: 4, probability: 0.4 },
+  { reactants: [S.KCl, S.H2O], products: [S.KPlusAq, S.ClMinusAq], deltaH: 17, probability: 0.4 },
+  { reactants: [S.CaCl2, S.H2O], products: [S.Ca2PlusAq, S.ClMinusAq], deltaH: -82, probability: 0.4 },
+  { reactants: [S.MgCl2, S.H2O], products: [S.Mg2PlusAq, S.ClMinusAq], deltaH: -155, probability: 0.4 },
   // No AgCl + H2O rule -- deliberately preserves the NaCl-dissolves/AgCl-
   // doesn't calibration point from the old dissolution.ts.
 ];
