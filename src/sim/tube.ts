@@ -10,8 +10,8 @@
 // whatever real matter happens to sit in a lumen cell IS the tube's cargo --
 // movement.ts already knows to leave those cells alone (blocked as both a
 // mover and a destination) so only stepTubes below ever touches them.
-import { PhaseCode, SimGrid, TubeMaskValue } from './grid';
-import { glassWallEnergyAtAmbient } from './heat';
+import { SimGrid, TubeMaskValue } from './grid';
+import { clearCells, stampGlass } from './apparatus';
 import type { SpeciesTable } from './species';
 import {
   coneCells,
@@ -24,7 +24,7 @@ import {
   type Point,
   type TubeBounds,
 } from './tube-shapes';
-import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
+import { isWallSpecId } from './walls';
 
 export const TUBE_LABEL = 'Conveyor Tube';
 export const TUBE_COLOR = '#a9d6e8'; // same glass tint as the funnel/plain glass wall
@@ -119,9 +119,7 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[], coneSize: nu
  * the "released as ordinary matter" behavior for cells that fall outside a
  * new geometry after an edit). */
 function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
-  for (const cell of geometry.wallCells) {
-    if (grid.inBounds(cell.x, cell.y)) grid.clear(cell.x, cell.y);
-  }
+  clearCells(grid, geometry.wallCells);
   for (const i of geometry.lumenIdx) {
     if ((grid.tubeMask[i] as TubeMaskValue) === TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.None;
   }
@@ -130,21 +128,14 @@ function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
   }
 }
 
-/** Stamps wall cells as glass (overwriting whatever's there, same
- * "overwrite" convention placeFunnelInstance uses) and marks lumen/cone
- * cells in the overlay mask -- lumen cells' existing contents are left
- * alone (a cell that was already lumen cargo before an edit, and still is
- * after, keeps its contents automatically since nothing here clears it).
- *
- * Walls are seeded at AMBIENT_TEMPERATURE_K, not u=0 -- u=0 means 0 Kelvin,
- * and a wall ring that starts at literal absolute zero acts as a runaway
- * heat sink on whatever cargo conducts against it every tick it sits in the
- * lumen (observed freezing 21C water solid over an ordinary transport run). */
+/** Stamps wall cells as glass (see apparatus.ts's stampGlass -- same
+ * "overwrite, seed at ambient" convention placeFunnelInstance uses) and
+ * marks lumen/cone cells in the overlay mask -- lumen cells' existing
+ * contents are left alone (a cell that was already lumen cargo before an
+ * edit, and still is after, keeps its contents automatically since nothing
+ * here clears it). */
 function stampTubeGeometry(grid: SimGrid, species: SpeciesTable, geometry: TubeGeometry): void {
-  const wallU = glassWallEnergyAtAmbient(species);
-  for (const cell of geometry.wallCells) {
-    if (grid.inBounds(cell.x, cell.y)) grid.set(cell.x, cell.y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
-  }
+  stampGlass(grid, species, geometry.wallCells);
   for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
   for (const i of geometry.coneSrcIdx) {
     if ((grid.tubeMask[i] as TubeMaskValue) !== TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.Cone;

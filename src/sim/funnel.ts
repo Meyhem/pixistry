@@ -6,11 +6,11 @@
 // only part of a funnel that's real matter; everything else here (the
 // drip timer, the remaining budget) lives in the instance object held by
 // worker.ts's `funnels` list.
-import { PhaseCode, SimGrid } from './grid';
+import type { SimGrid } from './grid';
 import { funnelShapeFor, funnelSpawnOffset, type FunnelFacing } from './apparatus-shapes';
-import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, glassWallEnergyAtAmbient, massOf } from './heat';
+import { clearCells, stampGlass } from './apparatus';
+import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, massOf } from './heat';
 import type { SpeciesTable } from './species';
-import { GLASS_WALL_SPEC_ID } from './walls';
 
 // Toolbar/side-panel display constants -- mirrors radiators.ts's
 // RADIATOR_LABEL/RADIATOR_COLOR pattern for the other stateful apparatus.
@@ -68,13 +68,11 @@ export interface FunnelPlacement {
  * instance, ready to drip on a future tick (see stepFunnels). */
 export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placement: FunnelPlacement): FunnelInstance {
   const shape = funnelShapeFor(placement.facing);
-  const wallU = glassWallEnergyAtAmbient(species);
-  for (const cell of shape.cells) {
-    const x = placement.x + cell.dx;
-    const y = placement.y + cell.dy;
-    if (!grid.inBounds(x, y)) continue;
-    grid.set(x, y, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
-  }
+  stampGlass(
+    grid,
+    species,
+    shape.cells.map((cell) => ({ x: placement.x + cell.dx, y: placement.y + cell.dy })),
+  );
   return {
     id: nextFunnelId++,
     anchorX: placement.x,
@@ -96,17 +94,15 @@ export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placem
  * translates, it doesn't rotate. */
 export function moveFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, x: number, y: number): void {
   const shape = funnelShapeFor(instance.facing);
-  for (const cell of shape.cells) {
-    const ox = instance.anchorX + cell.dx;
-    const oy = instance.anchorY + cell.dy;
-    if (grid.inBounds(ox, oy)) grid.clear(ox, oy);
-  }
-  const wallU = glassWallEnergyAtAmbient(species);
-  for (const cell of shape.cells) {
-    const nx = x + cell.dx;
-    const ny = y + cell.dy;
-    if (grid.inBounds(nx, ny)) grid.set(nx, ny, GLASS_WALL_SPEC_ID, PhaseCode.Solid, wallU);
-  }
+  clearCells(
+    grid,
+    shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy })),
+  );
+  stampGlass(
+    grid,
+    species,
+    shape.cells.map((cell) => ({ x: x + cell.dx, y: y + cell.dy })),
+  );
   instance.anchorX = x;
   instance.anchorY = y;
 }
