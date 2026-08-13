@@ -119,49 +119,80 @@ export function glassWallEnergyAtAmbient(species: SpeciesTable): number {
   return energyForTemperature(species.thermalOf(GLASS_WALL_SPEC_ID), massOf(species, GLASS_WALL_SPEC_ID), AMBIENT_TEMPERATURE_K).u;
 }
 
-function heatCapacityFor(thermal: ThermalProfile, phase: PhaseCode): number {
+interface PhaseThermal {
+  heatCapacity: number;
+  conductivity: number;
+}
+
+/** The phase-dependent half of a species' ThermalProfile -- heat.ts picks
+ * between a species' solid/liquid/gas heat capacity and conductivity based
+ * on a cell's current phase everywhere it touches energy, so this is the one
+ * place that switch lives. */
+function phaseThermal(thermal: ThermalProfile, phase: PhaseCode): PhaseThermal {
   switch (phase) {
     case PhaseCode.Solid:
-      return thermal.specificHeatSolid;
+      return { heatCapacity: thermal.specificHeatSolid, conductivity: thermal.thermalConductivitySolid };
     case PhaseCode.Gas:
-      return thermal.specificHeatGas;
+      return { heatCapacity: thermal.specificHeatGas, conductivity: thermal.thermalConductivityGas };
     default:
-      return thermal.specificHeatLiquid;
+      return { heatCapacity: thermal.specificHeatLiquid, conductivity: thermal.thermalConductivityLiquid };
   }
 }
 
-function conductivityFor(thermal: ThermalProfile, phase: PhaseCode): number {
-  switch (phase) {
-    case PhaseCode.Solid:
-      return thermal.thermalConductivitySolid;
-    case PhaseCode.Gas:
-      return thermal.thermalConductivityGas;
-    default:
-      return thermal.thermalConductivityLiquid;
-  }
+interface CellReading {
+  specId: number;
+  mass: number;
+  thermal: ThermalProfile;
+  u: number;
+  tempK: number;
+  phase: PhaseCode;
+}
+
+/** Reads a non-empty cell's full thermal state in one shot -- the
+ * specId -> mass -> thermal -> temperatureOf chain repeated at the top of
+ * every energy-writing step in this file. Every write path in this file
+ * keeps grid.phase in sync with grid.u (see writeEnergy below), so the
+ * phase this derives from the cell's current u is always the same value
+ * grid.phase[idx] already holds -- deriving it here rather than reading
+ * grid.phase directly is what exchangeEnergy already did before this was
+ * factored out. Caller must have already checked the cell isn't EMPTY. */
+function readCell(grid: SimGrid, species: SpeciesTable, idx: number): CellReading {
+  const specId = grid.specId[idx] as number;
+  const mass = massOf(species, specId);
+  const thermal = species.thermalOf(specId);
+  const u = grid.u[idx] as number;
+  const { tempK, phase } = temperatureOf(thermal, mass, u);
+  return { specId, mass, thermal, u, tempK, phase };
+}
+
+/** Writes a cell's energy and keeps grid.phase in sync with it -- the
+ * floor-then-recompute-phase tail repeated at the end of stepConduction,
+ * stepAmbient, and stepRadiativeLoss below. Floors at 0 (energy can't go
+ * negative); the MAX_TEMP_K ceiling is deliberately NOT applied here --
+ * stepAmbient's convergence-toward-ambient target can never approach it, so
+ * only the two callers that need it (stepConduction, stepRadiativeLoss)
+ * clamp with clampEnergyToMaxTemp themselves before calling this. */
+function writeEnergy(grid: SimGrid, thermal: ThermalProfile, mass: number, idx: number, newU: number): void {
+  const u = Math.max(0, newU);
+  grid.u[idx] = u;
+  grid.phase[idx] = temperatureOf(thermal, mass, u).phase;
 }
 
 function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Array, i: number, j: number): void {
   if (grid.specId[i] === EMPTY || grid.specId[j] === EMPTY) return;
 
-  const specI = grid.specId[i] as number;
-  const specJ = grid.specId[j] as number;
-  const massI = massOf(species, specI);
-  const massJ = massOf(species, specJ);
-  const thermalI = species.thermalOf(specI);
-  const thermalJ = species.thermalOf(specJ);
-  const { tempK: tempI, phase: phaseI } = temperatureOf(thermalI, massI, grid.u[i] as number);
-  const { tempK: tempJ, phase: phaseJ } = temperatureOf(thermalJ, massJ, grid.u[j] as number);
+  const cellI = readCell(grid, species, i);
+  const cellJ = readCell(grid, species, j);
 
-  const diff = tempI - tempJ;
+  const diff = cellI.tempK - cellJ.tempK;
   if (diff === 0) return;
 
-  const kI = conductivityFor(thermalI, phaseI);
-  const kJ = conductivityFor(thermalJ, phaseJ);
+  const { conductivity: kI, heatCapacity: hcI } = phaseThermal(cellI.thermal, cellI.phase);
+  const { conductivity: kJ, heatCapacity: hcJ } = phaseThermal(cellJ.thermal, cellJ.phase);
   const kBlend = (2 * kI * kJ) / (kI + kJ);
 
-  const capacityI = massI * heatCapacityFor(thermalI, phaseI);
-  const capacityJ = massJ * heatCapacityFor(thermalJ, phaseJ);
+  const capacityI = cellI.mass * hcI;
+  const capacityJ = cellJ.mass * hcJ;
   const maxFlux = Math.abs(diff) * Math.min(capacityI, capacityJ) * 0.5;
 
   let flux = kBlend * diff * CONDUCTION_RATE;
@@ -199,13 +230,15 @@ export function applyPointHeatSource(
   if (joulesPerCell === 0) return;
   forEachCellInRadius(grid, cx, cy, radius, (x, y) => {
     const idx = grid.index(x, y);
-    const specId = grid.specId[idx];
-    if (specId === EMPTY) return;
+    if (grid.specId[idx] === EMPTY) return;
 
-    const mass = massOf(species, specId as number);
-    const thermal = species.thermalOf(specId as number);
-    const currentU = grid.u[idx] as number;
-    const { tempK } = temperatureOf(thermal, mass, currentU);
+    // Deliberately reads mass/thermal/tempK via readCell but writes only
+    // grid.u below, never grid.phase -- unlike every other write path in
+    // this file (see writeEnergy), a radiator's nudge doesn't immediately
+    // flip a cell across a melt/boil boundary; that's left for
+    // stepConduction/stepAmbient to reconcile on their own pass this same
+    // tick (both run after stepRadiators -- see worker.ts's runOneTick).
+    const { mass, thermal, u: currentU, tempK } = readCell(grid, species, idx);
     // A tolerance rather than exact equality: grid.u is Float32Array (see
     // grid.ts), whose ~1.19e-7 relative precision means a cell seeded
     // exactly at targetK can round-trip through energyForTemperature/
@@ -272,11 +305,9 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
 
   for (let idx = 0; idx < grid.u.length; idx++) {
     if (grid.specId[idx] === EMPTY) continue;
-    const specId = grid.specId[idx] as number;
-    const mass = massOf(species, specId);
-    const thermal = species.thermalOf(specId);
-    const phase = grid.phase[idx] as PhaseCode;
-    const capacity = mass * heatCapacityFor(thermal, phase);
+    const cell = readCell(grid, species, idx);
+    const { heatCapacity } = phaseThermal(cell.thermal, cell.phase);
+    const capacity = cell.mass * heatCapacity;
 
     // Each pairwise flux above is clamped to half *that pair's* capacity
     // gap, but a cell touching several neighbors at once (tiny-capacity gas
@@ -289,10 +320,8 @@ export function stepConduction(grid: SimGrid, species: SpeciesTable): void {
     // otherwise affecting normal (non-runaway) conduction.
     const maxDelta = capacity * MAX_DELTA_T_PER_TICK;
     const clampedDeltaU = Math.max(-maxDelta, Math.min(maxDelta, deltaU[idx] as number));
-    const newU = clampEnergyToMaxTemp(thermal, mass, Math.max(0, (grid.u[idx] as number) + clampedDeltaU));
-    grid.u[idx] = newU;
-
-    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
+    const newU = clampEnergyToMaxTemp(cell.thermal, cell.mass, cell.u + clampedDeltaU);
+    writeEnergy(grid, cell.thermal, cell.mass, idx, newU);
   }
 }
 
@@ -332,24 +361,19 @@ export function stepAmbient(grid: SimGrid, species: SpeciesTable, dtSeconds: num
   for (let idx = 0; idx < grid.u.length; idx++) {
     if (grid.specId[idx] === EMPTY) continue;
     if (exposedFaceCount(grid, idx) > 0) continue;
-    const specId = grid.specId[idx] as number;
-    const mass = massOf(species, specId);
-    const thermal = species.thermalOf(specId);
-    const phase = grid.phase[idx] as PhaseCode;
-    const currentU = grid.u[idx] as number;
-    const { tempK } = temperatureOf(thermal, mass, currentU);
+    const cell = readCell(grid, species, idx);
 
-    if (tempK === AMBIENT_TEMPERATURE_K) continue;
+    if (cell.tempK === AMBIENT_TEMPERATURE_K) continue;
 
     const targetK =
-      tempK > AMBIENT_TEMPERATURE_K
-        ? Math.max(AMBIENT_TEMPERATURE_K, tempK - maxDeltaT)
-        : Math.min(AMBIENT_TEMPERATURE_K, tempK + maxDeltaT);
+      cell.tempK > AMBIENT_TEMPERATURE_K
+        ? Math.max(AMBIENT_TEMPERATURE_K, cell.tempK - maxDeltaT)
+        : Math.min(AMBIENT_TEMPERATURE_K, cell.tempK + maxDeltaT);
 
-    const capacity = mass * heatCapacityFor(thermal, phase);
-    const newU = Math.max(0, currentU + capacity * (targetK - tempK));
-    grid.u[idx] = newU;
-    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
+    const { heatCapacity } = phaseThermal(cell.thermal, cell.phase);
+    const capacity = cell.mass * heatCapacity;
+    const newU = cell.u + capacity * (targetK - cell.tempK);
+    writeEnergy(grid, cell.thermal, cell.mass, idx, newU);
   }
 }
 
@@ -413,27 +437,19 @@ export function stepRadiativeLoss(grid: SimGrid, species: SpeciesTable, dtSecond
     const faces = exposedFaceCount(grid, idx);
     if (faces === 0) continue;
 
-    const specId = grid.specId[idx] as number;
-    const mass = massOf(species, specId);
-    const thermal = species.thermalOf(specId);
-    const currentU = grid.u[idx] as number;
-    const { tempK } = temperatureOf(thermal, mass, currentU);
+    const cell = readCell(grid, species, idx);
+    if (cell.tempK === AMBIENT_TEMPERATURE_K) continue;
 
-    if (tempK === AMBIENT_TEMPERATURE_K) continue;
-
-    const tNorm = tempK / RADIATIVE_TEMP_SCALE;
+    const tNorm = cell.tempK / RADIATIVE_TEMP_SCALE;
     const aNorm = AMBIENT_TEMPERATURE_K / RADIATIVE_TEMP_SCALE;
     // Positive when hotter than ambient (net radiative loss), negative when
     // colder (net gain from the ambient background).
     const flux = RADIATIVE_RATE * faces * (tNorm ** 4 - aNorm ** 4);
     const joules = flux * dtSeconds;
 
-    const targetU = energyForTemperature(thermal, mass, AMBIENT_TEMPERATURE_K).u;
-    let newU = currentU - joules;
+    const targetU = energyForTemperature(cell.thermal, cell.mass, AMBIENT_TEMPERATURE_K).u;
+    let newU = cell.u - joules;
     newU = flux > 0 ? Math.max(newU, targetU) : Math.min(newU, targetU);
-    newU = clampEnergyToMaxTemp(thermal, mass, Math.max(0, newU));
-
-    grid.u[idx] = newU;
-    grid.phase[idx] = temperatureOf(thermal, mass, newU).phase;
+    writeEnergy(grid, cell.thermal, cell.mass, idx, clampEnergyToMaxTemp(cell.thermal, cell.mass, newU));
   }
 }
