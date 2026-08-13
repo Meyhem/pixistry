@@ -241,7 +241,24 @@ function moveRising(
     if (moved[nIdx]) continue;
     if ((grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
     if (!canEnterFiltered(grid, filterAllow, nIdx, specId)) continue;
-    if (grid.isEmptyAt(nIdx) && rng() < GAS_SPREAD_P) {
+    if (grid.isEmptyAt(nIdx)) {
+      if (rng() < GAS_SPREAD_P) {
+        commitSwap(grid, moved, idx, nIdx);
+        return;
+      }
+      continue;
+    }
+    // Lateral gas<->gas mixing: swap regardless of density, same rationale
+    // as moveFalling's liquid<->liquid case above -- a lighter gas boxed in
+    // by denser gas with no direct/diagonal path upward (e.g. pinned under
+    // a sealed ceiling next to an off-center opening) has no way to reshuffle
+    // sideways into a spot where the vertical density check can carry it up,
+    // and just sits there forever otherwise.
+    const targetSpecId = grid.specId[nIdx] as number;
+    if (isWallSpecId(targetSpecId)) continue;
+    const targetPhase = grid.phase[nIdx] as PhaseCode;
+    if (targetPhase !== PhaseCode.Gas) continue;
+    if (rng() < GAS_SPREAD_P) {
       commitSwap(grid, moved, idx, nIdx);
       return;
     }

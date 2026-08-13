@@ -5,6 +5,7 @@ import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
 import { SpeciesId } from './species-data';
+import { GLASS_WALL_SPEC_ID, WALL_PHASE } from './walls';
 
 function findEntry(palette: PaletteEntry[], label: string): PaletteEntry {
   const entry = palette.find((p) => p.label === label);
@@ -199,6 +200,43 @@ describe('stepMovement', () => {
     }
     expect(waterY).toBeGreaterThanOrEqual(0);
     expect(waterY).toBeLessThan(4); // it moved up off the floor, not stuck
+  });
+
+  it('lets a lighter gas boxed in by denser gas find an off-center opening (regression)', () => {
+    // moveRising's lateral fallback only spread into empty cells -- unlike
+    // moveFalling's liquid<->liquid lateral mixing, it never swapped with an
+    // occupied denser gas cell. A lighter gas pinned under a sealed ceiling
+    // with no opening directly above or diagonally above it had no legal
+    // move sideways to reach an opening elsewhere, and just sat frozen.
+    const species = new SpeciesTable();
+    expect(species.densityOf(SpeciesId.Cl2)).toBeGreaterThan(species.densityOf(SpeciesId.O2));
+
+    const cl2Thermal = species.thermalOf(SpeciesId.Cl2);
+    const cl2Mass = massOf(species, SpeciesId.Cl2);
+    const cl2 = energyForTemperature(cl2Thermal, cl2Mass, AMBIENT_TEMPERATURE_K);
+    const o2Thermal = species.thermalOf(SpeciesId.O2);
+    const o2Mass = massOf(species, SpeciesId.O2);
+    const o2 = energyForTemperature(o2Thermal, o2Mass, AMBIENT_TEMPERATURE_K);
+
+    // 9-wide, 8-tall box: sealed glass ceiling except for a gap at the far
+    // right (x=8). Cl2 fills everything below the ceiling; O2 sits pinned
+    // at the far left, directly under the sealed part of the ceiling.
+    const grid = new SimGrid(9, 8);
+    for (let x = 0; x < 8; x++) grid.set(x, 0, GLASS_WALL_SPEC_ID, WALL_PHASE);
+    for (let y = 1; y < 8; y++) {
+      for (let x = 0; x < 9; x++) grid.set(x, y, SpeciesId.Cl2, cl2.phase, cl2.u);
+    }
+    grid.set(1, 1, SpeciesId.O2, o2.phase, o2.u);
+    grid.set(1, 2, SpeciesId.O2, o2.phase, o2.u);
+
+    const rng = mulberry32(11);
+    for (let tick = 0; tick < 1000; tick++) stepMovement(grid, species, rng, tick);
+
+    let o2MinY = grid.height;
+    for (let i = 0; i < grid.width * grid.height; i++) {
+      if (grid.specId[i] === SpeciesId.O2) o2MinY = Math.min(o2MinY, Math.floor(i / grid.width));
+    }
+    expect(o2MinY).toBe(0); // escaped through the opening, not stuck under the ceiling
   });
 
   it('never lets a falling solid displace into a tube lumen cell', () => {
