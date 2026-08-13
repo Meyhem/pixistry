@@ -63,6 +63,10 @@ let tick = 0;
 let running = true;
 let speed = 1;
 let tickAccumulator = 0;
+// Off by default (see app.ts's DEFAULT_FUNNELS_ENABLED) -- a placed funnel's
+// glass still sits on the grid as inert matter while disabled, it just never
+// drips until toggled on from the SETTINGS row.
+let funnelsEnabled = false;
 
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
@@ -121,7 +125,7 @@ function withTube(id: number, fn: (instance: TubeInstance) => void): void {
 }
 
 function runOneTick(): void {
-  stepFunnels(grid, species, funnels);
+  if (funnelsEnabled) stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++, filterAllowSpecies);
   stepTubes(grid, tubes);
   if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
@@ -201,6 +205,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'setSpeed':
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
+      break;
+    case 'setFunnelsEnabled':
+      funnelsEnabled = msg.enabled;
       break;
     case 'stirStart':
       stirState = { x: msg.x, y: msg.y, radius: msg.radius };

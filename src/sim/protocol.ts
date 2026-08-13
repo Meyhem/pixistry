@@ -56,6 +56,7 @@ export type MainToWorkerMessage =
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
+  | { type: 'setFunnelsEnabled'; enabled: boolean }
   | { type: 'stirStart'; x: number; y: number; radius: number }
   | { type: 'stirMove'; x: number; y: number }
   | { type: 'stirEnd' }
