@@ -12,9 +12,17 @@ describe('walls', () => {
     }
   });
 
-  it('exposes exactly glass, steel, insulator', () => {
+  it('exposes exactly glass, steel, insulator, heater-glass, cooler-glass', () => {
     const kinds = wallList().map((w) => w.kind);
-    expect(kinds).toEqual(['glass', 'steel', 'insulator']);
+    expect(kinds).toEqual(['glass', 'steel', 'insulator', 'heater-glass', 'cooler-glass']);
+  });
+
+  it('only heater-glass/cooler-glass carry a nonzero radiatorWatts, with opposite signs', () => {
+    for (const wall of wallList()) {
+      if (wall.kind === 'heater-glass') expect(wall.radiatorWatts).toBeGreaterThan(0);
+      else if (wall.kind === 'cooler-glass') expect(wall.radiatorWatts).toBeLessThan(0);
+      else expect(wall.radiatorWatts).toBe(0);
+    }
   });
 
   it('isWallSpecId identifies the wall range and excludes chemistry/EMPTY specIds', () => {

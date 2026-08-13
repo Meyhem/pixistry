@@ -1,15 +1,16 @@
 // Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
 // thread over postMessage. Tick order follows the design doc's movement ->
 // heat -> react. M4 added tools (walls reuse the plain paint/erase messages
-// since SpeciesTable branches transparently on wall specIds; burner/coolant
-// inject watts; mixer stirs) and time controls (single-step, speed
-// multiplier). M5 wires the static reaction table into the grid (react.ts)
-// -- this is what makes an ionic solid painted next to water actually
-// dissolve into aqueous ions on-grid. Pixistry is just pixels of elements
-// and compounds with a temperature each -- there is no gas pressure model.
+// since SpeciesTable branches transparently on wall specIds, which is also
+// how heater-glass/cooler-glass are painted; mixer stirs) and time controls
+// (single-step, speed multiplier). M5 wires the static reaction table into
+// the grid (react.ts) -- this is what makes an ionic solid painted next to
+// water actually dissolve into aqueous ions on-grid. Pixistry is just
+// pixels of elements and compounds with a temperature each -- there is no
+// gas pressure model.
 import { SimGrid } from './grid';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
-import { AMBIENT_TEMPERATURE_K, applyPointHeatSource, energyForTemperature, massOf, stepConduction, temperatureOf } from './heat';
+import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf, stepConduction, stepGlassRadiators, temperatureOf } from './heat';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
 import { stepReactions } from './react';
@@ -26,8 +27,7 @@ export type MainToWorkerMessage =
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
-  | { type: 'heat'; x: number; y: number; radius: number; watts: number }
-  | { type: 'clearHeat' }
+  | { type: 'setRadiationRadius'; radius: number }
   | { type: 'stir'; x: number; y: number; radius: number }
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
@@ -39,6 +39,10 @@ const TICK_MS = 1000 / 60;
 const TICK_DT_SECONDS = TICK_MS / 1000;
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 4;
+// Matches the UI's own default (see app.ts's DEFAULT_RADIATION_RADIUS) so
+// heater-glass/cooler-glass radiate at a sensible radius even before the
+// player has touched the side panel's slider.
+const DEFAULT_RADIATION_RADIUS = 3;
 
 const palette = buildPalette();
 const species = new SpeciesTable();
@@ -50,12 +54,11 @@ let running = true;
 let speed = 1;
 let tickAccumulator = 0;
 
-// Burner/coolant model a persistent point source of power (watts, not a
-// target temperature -- see the M4 task notes) while the tool is "armed and
-// clicked": set on pointerdown/pointermove, cleared on pointerup, applied
-// once per simulated tick (not per real-time callback) so it scales
-// correctly with the speed multiplier.
-let activeHeatSource: { x: number; y: number; radius: number; watts: number } | null = null;
+// How far (in cells) every heater-glass/cooler-glass cell currently on the
+// grid radiates into its surroundings each tick -- see heat.ts's
+// stepGlassRadiators. A single shared value for all radiator cells,
+// player-adjustable via the side panel while a radiator tool is selected.
+let radiationRadius = DEFAULT_RADIATION_RADIUS;
 
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
@@ -82,9 +85,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 
 function runOneTick(): void {
   stepMovement(grid, species, rng, tick++);
-  if (activeHeatSource) {
-    applyPointHeatSource(grid, activeHeatSource.x, activeHeatSource.y, activeHeatSource.radius, activeHeatSource.watts, TICK_DT_SECONDS);
-  }
+  stepGlassRadiators(grid, radiationRadius, TICK_DT_SECONDS);
   stepConduction(grid, species);
   stepReactions(grid, species, rng);
 }
@@ -147,11 +148,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'setSpeed':
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
       break;
-    case 'heat':
-      activeHeatSource = { x: msg.x, y: msg.y, radius: msg.radius, watts: msg.watts };
-      break;
-    case 'clearHeat':
-      activeHeatSource = null;
+    case 'setRadiationRadius':
+      radiationRadius = msg.radius;
       break;
     case 'stir':
       stirRegion(grid, rng, msg.x, msg.y, msg.radius);

@@ -6,9 +6,11 @@ import {
   energyForTemperature,
   massOf,
   stepConduction,
+  stepGlassRadiators,
   temperatureOf,
 } from './heat';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
+import { wallList } from './walls';
 
 function findEntry(palette: PaletteEntry[], label: string): PaletteEntry {
   const entry = palette.find((p) => p.label === label);
@@ -208,5 +210,69 @@ describe('applyPointHeatSource', () => {
     grid.set(0, 0, iron.specId, PhaseCode.Solid, 123);
     applyPointHeatSource(grid, 0, 0, 0, 0, 1);
     expect(grid.u[0]).toBe(123);
+  });
+});
+
+describe('stepGlassRadiators', () => {
+  function findWall(kind: string) {
+    const wall = wallList().find((w) => w.kind === kind);
+    if (!wall) throw new Error(`no wall material for kind ${kind}`);
+    return wall;
+  }
+
+  it('heats cells within radius of a heater-glass cell', () => {
+    const heater = findWall('heater-glass');
+    const palette = buildPalette();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 1);
+    grid.set(1, 0, heater.specId, PhaseCode.Solid, 0);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
+
+    stepGlassRadiators(grid, 1, 1);
+
+    expect(grid.u[grid.index(0, 0)] as number).toBeGreaterThan(100);
+  });
+
+  it('cools cells within radius of a cooler-glass cell', () => {
+    const cooler = findWall('cooler-glass');
+    const palette = buildPalette();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 1);
+    grid.set(1, 0, cooler.specId, PhaseCode.Solid, 0);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 1_000_000);
+
+    stepGlassRadiators(grid, 1, 1);
+
+    expect(grid.u[grid.index(0, 0)] as number).toBeLessThan(1_000_000);
+  });
+
+  it('does not radiate from passive wall materials (glass/steel/insulator)', () => {
+    const glass = findWall('glass');
+    const palette = buildPalette();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 1);
+    grid.set(1, 0, glass.specId, PhaseCode.Solid, 0);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
+
+    stepGlassRadiators(grid, 1, 1);
+
+    expect(grid.u[grid.index(0, 0)] as number).toBe(100);
+  });
+
+  it('is a no-op for a zero radiation radius', () => {
+    const heater = findWall('heater-glass');
+    const palette = buildPalette();
+    const iron = findEntry(palette, 'Fe');
+
+    const grid = new SimGrid(3, 1);
+    grid.set(1, 0, heater.specId, PhaseCode.Solid, 0);
+    grid.set(0, 0, iron.specId, PhaseCode.Solid, 100);
+
+    stepGlassRadiators(grid, 0, 1);
+
+    expect(grid.u[grid.index(0, 0)] as number).toBe(100);
   });
 });

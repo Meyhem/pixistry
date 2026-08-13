@@ -11,6 +11,7 @@
 // calculation over a real distance.
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import type { SpeciesTable, ThermalProfile } from './species';
+import { getWall, isWallSpecId } from './walls';
 
 export const CELL_VOLUME_CM3 = 1;
 export const AMBIENT_TEMPERATURE_K = 298.15;
@@ -136,13 +137,13 @@ function exchangeEnergy(grid: SimGrid, species: SpeciesTable, deltaU: Float32Arr
 }
 
 /**
- * Burner/coolant tool support (M4): injects (or removes, for negative
+ * Point heat source primitive (M4): injects (or removes, for negative
  * watts) a fixed power into every non-empty cell within `radius` of
  * (cx, cy), converted to joules via the tick's real duration. This is a
- * deliberate design choice (see the M4 task notes): the tool models watts,
- * not a target temperature, so energy accounting stays correct and boiling
- * a painted liquid still takes real simulated time rather than snapping to
- * a setpoint.
+ * deliberate design choice (see the M4 task notes): watts, not a target
+ * temperature, so energy accounting stays correct and boiling a painted
+ * liquid still takes real simulated time rather than snapping to a
+ * setpoint. Shared by stepGlassRadiators below, one call per radiator cell.
  */
 export function applyPointHeatSource(
   grid: SimGrid,
@@ -166,6 +167,29 @@ export function applyPointHeatSource(
       const newU = (grid.u[idx] as number) + joulesPerCell;
       grid.u[idx] = Math.max(0, newU);
     }
+  }
+}
+
+/**
+ * Heater-glass/cooler-glass tool support: every wall cell on the grid whose
+ * material has a nonzero radiatorWatts (see walls.ts) radiates its fixed
+ * wattage into cells within `radiationRadius` of itself, every tick --
+ * unlike the old burner/coolant tool, this is anchored to the placed glass
+ * cells themselves rather than the cursor, so a radiator keeps working for
+ * as long as it sits on the grid. `radiationRadius` is a single
+ * player-configurable value shared by every radiator cell (both heater and
+ * cooler), set via the UI's side panel.
+ */
+export function stepGlassRadiators(grid: SimGrid, radiationRadius: number, dtSeconds: number): void {
+  if (radiationRadius <= 0) return;
+  for (let idx = 0; idx < grid.specId.length; idx++) {
+    const specId = grid.specId[idx] as number;
+    if (specId === EMPTY || !isWallSpecId(specId)) continue;
+    const watts = getWall(specId).radiatorWatts;
+    if (watts === 0) continue;
+    const x = idx % grid.width;
+    const y = Math.floor(idx / grid.width);
+    applyPointHeatSource(grid, x, y, radiationRadius, watts, dtSeconds);
   }
 }
 
