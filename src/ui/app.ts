@@ -23,7 +23,7 @@ import { formatCelsius } from './format';
 const DEFAULT_RADIUS = 2;
 const DEFAULT_RADIATION_RADIUS = 3;
 const DEFAULT_RADIATOR_TARGET_C = 100;
-const DEFAULT_BRUSH_TEMP_C = Math.round(kelvinToCelsius(AMBIENT_TEMPERATURE_K));
+const DEFAULT_BRUSH_TEMP_C = 21;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 
@@ -110,6 +110,11 @@ export function mountApp(root: HTMLElement): void {
   inspector.classList.add('empty');
   canvasWrap.appendChild(inspector);
 
+  const brushOutline = document.createElement('div');
+  brushOutline.className = 'brush-outline';
+  brushOutline.style.display = 'none';
+  canvasWrap.appendChild(brushOutline);
+
   const legend = document.createElement('div');
   legend.className = 'legend';
   const hotK = AMBIENT_TEMPERATURE_K + BORDER_RANGE_K;
@@ -176,7 +181,7 @@ export function mountApp(root: HTMLElement): void {
 
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) {
-      return { label: 'No tool selected', color: '#3a3d3a', category: '', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false };
+      return { label: 'No tool selected', color: '#3a3d3a', category: '', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, showBrushTemp: false };
     }
     if (t.kind === 'paint') {
       const entry = paletteEntryFor(t.specId);
@@ -190,6 +195,7 @@ export function mountApp(root: HTMLElement): void {
         boilLabel: formatCelsius(entry.boilingPointC),
         phaseLabel: PHASE_LABEL[entry.phase] ?? '',
         isThermal: false,
+        showBrushTemp: true,
       };
     }
     if (t.kind === 'wall') {
@@ -203,6 +209,7 @@ export function mountApp(root: HTMLElement): void {
         boilLabel: '',
         phaseLabel: '',
         isThermal: false,
+        showBrushTemp: true,
       };
     }
     if (t.kind === 'radiator') {
@@ -215,6 +222,7 @@ export function mountApp(root: HTMLElement): void {
         boilLabel: '',
         phaseLabel: '',
         isThermal: true,
+        showBrushTemp: false,
       };
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
@@ -223,7 +231,7 @@ export function mountApp(root: HTMLElement): void {
       grabber: { label: 'Grabber', color: '#f2d94e' },
     };
     const info = TOOL_META[t.kind];
-    return { label: info.label, color: info.color, category: 'TOOL', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false };
+    return { label: info.label, color: info.color, category: 'TOOL', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, showBrushTemp: false };
   }
 
   function setTool(next: Tool): void {
@@ -329,6 +337,28 @@ export function mountApp(root: HTMLElement): void {
     return { x, y };
   }
 
+  // Mirrors worker.ts's paintCircle: a brush of "radius" covers every cell
+  // within that many grid cells of the center, so the visible outline spans
+  // (2*radius + 1) cells across, converted to CSS pixels via the canvas's
+  // on-screen size (which can differ from the grid's cell size due to CSS
+  // scaling).
+  function updateBrushOutline(event: PointerEvent): void {
+    const rect = canvas.getBoundingClientRect();
+    if (gridWidth === 0 || gridHeight === 0) return;
+    const cellPxX = rect.width / gridWidth;
+    const cellPxY = rect.height / gridHeight;
+    const { x, y } = gridCoordsFromEvent(event);
+    const centerPxX = (x + 0.5) * cellPxX;
+    const centerPxY = (y + 0.5) * cellPxY;
+    const diameterX = (2 * brushWidth + 1) * cellPxX;
+    const diameterY = (2 * brushWidth + 1) * cellPxY;
+    brushOutline.style.display = 'block';
+    brushOutline.style.left = `${centerPxX - diameterX / 2}px`;
+    brushOutline.style.top = `${centerPxY - diameterY / 2}px`;
+    brushOutline.style.width = `${diameterX}px`;
+    brushOutline.style.height = `${diameterY}px`;
+  }
+
   function applyTool(x: number, y: number): void {
     if (!tool) return;
     switch (tool.kind) {
@@ -397,10 +427,12 @@ export function mountApp(root: HTMLElement): void {
       }
     }
     updateInspector(x, y);
+    updateBrushOutline(event);
   });
   canvas.addEventListener('pointerleave', () => {
     inspector.classList.add('empty');
     inspectorText.textContent = 'Hover the canvas to inspect a cell';
+    brushOutline.style.display = 'none';
   });
   window.addEventListener('pointerup', () => {
     if (isGrabbing) {

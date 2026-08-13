@@ -14,6 +14,7 @@ export interface ToolMeta {
   boilLabel: string;
   phaseLabel: string;
   isThermal: boolean;
+  showBrushTemp: boolean;
 }
 
 export interface SidePanelCallbacks {
@@ -122,7 +123,9 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   }
 
   addSlider(container, 'Brush width', MIN_RADIUS, MAX_RADIUS, 1, cb.brushWidth, (v) => String(v), cb.onSetBrushWidth);
-  addSlider(container, 'Brush temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, cb.brushTempC, formatCelsius, cb.onSetBrushTemp);
+  if (meta.showBrushTemp) {
+    addSlider(container, 'Brush temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, cb.brushTempC, formatCelsius, cb.onSetBrushTemp);
+  }
 
   if (meta.isThermal) {
     addSlider(

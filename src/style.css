@@ -263,6 +263,14 @@ body {
   visibility: hidden;
 }
 
+.brush-outline {
+  position: absolute;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
 .legend {
   display: flex;
   gap: 22px;
