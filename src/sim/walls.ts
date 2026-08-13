@@ -80,6 +80,12 @@ export function wallList(): readonly WallMaterial[] {
   return WALLS;
 }
 
+/** The addition-funnel apparatus (see apparatus-shapes.ts/funnel.ts) is
+ * always built from glass, same as the plain glass wall tool -- this is that
+ * material's specId, named rather than re-deriving WALL_SPEC_BASE + 0 at
+ * every call site. */
+export const GLASS_WALL_SPEC_ID = WALL_SPEC_BASE + 0;
+
 /** A wall's ThermalProfile, in the same shape heat.ts already consumes for
  * real species -- solid/liquid/gas branches are identical since a wall never
  * leaves PhaseCode.Solid, and heat of fusion/vaporization are irrelevant

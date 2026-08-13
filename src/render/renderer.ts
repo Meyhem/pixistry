@@ -22,6 +22,12 @@ export interface FrameData {
   tempK: Float32Array;
   radiatorRadius: Uint8Array;
   radiatorTargetK: Float32Array;
+  /** Addition-funnel reservoir fill (see worker.ts's computeFunnelFill) --
+   * EMPTY everywhere except a placed funnel's open interior, where it's that
+   * funnel's species. Purely a rendering hint, not real matter: blended at
+   * reduced strength (see FUNNEL_FILL_STRENGTH) so it reads as "container
+   * contents" rather than being visually identical to a real painted cell. */
+  funnelFillSpecId: Uint16Array;
 }
 
 export interface Renderer {
@@ -119,6 +125,12 @@ const GLOW_MAX_STRENGTH = 0.22;
 // already threaded through FrameData, no new per-species data.
 const GAS_LIGHTEN_STRENGTH = 0.45;
 const GAS_LIGHTEN_RGB: [number, number, number] = [255, 255, 255];
+
+// How strongly a funnel's decorative reservoir fill shows through, blended
+// against the empty-cell background rather than drawn at full species color
+// -- see FrameData.funnelFillSpecId's comment for why it needs to stay
+// visually distinct from real matter.
+const FUNNEL_FILL_STRENGTH = 0.6;
 
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
@@ -228,7 +240,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK }: FrameData): void {
+    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, funnelFillSpecId }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -242,7 +254,13 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           let border: { hue: readonly [number, number, number]; strength: number } | null = null;
 
           if (specId === EMPTY) {
-            baseRgba = BACKGROUND_RGBA;
+            const fillSpecId = funnelFillSpecId[i];
+            if (fillSpecId !== EMPTY) {
+              const fillColor = colorLUT.get(fillSpecId as number) ?? MISSING_SPEC_RGBA;
+              baseRgba = tintTowards(BACKGROUND_RGBA, [fillColor[0], fillColor[1], fillColor[2]], FUNNEL_FILL_STRENGTH);
+            } else {
+              baseRgba = BACKGROUND_RGBA;
+            }
           } else {
             baseRgba = colorLUT.get(specId as number) ?? MISSING_SPEC_RGBA;
             if ((phaseGrid[i] as PhaseCode) === PhaseCode.Gas) {

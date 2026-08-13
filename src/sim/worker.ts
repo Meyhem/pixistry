@@ -10,11 +10,14 @@
 // solid painted next to water actually dissolve into aqueous ions on-grid.
 // Pixistry is just pixels of elements and compounds with a temperature
 // each -- there is no gas pressure model.
-import { SimGrid } from './grid';
+import { EMPTY, SimGrid } from './grid';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
+import type { FunnelFacing } from './apparatus-shapes';
+import { funnelShapeFor } from './apparatus-shapes';
 import {
   celsiusToKelvin,
   energyForTemperature,
+  kelvinToCelsius,
   MAX_TEMP_K,
   massOf,
   stepAmbient,
@@ -23,11 +26,31 @@ import {
   stepRadiativeLoss,
   temperatureOf,
 } from './heat';
+import {
+  placeFunnelInstance,
+  rateFromIntervalTicks,
+  resetFunnelInstance,
+  stepFunnels,
+  updateFunnelInstance,
+  type FunnelInstance,
+} from './funnel';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
+
+export interface FunnelSnapshot {
+  id: number;
+  anchorX: number;
+  anchorY: number;
+  facing: FunnelFacing;
+  specId: number;
+  tempC: number;
+  ratePerMinute: number;
+  total: number | null;
+  remaining: number | null;
+}
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
@@ -38,6 +61,8 @@ export type WorkerToMainMessage =
       tempK: Float32Array;
       radiatorRadius: Uint8Array;
       radiatorTargetK: Float32Array;
+      funnelFillSpecId: Uint16Array;
+      funnels: FunnelSnapshot[];
       tick: number;
     };
 
@@ -51,7 +76,19 @@ export type MainToWorkerMessage =
   | { type: 'stir'; x: number; y: number; radius: number }
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
-  | { type: 'grabEnd' };
+  | { type: 'grabEnd' }
+  | {
+      type: 'placeFunnel';
+      x: number;
+      y: number;
+      facing: FunnelFacing;
+      specId: number;
+      tempC: number;
+      ratePerMinute: number;
+      total: number | null;
+    }
+  | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
+  | { type: 'resetFunnel'; id: number };
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -76,6 +113,12 @@ let tickAccumulator = 0;
 // purely for display -- see overlayGrabbedCells/postFrame below.
 let grabState: GrabState | null = null;
 
+// Placed addition-funnels (see funnel.ts) -- unlike walls or the radiator
+// overlay, a funnel needs per-instance state (species/rate/remaining budget)
+// that isn't representable as a value per grid cell, so it's tracked here as
+// a plain array rather than a SimGrid field.
+let funnels: FunnelInstance[] = [];
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -94,6 +137,7 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
 }
 
 function runOneTick(): void {
+  stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++);
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
@@ -117,6 +161,43 @@ function computeTempGrid(): Float32Array {
   return temps;
 }
 
+/** Per-frame decorative reservoir fill: for every funnel with remaining
+ * supply, marks its open interior cells (see apparatus-shapes.ts's
+ * reservoirCells) with its species -- but only where the grid cell is
+ * actually empty, so real matter someone poured/dropped in there still
+ * takes precedence over the cosmetic wash. Recomputed fresh every frame
+ * rather than stored on SimGrid, since it's purely a rendering hint, not
+ * simulated state (see renderer.ts's blend of this array). */
+function computeFunnelFill(): Uint16Array {
+  const fill = new Uint16Array(grid.width * grid.height).fill(EMPTY);
+  for (const instance of funnels) {
+    if (instance.remaining === 0) continue;
+    const shape = funnelShapeFor(instance.facing);
+    for (const cell of shape.reservoirCells) {
+      const x = instance.anchorX + cell.dx;
+      const y = instance.anchorY + cell.dy;
+      if (!grid.inBounds(x, y)) continue;
+      const idx = grid.index(x, y);
+      if (grid.isEmptyAt(idx)) fill[idx] = instance.specId;
+    }
+  }
+  return fill;
+}
+
+function funnelSnapshots(): FunnelSnapshot[] {
+  return funnels.map((f) => ({
+    id: f.id,
+    anchorX: f.anchorX,
+    anchorY: f.anchorY,
+    facing: f.facing,
+    specId: f.specId,
+    tempC: kelvinToCelsius(f.tempK),
+    ratePerMinute: rateFromIntervalTicks(f.intervalTicks),
+    total: f.total,
+    remaining: f.remaining,
+  }));
+}
+
 function overlayGrabbedCells(specId: Uint16Array, phase: Uint8Array, tempK: Float32Array): void {
   if (!grabState) return;
   for (const cell of grabState.cells) {
@@ -138,8 +219,9 @@ function postFrame(): void {
   const tempK = computeTempGrid();
   const radiatorRadius = grid.radiatorRadius.slice();
   const radiatorTargetK = grid.radiatorTargetK.slice();
+  const funnelFillSpecId = computeFunnelFill();
   overlayGrabbedCells(specId, phase, tempK);
-  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, tick });
+  post({ type: 'frame', specId, phase, tempK, radiatorRadius, radiatorTargetK, funnelFillSpecId, funnels: funnelSnapshots(), tick });
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -166,6 +248,15 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.clear(px, py);
         grid.radiatorRadius[grid.index(px, py)] = 0;
+      });
+      // Erasing a funnel's anchor (its spout tip) removes the whole tracked
+      // instance, not just whatever glass cells the brush touched -- the
+      // only way to delete a placed funnel, since there's no dedicated
+      // delete button (see side-panel.ts's Reset-only funnel edit panel).
+      funnels = funnels.filter((f) => {
+        const dx = f.anchorX - msg.x;
+        const dy = f.anchorY - msg.y;
+        return dx * dx + dy * dy > msg.radius * msg.radius;
       });
       break;
     case 'setRunning':
@@ -196,6 +287,29 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grabState = null;
       }
       break;
+    case 'placeFunnel':
+      funnels.push(
+        placeFunnelInstance(grid, {
+          x: msg.x,
+          y: msg.y,
+          facing: msg.facing,
+          specId: msg.specId,
+          tempC: msg.tempC,
+          ratePerMinute: msg.ratePerMinute,
+          total: msg.total,
+        }),
+      );
+      break;
+    case 'updateFunnel': {
+      const instance = funnels.find((f) => f.id === msg.id);
+      if (instance) updateFunnelInstance(instance, { specId: msg.specId, tempC: msg.tempC, ratePerMinute: msg.ratePerMinute, total: msg.total });
+      break;
+    }
+    case 'resetFunnel': {
+      const instance = funnels.find((f) => f.id === msg.id);
+      if (instance) resetFunnelInstance(instance);
+      break;
+    }
   }
 };
 

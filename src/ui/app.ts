@@ -8,14 +8,16 @@
 // together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
-import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
+import type { FunnelSnapshot, MainToWorkerMessage, WorkerToMainMessage } from '../sim/worker';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
 import { getWall, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
-import { buildToolbar, type ToolbarCallbacks } from './toolbar';
-import { buildSidePanel, type SidePanelCallbacks, type ToolMeta } from './side-panel';
+import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
+import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
+import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
+import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { isElementLabel } from './species-classify';
 import { SPECIES } from '../sim/species-data';
@@ -25,6 +27,8 @@ const DEFAULT_RADIUS = 2;
 const DEFAULT_RADIATION_RADIUS = 3;
 const DEFAULT_RADIATOR_TARGET_C = 100;
 const DEFAULT_BRUSH_TEMP_C = 21;
+const DEFAULT_FUNNEL_RATE_PER_MINUTE = 60;
+const DEFAULT_FUNNEL_TOTAL_AMOUNT = 100;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 
@@ -34,7 +38,24 @@ type Tool =
   | { kind: 'wall'; specId: number }
   | { kind: 'radiator' }
   | { kind: 'mixer' }
-  | { kind: 'grabber' };
+  | { kind: 'grabber' }
+  | { kind: 'funnel' }
+  | { kind: 'select-apparatus' };
+
+/** Local draft for the select-apparatus tool's edit panel -- mirrors a
+ * selected funnel's live config so every field edit (temp/rate/species/
+ * total) sends a complete 'updateFunnel' message built from this draft
+ * rather than from the worker's last snapshot, which only refreshes once
+ * per frame and would otherwise let a second quick edit clobber the first
+ * (see app.ts's sendFunnelUpdate). Re-seeded from the snapshot whenever the
+ * selection changes (see selectFunnel/render). */
+interface FunnelEditDraft {
+  specId: number;
+  tempC: number;
+  ratePerMinute: number;
+  totalMode: 'finite' | 'infinite';
+  totalAmount: number;
+}
 
 const PHASE_LABEL: Record<number, string> = {
   [PhaseCode.Empty]: 'empty',
@@ -116,6 +137,29 @@ export function mountApp(root: HTMLElement): void {
   brushOutline.style.display = 'none';
   canvasWrap.appendChild(brushOutline);
 
+  // Ghost preview for the funnel tool (see updateFunnelPreview): a 2D
+  // overlay canvas rather than the WebGL sim canvas, since it needs to draw
+  // an unrotated-in-the-grid-sense but freely positioned pixel shape purely
+  // client-side, redrawn on every mousemove/wheel without round-tripping
+  // through the worker.
+  const apparatusPreview = document.createElement('canvas');
+  apparatusPreview.className = 'apparatus-preview';
+  apparatusPreview.style.display = 'none';
+  canvasWrap.appendChild(apparatusPreview);
+  let previewCtx: CanvasRenderingContext2D | null = null;
+
+  // Selection box for the select-apparatus tool: 4 corner brackets
+  // positioned over the selected funnel's bounding box (see
+  // updateSelectionBox).
+  const selectBox = document.createElement('div');
+  selectBox.className = 'apparatus-select-box';
+  for (const corner of ['tl', 'tr', 'bl', 'br']) {
+    const cornerEl = document.createElement('div');
+    cornerEl.className = `corner ${corner}`;
+    selectBox.appendChild(cornerEl);
+  }
+  canvasWrap.appendChild(selectBox);
+
   const legend = document.createElement('div');
   legend.className = 'legend';
   const hotK = AMBIENT_TEMPERATURE_K + BORDER_RANGE_K;
@@ -153,8 +197,30 @@ export function mountApp(root: HTMLElement): void {
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
   let ptSelectedSymbol: string | null = null;
+  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' = 'paint';
   let isPointerDown = false;
   let isGrabbing = false;
+
+  // Addition-funnel tool config (pre-placement) -- captured into the
+  // instance at placement time, same "settings are a snapshot, not
+  // retroactive" convention as the radiator's sliders (see
+  // describeToolMeta's radiator case).
+  let funnelSpecId = 0;
+  let funnelTempC = DEFAULT_BRUSH_TEMP_C;
+  let funnelRatePerMinute = DEFAULT_FUNNEL_RATE_PER_MINUTE;
+  let funnelTotalMode: 'finite' | 'infinite' = 'finite';
+  let funnelTotalAmount = DEFAULT_FUNNEL_TOTAL_AMOUNT;
+  let funnelFacing: FunnelFacing = 'down';
+  let lastHoverX = 0;
+  let lastHoverY = 0;
+
+  // select-apparatus tool state: which placed funnel (by worker-assigned
+  // id) is selected, and a local edit draft for its settings -- see
+  // FunnelEditDraft's doc comment for why edits go through a draft instead
+  // of the last-known snapshot directly.
+  let selectedFunnelId: number | null = null;
+  let editDraft: FunnelEditDraft | null = null;
+  let lastFunnels: FunnelSnapshot[] = [];
 
   // Label lookup for the probe: every species (SPECIES is a fully static
   // table shared by main thread and worker, so specIds are stable array
@@ -183,9 +249,25 @@ export function mountApp(root: HTMLElement): void {
     return palette.find((entry) => entry.specId === specId);
   }
 
+  function findFunnel(id: number | null): FunnelSnapshot | undefined {
+    return id === null ? undefined : lastFunnels.find((f) => f.id === id);
+  }
+
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) {
-      return { label: 'No tool selected', color: '#3a3d3a', category: '', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, showBrushTemp: false };
+      return {
+        label: 'No tool selected',
+        color: '#3a3d3a',
+        category: '',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: false,
+        showBrushTemp: false,
+        showBrushWidth: true,
+        funnelPanel: 'none',
+      };
     }
     if (t.kind === 'paint') {
       const entry = paletteEntryFor(t.specId);
@@ -200,6 +282,8 @@ export function mountApp(root: HTMLElement): void {
         phaseLabel: PHASE_LABEL[entry.phase] ?? '',
         isThermal: false,
         showBrushTemp: true,
+        showBrushWidth: true,
+        funnelPanel: 'none',
       };
     }
     if (t.kind === 'wall') {
@@ -214,6 +298,8 @@ export function mountApp(root: HTMLElement): void {
         phaseLabel: '',
         isThermal: false,
         showBrushTemp: true,
+        showBrushWidth: true,
+        funnelPanel: 'none',
       };
     }
     if (t.kind === 'radiator') {
@@ -227,6 +313,39 @@ export function mountApp(root: HTMLElement): void {
         phaseLabel: '',
         isThermal: true,
         showBrushTemp: false,
+        showBrushWidth: true,
+        funnelPanel: 'none',
+      };
+    }
+    if (t.kind === 'funnel') {
+      return {
+        label: FUNNEL_LABEL,
+        color: FUNNEL_COLOR,
+        category: 'APPARATUS',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: false,
+        showBrushTemp: false,
+        showBrushWidth: false,
+        funnelPanel: 'config',
+      };
+    }
+    if (t.kind === 'select-apparatus') {
+      const selected = findFunnel(selectedFunnelId);
+      return {
+        label: selected ? FUNNEL_LABEL : SELECT_APPARATUS_LABEL,
+        color: selected ? FUNNEL_COLOR : SELECT_APPARATUS_COLOR,
+        category: selected ? 'APPARATUS' : 'TOOL',
+        isSpecies: false,
+        meltLabel: '',
+        boilLabel: '',
+        phaseLabel: '',
+        isThermal: false,
+        showBrushTemp: false,
+        showBrushWidth: false,
+        funnelPanel: selected ? 'edit' : 'edit-empty',
       };
     }
     const TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
@@ -235,7 +354,19 @@ export function mountApp(root: HTMLElement): void {
       grabber: { label: 'Grabber', color: '#f2d94e' },
     };
     const info = TOOL_META[t.kind];
-    return { label: info.label, color: info.color, category: 'TOOL', isSpecies: false, meltLabel: '', boilLabel: '', phaseLabel: '', isThermal: false, showBrushTemp: false };
+    return {
+      label: info.label,
+      color: info.color,
+      category: 'TOOL',
+      isSpecies: false,
+      meltLabel: '',
+      boilLabel: '',
+      phaseLabel: '',
+      isThermal: false,
+      showBrushTemp: false,
+      showBrushWidth: true,
+      funnelPanel: 'none',
+    };
   }
 
   function setTool(next: Tool): void {
@@ -249,6 +380,26 @@ export function mountApp(root: HTMLElement): void {
     render();
   }
 
+  /** Pushes the edit draft's full config to the worker as one message -- see
+   * FunnelEditDraft's doc comment for why every field is sent together
+   * rather than patched individually. */
+  function sendFunnelUpdate(): void {
+    if (selectedFunnelId === null || !editDraft) return;
+    send({
+      type: 'updateFunnel',
+      id: selectedFunnelId,
+      specId: editDraft.specId,
+      tempC: editDraft.tempC,
+      ratePerMinute: editDraft.ratePerMinute,
+      total: editDraft.totalMode === 'infinite' ? null : editDraft.totalAmount,
+    });
+  }
+
+  function selectFunnel(id: number | null): void {
+    selectedFunnelId = id;
+    editDraft = null;
+  }
+
   function render(): void {
     const toolbarCallbacks: ToolbarCallbacks = {
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
@@ -260,6 +411,7 @@ export function mountApp(root: HTMLElement): void {
       onSelectTool: (kind) => setTool({ kind }),
       onTogglePin: togglePin,
       onOpenPeriodicTable: () => {
+        ptTarget = 'paint';
         ptOpen = true;
         render();
       },
@@ -280,11 +432,50 @@ export function mountApp(root: HTMLElement): void {
     buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
 
     const meta = describeToolMeta(tool);
+    const isEditMode = tool?.kind === 'select-apparatus';
+    const selectedFunnel = isEditMode ? findFunnel(selectedFunnelId) : undefined;
+    // The select-apparatus tool's own selection can go stale (the selected
+    // funnel got erased, or depleted+erased) -- drop it rather than keep
+    // pointing an edit panel at nothing.
+    if (isEditMode && selectedFunnelId !== null && !selectedFunnel) selectFunnel(null);
+    if (isEditMode && selectedFunnel && !editDraft) {
+      editDraft = {
+        specId: selectedFunnel.specId,
+        tempC: selectedFunnel.tempC,
+        ratePerMinute: selectedFunnel.ratePerMinute,
+        totalMode: selectedFunnel.total === null ? 'infinite' : 'finite',
+        totalAmount: selectedFunnel.total ?? funnelTotalAmount,
+      };
+    }
+
+    const funnelFields: FunnelFieldValues =
+      isEditMode && editDraft
+        ? {
+            specLabel: labelBySpecId.get(editDraft.specId) ?? `spec ${editDraft.specId}`,
+            specColor: colorBySpecId.get(editDraft.specId) ?? '#888',
+            tempC: editDraft.tempC,
+            ratePerMinute: editDraft.ratePerMinute,
+            totalMode: editDraft.totalMode,
+            totalAmount: editDraft.totalAmount,
+            remaining: selectedFunnel?.remaining ?? null,
+          }
+        : {
+            specLabel: labelBySpecId.get(funnelSpecId) ?? `spec ${funnelSpecId}`,
+            specColor: colorBySpecId.get(funnelSpecId) ?? '#888',
+            tempC: funnelTempC,
+            ratePerMinute: funnelRatePerMinute,
+            totalMode: funnelTotalMode,
+            totalAmount: funnelTotalAmount,
+            remaining: null,
+          };
+
     // The radiator tool's settings are only ever read at paint time (see
     // applyTool's 'radiator' case) -- adjusting these sliders is local UI
     // state until the next paint, and never retroactively touches radiators
     // already placed on the grid (see grid.ts's radiatorRadius/
-    // radiatorTargetK doc comment).
+    // radiatorTargetK doc comment). The funnel tool's config works the same
+    // way pre-placement; once placed, select-apparatus edits go live
+    // instead (see sendFunnelUpdate).
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
       onSetBrushWidth: (value) => {
@@ -302,6 +493,48 @@ export function mountApp(root: HTMLElement): void {
       onSetTargetTemp: (value) => {
         targetTempC = value;
       },
+      funnelFields,
+      onOpenFunnelSpeciesPicker: () => {
+        ptTarget = isEditMode ? 'funnel-edit' : 'funnel-config';
+        ptOpen = true;
+        render();
+      },
+      onSetFunnelTemp: (value) => {
+        if (isEditMode && editDraft) {
+          editDraft.tempC = value;
+          sendFunnelUpdate();
+        } else {
+          funnelTempC = value;
+        }
+      },
+      onSetFunnelRate: (value) => {
+        if (isEditMode && editDraft) {
+          editDraft.ratePerMinute = value;
+          sendFunnelUpdate();
+        } else {
+          funnelRatePerMinute = value;
+        }
+      },
+      onSetFunnelTotalMode: (mode) => {
+        if (isEditMode && editDraft) {
+          editDraft.totalMode = mode;
+          sendFunnelUpdate();
+        } else {
+          funnelTotalMode = mode;
+        }
+        render();
+      },
+      onSetFunnelTotalAmount: (value) => {
+        if (isEditMode && editDraft) {
+          editDraft.totalAmount = value;
+          sendFunnelUpdate();
+        } else {
+          funnelTotalAmount = value;
+        }
+      },
+      onResetFunnel: () => {
+        if (selectedFunnelId !== null) send({ type: 'resetFunnel', id: selectedFunnelId });
+      },
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -315,7 +548,14 @@ export function mountApp(root: HTMLElement): void {
           render();
         },
         onSelectSpecies: (specId) => {
-          setTool({ kind: 'paint', specId });
+          if (ptTarget === 'funnel-config') {
+            funnelSpecId = specId;
+          } else if (ptTarget === 'funnel-edit' && editDraft) {
+            editDraft.specId = specId;
+            sendFunnelUpdate();
+          } else {
+            setTool({ kind: 'paint', specId });
+          }
           ptOpen = false;
           ptSelectedSymbol = null;
           render();
@@ -332,6 +572,8 @@ export function mountApp(root: HTMLElement): void {
       ptOverlay.style.display = 'none';
       ptOverlay.innerHTML = '';
     }
+
+    updateSelectionBox();
   }
 
   function gridCoordsFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -363,6 +605,72 @@ export function mountApp(root: HTMLElement): void {
     brushOutline.style.height = `${diameterY}px`;
   }
 
+  // Ghost preview for the funnel tool: draws the rotated glass outline at
+  // the hovered cell on a plain 2D overlay canvas (see apparatusPreview's
+  // creation comment). Resized to match the sim canvas's on-screen CSS size
+  // every call -- cheap, since it only happens on hover/wheel while the
+  // funnel tool is active, not every tick.
+  function updateFunnelPreview(x: number, y: number): void {
+    if (tool?.kind !== 'funnel' || gridWidth === 0 || gridHeight === 0) {
+      apparatusPreview.style.display = 'none';
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
+    if (apparatusPreview.width !== width || apparatusPreview.height !== height) {
+      apparatusPreview.width = width;
+      apparatusPreview.height = height;
+      previewCtx = apparatusPreview.getContext('2d');
+    }
+    if (!previewCtx) return;
+    apparatusPreview.style.display = 'block';
+    const cellPxX = rect.width / gridWidth;
+    const cellPxY = rect.height / gridHeight;
+    previewCtx.clearRect(0, 0, apparatusPreview.width, apparatusPreview.height);
+    previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
+    const shape = funnelShapeFor(funnelFacing);
+    for (const cell of shape.cells) {
+      const px = x + cell.dx;
+      const py = y + cell.dy;
+      previewCtx.fillRect(px * cellPxX, py * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+    }
+  }
+
+  /** Bounding box hit-test against every placed funnel's rotated outline
+   * (see apparatus-shapes.ts's funnelBounds) -- good enough for "click
+   * anywhere near the funnel selects it" without pixel-perfect glass
+   * hit-testing. Returns the first match; overlapping funnels are an edge
+   * case not worth resolving more precisely. */
+  function hitTestFunnel(x: number, y: number): number | null {
+    for (const f of lastFunnels) {
+      const bounds = funnelBounds(funnelShapeFor(f.facing));
+      if (x >= f.anchorX + bounds.minDx && x <= f.anchorX + bounds.maxDx && y >= f.anchorY + bounds.minDy && y <= f.anchorY + bounds.maxDy) {
+        return f.id;
+      }
+    }
+    return null;
+  }
+
+  /** Positions the select-apparatus tool's corner-bracket overlay over the
+   * selected funnel's bounding box, or hides it. */
+  function updateSelectionBox(): void {
+    const selected = tool?.kind === 'select-apparatus' ? findFunnel(selectedFunnelId) : undefined;
+    if (!selected || gridWidth === 0 || gridHeight === 0) {
+      selectBox.style.display = 'none';
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const cellPxX = rect.width / gridWidth;
+    const cellPxY = rect.height / gridHeight;
+    const bounds = funnelBounds(funnelShapeFor(selected.facing));
+    selectBox.style.display = 'block';
+    selectBox.style.left = `${(selected.anchorX + bounds.minDx) * cellPxX}px`;
+    selectBox.style.top = `${(selected.anchorY + bounds.minDy) * cellPxY}px`;
+    selectBox.style.width = `${(bounds.maxDx - bounds.minDx + 1) * cellPxX}px`;
+    selectBox.style.height = `${(bounds.maxDy - bounds.minDy + 1) * cellPxY}px`;
+  }
+
   function applyTool(x: number, y: number): void {
     if (!tool) return;
     switch (tool.kind) {
@@ -382,6 +690,22 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'stir', x, y, radius: brushWidth });
         break;
       case 'grabber':
+        break;
+      case 'funnel':
+        send({
+          type: 'placeFunnel',
+          x,
+          y,
+          facing: funnelFacing,
+          specId: funnelSpecId,
+          tempC: funnelTempC,
+          ratePerMinute: funnelRatePerMinute,
+          total: funnelTotalMode === 'infinite' ? null : funnelTotalAmount,
+        });
+        break;
+      case 'select-apparatus':
+        selectFunnel(hitTestFunnel(x, y));
+        render();
         break;
     }
   }
@@ -423,21 +747,38 @@ export function mountApp(root: HTMLElement): void {
   });
   canvas.addEventListener('pointermove', (event) => {
     const { x, y } = gridCoordsFromEvent(event);
+    lastHoverX = x;
+    lastHoverY = y;
     if (isPointerDown) {
       if (isGrabbing) {
         send({ type: 'grabMove', x, y });
-      } else {
+      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'select-apparatus') {
+        // Both are single-click actions (place once, select once) rather
+        // than a brush -- applyTool already ran once on pointerdown, so a
+        // drag shouldn't re-place/re-select on every move.
         applyTool(x, y);
       }
     }
     updateInspector(x, y);
     updateBrushOutline(event);
+    updateFunnelPreview(x, y);
   });
   canvas.addEventListener('pointerleave', () => {
     inspector.classList.add('empty');
     inspectorText.textContent = 'Hover the canvas to inspect a cell';
     brushOutline.style.display = 'none';
+    apparatusPreview.style.display = 'none';
   });
+  canvas.addEventListener(
+    'wheel',
+    (event) => {
+      if (tool?.kind !== 'funnel') return;
+      event.preventDefault();
+      funnelFacing = nextFunnelFacing(funnelFacing, event.deltaY > 0 ? 1 : -1);
+      updateFunnelPreview(lastHoverX, lastHoverY);
+    },
+    { passive: false },
+  );
   window.addEventListener('pointerup', () => {
     if (isGrabbing) {
       send({ type: 'grabEnd' });
@@ -462,7 +803,10 @@ export function mountApp(root: HTMLElement): void {
 
       const firstPinned = pinnedLabels.map((label) => palette.find((entry) => entry.label === label)).find((entry): entry is PaletteEntry => !!entry);
       const initial = firstPinned ?? palette[0];
-      if (initial) tool = { kind: 'paint', specId: initial.specId };
+      if (initial) {
+        tool = { kind: 'paint', specId: initial.specId };
+        funnelSpecId = initial.specId;
+      }
       render();
     } else if (msg.type === 'frame') {
       lastSpecId = msg.specId;
@@ -470,6 +814,7 @@ export function mountApp(root: HTMLElement): void {
       lastTempK = msg.tempK;
       lastRadiatorRadius = msg.radiatorRadius;
       lastRadiatorTargetK = msg.radiatorTargetK;
+      lastFunnels = msg.funnels;
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,
@@ -477,7 +822,14 @@ export function mountApp(root: HTMLElement): void {
         tempK: msg.tempK,
         radiatorRadius: msg.radiatorRadius,
         radiatorTargetK: msg.radiatorTargetK,
+        funnelFillSpecId: msg.funnelFillSpecId,
       });
+      // The select-apparatus tool's edit panel shows a placed funnel's live
+      // "Remaining" count and needs to reflect Reset immediately -- full
+      // render() is only paid here, in this one deliberately-chosen,
+      // non-default tool mode, not on every frame regardless of tool.
+      if (tool?.kind === 'select-apparatus') render();
+      else updateSelectionBox();
     }
   };
 

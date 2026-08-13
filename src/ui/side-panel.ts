@@ -1,9 +1,15 @@
 // The right-hand card describing the active tool: swatch/label/category
 // chip, species melt/boil/phase readout when relevant, brush width, brush
 // temperature, and (for the radiator tool) radiation radius + target
-// temperature. Rebuilt wholesale whenever the active tool or any of its
-// settings change -- see app.ts's render().
+// temperature. The addition-funnel tool and the select-apparatus tool
+// (see app.ts) share a "funnel panel" section here -- the same field set is
+// used both to configure a funnel before placement and to live-edit an
+// already-placed one, the only difference being whether a Reset button and
+// a remaining-supply readout are shown (meta.funnelPanel). Rebuilt wholesale
+// whenever the active tool or any of its settings change -- see app.ts's
+// render().
 import { formatCelsius } from './format';
+import { contrastTextColor, contrastTextShadow } from './contrast';
 
 export interface ToolMeta {
   label: string;
@@ -15,6 +21,22 @@ export interface ToolMeta {
   phaseLabel: string;
   isThermal: boolean;
   showBrushTemp: boolean;
+  showBrushWidth: boolean;
+  /** 'none': no funnel section. 'config': pre-placement settings (the
+   * funnel tool). 'edit-empty': select-apparatus tool with nothing selected
+   * yet. 'edit': select-apparatus tool with a placed funnel selected. */
+  funnelPanel: 'none' | 'config' | 'edit-empty' | 'edit';
+}
+
+export interface FunnelFieldValues {
+  specLabel: string;
+  specColor: string;
+  tempC: number;
+  ratePerMinute: number;
+  totalMode: 'finite' | 'infinite';
+  totalAmount: number;
+  /** Only meaningful when funnelPanel === 'edit'. */
+  remaining: number | null;
 }
 
 export interface SidePanelCallbacks {
@@ -26,6 +48,13 @@ export interface SidePanelCallbacks {
   onSetRadiationRadius(value: number): void;
   targetTempC: number;
   onSetTargetTemp(value: number): void;
+  funnelFields: FunnelFieldValues;
+  onOpenFunnelSpeciesPicker(): void;
+  onSetFunnelTemp(value: number): void;
+  onSetFunnelRate(value: number): void;
+  onSetFunnelTotalMode(mode: 'finite' | 'infinite'): void;
+  onSetFunnelTotalAmount(value: number): void;
+  onResetFunnel(): void;
 }
 
 const MIN_RADIUS = 1;
@@ -35,6 +64,8 @@ const MAX_RADIATION_RADIUS = 15;
 const MIN_TEMP_C = -250;
 const MAX_TEMP_C = 1500;
 const TEMP_STEP_C = 5;
+const MIN_FUNNEL_RATE = 1;
+const MAX_FUNNEL_RATE = 600;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -78,8 +109,117 @@ function addSlider(
   container.appendChild(wrap);
 }
 
+function addNumberField(container: HTMLElement, label: string, value: number, min: number, step: number, onChange: (v: number) => void): void {
+  const wrap = el('div', 'setting');
+  const row = el('div', 'setting-row');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = label;
+  row.appendChild(labelEl);
+  wrap.appendChild(row);
+
+  const input = el('input', 'setting-number');
+  input.type = 'number';
+  input.min = String(min);
+  input.step = String(step);
+  input.value = String(value);
+  input.oninput = () => {
+    const next = Number(input.value);
+    if (Number.isFinite(next)) onChange(next);
+  };
+  wrap.appendChild(input);
+  container.appendChild(wrap);
+}
+
 function addDivider(container: HTMLElement): void {
   container.appendChild(el('div', 'divider'));
+}
+
+function addFunnelSpeciesButton(container: HTMLElement, label: string, color: string, onClick: () => void): void {
+  const wrap = el('div', 'setting');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = 'Species';
+  wrap.appendChild(labelEl);
+
+  const button = el('button', 'funnel-species-btn');
+  button.style.setProperty('--swatch', color);
+  button.style.color = contrastTextColor(color);
+  button.style.textShadow = contrastTextShadow(color);
+  button.textContent = label;
+  button.onclick = onClick;
+  wrap.appendChild(button);
+  container.appendChild(wrap);
+}
+
+function addTotalModeToggle(container: HTMLElement, mode: 'finite' | 'infinite', onChange: (mode: 'finite' | 'infinite') => void): void {
+  const wrap = el('div', 'setting');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = 'Total amount';
+  wrap.appendChild(labelEl);
+
+  const row = el('div', 'funnel-toggle-row');
+  const finiteBtn = el('button', 'funnel-toggle-btn');
+  finiteBtn.textContent = 'Finite';
+  finiteBtn.classList.toggle('active', mode === 'finite');
+  finiteBtn.onclick = () => onChange('finite');
+  const infiniteBtn = el('button', 'funnel-toggle-btn');
+  infiniteBtn.textContent = 'Infinite';
+  infiniteBtn.classList.toggle('active', mode === 'infinite');
+  infiniteBtn.onclick = () => onChange('infinite');
+  row.appendChild(finiteBtn);
+  row.appendChild(infiniteBtn);
+  wrap.appendChild(row);
+  container.appendChild(wrap);
+}
+
+function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
+  if (meta.funnelPanel === 'none') return;
+  addDivider(container);
+
+  if (meta.funnelPanel === 'edit-empty') {
+    const hint = el('div', 'setting-hint-box');
+    const body = el('p', 'setting-hint');
+    body.textContent = 'Click a placed apparatus on the grid to select it.';
+    hint.appendChild(body);
+    container.appendChild(hint);
+    return;
+  }
+
+  const f = cb.funnelFields;
+  addFunnelSpeciesButton(container, f.specLabel, f.specColor, cb.onOpenFunnelSpeciesPicker);
+  addSlider(container, 'Spawn temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, f.tempC, formatCelsius, cb.onSetFunnelTemp);
+  addSlider(container, 'Rate (px/min)', MIN_FUNNEL_RATE, MAX_FUNNEL_RATE, 1, f.ratePerMinute, (v) => String(v), cb.onSetFunnelRate);
+  addTotalModeToggle(container, f.totalMode, cb.onSetFunnelTotalMode);
+  if (f.totalMode === 'finite') {
+    addNumberField(container, 'Amount', f.totalAmount, 1, 1, cb.onSetFunnelTotalAmount);
+  }
+
+  if (meta.funnelPanel === 'edit') {
+    const status = el('div', 'prop-row');
+    const l = el('span', 'prop-label');
+    l.textContent = 'Remaining';
+    const v = el('span', 'prop-value');
+    v.textContent = f.remaining === null ? 'infinite' : String(f.remaining);
+    status.appendChild(l);
+    status.appendChild(v);
+    container.appendChild(status);
+
+    const resetBtn = el('button', 'funnel-reset-btn');
+    resetBtn.textContent = 'Reset';
+    resetBtn.onclick = cb.onResetFunnel;
+    container.appendChild(resetBtn);
+  }
+
+  const hint = el('div', 'setting-hint-box');
+  const hintTitle = el('div', 'setting-hint-title');
+  hintTitle.textContent = 'HOW IT WORKS';
+  const hintBody = el('p', 'setting-hint');
+  hintBody.textContent =
+    meta.funnelPanel === 'config'
+      ? 'Rotate with the scroll wheel while hovering the grid, then click to place. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
+      : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it.";
+  hint.appendChild(hintTitle);
+  hint.appendChild(hintBody);
+  container.appendChild(hint);
 }
 
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
@@ -122,7 +262,9 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     addDivider(container);
   }
 
-  addSlider(container, 'Brush width', MIN_RADIUS, MAX_RADIUS, 1, cb.brushWidth, (v) => String(v), cb.onSetBrushWidth);
+  if (meta.showBrushWidth) {
+    addSlider(container, 'Brush width', MIN_RADIUS, MAX_RADIUS, 1, cb.brushWidth, (v) => String(v), cb.onSetBrushWidth);
+  }
   if (meta.showBrushTemp) {
     addSlider(container, 'Brush temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, cb.brushTempC, formatCelsius, cb.onSetBrushTemp);
   }
@@ -150,4 +292,6 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     hint.appendChild(hintBody);
     container.appendChild(hint);
   }
+
+  addFunnelPanel(container, meta, cb);
 }

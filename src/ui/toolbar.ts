@@ -8,16 +8,22 @@
 import type { PaletteEntry } from '../sim/species';
 import type { WallMaterial } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
+import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { contrastTextColor, contrastTextShadow } from './contrast';
+
+export type ToolKind = 'radiator' | 'erase' | 'mixer' | 'grabber' | 'funnel' | 'select-apparatus';
+
+export const SELECT_APPARATUS_LABEL = 'Select';
+export const SELECT_APPARATUS_COLOR = '#4da3ff';
 
 export interface ToolbarCallbacks {
   isPaintActive(specId: number): boolean;
   isWallActive(specId: number): boolean;
-  isToolActive(kind: 'radiator' | 'erase' | 'mixer' | 'grabber'): boolean;
+  isToolActive(kind: ToolKind): boolean;
   isPinned(label: string): boolean;
   onSelectPaint(specId: number): void;
   onSelectWall(specId: number): void;
-  onSelectTool(kind: 'radiator' | 'erase' | 'mixer' | 'grabber'): void;
+  onSelectTool(kind: ToolKind): void;
   onTogglePin(label: string): void;
   onOpenPeriodicTable(): void;
   running: boolean;
@@ -111,12 +117,20 @@ export function buildToolbar(
   apparatus.items.appendChild(
     makePaletteButton(RADIATOR_LABEL, RADIATOR_COLOR, cb.isToolActive('radiator'), () => cb.onSelectTool('radiator')),
   );
+  apparatus.items.appendChild(
+    makePaletteButton(FUNNEL_LABEL, FUNNEL_COLOR, cb.isToolActive('funnel'), () => cb.onSelectTool('funnel')),
+  );
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');
   tools.items.appendChild(makePaletteButton('Erase', null, cb.isToolActive('erase'), () => cb.onSelectTool('erase')));
   tools.items.appendChild(makePaletteButton('Mixer', '#c9a8ff', cb.isToolActive('mixer'), () => cb.onSelectTool('mixer')));
   tools.items.appendChild(makePaletteButton('Grabber', '#f2d94e', cb.isToolActive('grabber'), () => cb.onSelectTool('grabber')));
+  tools.items.appendChild(
+    makePaletteButton(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, cb.isToolActive('select-apparatus'), () =>
+      cb.onSelectTool('select-apparatus'),
+    ),
+  );
   container.appendChild(tools.row);
 
   const sim = makeRow('SIMULATION');
