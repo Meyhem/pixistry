@@ -27,6 +27,7 @@ import {
   temperatureOf,
 } from './heat';
 import {
+  moveFunnelInstance,
   placeFunnelInstance,
   rateFromIntervalTicks,
   resetFunnelInstance,
@@ -88,7 +89,8 @@ export type MainToWorkerMessage =
       total: number | null;
     }
   | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
-  | { type: 'resetFunnel'; id: number };
+  | { type: 'resetFunnel'; id: number }
+  | { type: 'moveFunnel'; id: number; x: number; y: number };
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -308,6 +310,11 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'resetFunnel': {
       const instance = funnels.find((f) => f.id === msg.id);
       if (instance) resetFunnelInstance(instance);
+      break;
+    }
+    case 'moveFunnel': {
+      const instance = funnels.find((f) => f.id === msg.id);
+      if (instance) moveFunnelInstance(grid, instance, msg.x, msg.y);
       break;
     }
   }

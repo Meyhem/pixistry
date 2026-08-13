@@ -222,6 +222,15 @@ export function mountApp(root: HTMLElement): void {
   let editDraft: FunnelEditDraft | null = null;
   let lastFunnels: FunnelSnapshot[] = [];
 
+  // select-apparatus drag-to-move state: set on pointerdown when the click
+  // hit a funnel, cleared on pointerup. dragOffsetX/Y is the click point's
+  // offset from the funnel's anchor at grab time, so the funnel moves
+  // relative to where it was grabbed rather than snapping its anchor to the
+  // cursor.
+  let draggingFunnelId: number | null = null;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+
   // Label lookup for the probe: every species (SPECIES is a fully static
   // table shared by main thread and worker, so specIds are stable array
   // indices -- no need to round-trip through the worker) plus walls.
@@ -703,10 +712,20 @@ export function mountApp(root: HTMLElement): void {
           total: funnelTotalMode === 'infinite' ? null : funnelTotalAmount,
         });
         break;
-      case 'select-apparatus':
-        selectFunnel(hitTestFunnel(x, y));
+      case 'select-apparatus': {
+        const hitId = hitTestFunnel(x, y);
+        selectFunnel(hitId);
+        const hit = hitId === null ? undefined : findFunnel(hitId);
+        if (hit) {
+          draggingFunnelId = hitId;
+          dragOffsetX = x - hit.anchorX;
+          dragOffsetY = y - hit.anchorY;
+        } else {
+          draggingFunnelId = null;
+        }
         render();
         break;
+      }
     }
   }
 
@@ -752,10 +771,18 @@ export function mountApp(root: HTMLElement): void {
     if (isPointerDown) {
       if (isGrabbing) {
         send({ type: 'grabMove', x, y });
-      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'select-apparatus') {
-        // Both are single-click actions (place once, select once) rather
-        // than a brush -- applyTool already ran once on pointerdown, so a
-        // drag shouldn't re-place/re-select on every move.
+      } else if (tool?.kind === 'select-apparatus') {
+        // Selecting is a single-click action (applyTool already ran once on
+        // pointerdown), but if that click grabbed a funnel, dragging moves
+        // it -- offset-relative to where it was grabbed, not snapped to the
+        // cursor.
+        if (draggingFunnelId !== null) {
+          send({ type: 'moveFunnel', id: draggingFunnelId, x: x - dragOffsetX, y: y - dragOffsetY });
+        }
+      } else if (tool?.kind !== 'funnel') {
+        // Single-click action (place once) rather than a brush --
+        // applyTool already ran once on pointerdown, so a drag shouldn't
+        // re-place on every move.
         applyTool(x, y);
       }
     }
@@ -784,6 +811,7 @@ export function mountApp(root: HTMLElement): void {
       send({ type: 'grabEnd' });
       isGrabbing = false;
     }
+    draggingFunnelId = null;
     isPointerDown = false;
   });
 

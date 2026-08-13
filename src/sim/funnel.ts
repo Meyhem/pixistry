@@ -19,8 +19,8 @@ export const FUNNEL_COLOR = '#a9d6e8'; // same glass tint the funnel is built fr
 
 export interface FunnelInstance {
   readonly id: number;
-  readonly anchorX: number;
-  readonly anchorY: number;
+  anchorX: number;
+  anchorY: number;
   readonly facing: FunnelFacing;
   specId: number;
   tempK: number;
@@ -88,6 +88,27 @@ export function placeFunnelInstance(grid: SimGrid, placement: FunnelPlacement): 
   };
 }
 
+/** Moves a placed funnel to a new anchor: clears the glass outline at its
+ * current position, re-stamps it at the new one (overwriting whatever's
+ * there, same as placeFunnelInstance), and updates the instance's anchor in
+ * place. Facing is unchanged -- the select-apparatus tool's drag only
+ * translates, it doesn't rotate. */
+export function moveFunnelInstance(grid: SimGrid, instance: FunnelInstance, x: number, y: number): void {
+  const shape = funnelShapeFor(instance.facing);
+  for (const cell of shape.cells) {
+    const ox = instance.anchorX + cell.dx;
+    const oy = instance.anchorY + cell.dy;
+    if (grid.inBounds(ox, oy)) grid.clear(ox, oy);
+  }
+  for (const cell of shape.cells) {
+    const nx = x + cell.dx;
+    const ny = y + cell.dy;
+    if (grid.inBounds(nx, ny)) grid.set(nx, ny, GLASS_WALL_SPEC_ID, PhaseCode.Solid, 0);
+  }
+  instance.anchorX = x;
+  instance.anchorY = y;
+}
+
 export interface FunnelConfig {
   readonly specId: number;
   readonly tempC: number;
@@ -96,8 +117,9 @@ export interface FunnelConfig {
 }
 
 /** Live-edits a placed funnel's species/temperature/rate/total (the select-
- * apparatus tool's edit panel) -- position/facing/glass never change after
- * placement. Doesn't refill `remaining` on its own (see resetFunnelInstance
+ * apparatus tool's edit panel) -- facing never changes after placement, and
+ * position only ever changes via moveFunnelInstance (dragging), never here.
+ * Doesn't refill `remaining` on its own (see resetFunnelInstance
  * for that): lowering `total` below the current remaining budget clamps it
  * down, raising it (or switching to infinite) leaves the current progress
  * alone rather than granting a surprise refill. */

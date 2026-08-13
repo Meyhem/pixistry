@@ -6,6 +6,7 @@ import { GLASS_WALL_SPEC_ID } from './walls';
 import { funnelShapeFor, funnelSpawnOffset } from './apparatus-shapes';
 import {
   intervalTicksForRate,
+  moveFunnelInstance,
   placeFunnelInstance,
   rateFromIntervalTicks,
   resetFunnelInstance,
@@ -155,5 +156,32 @@ describe('funnel', () => {
     updateFunnelInstance(instance, { specId: instance.specId, tempC: 21, ratePerMinute: 60, total: null });
     expect(instance.total).toBeNull();
     expect(instance.remaining).toBeNull();
+  });
+
+  it('moveFunnelInstance clears the old glass outline, stamps it at the new anchor, and updates the instance', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid);
+    const shape = funnelShapeFor(instance.facing);
+
+    moveFunnelInstance(grid, instance, 30, 90); // far enough away (and in bounds) that the old and new outlines don't overlap
+
+    expect(instance.anchorX).toBe(30);
+    expect(instance.anchorY).toBe(90);
+    for (const cell of shape.cells) {
+      const oldIdx = grid.index(50 + cell.dx, 50 + cell.dy);
+      expect(grid.isEmptyAt(oldIdx)).toBe(true);
+      const newIdx = grid.index(30 + cell.dx, 90 + cell.dy);
+      expect(grid.specId[newIdx]).toBe(GLASS_WALL_SPEC_ID);
+    }
+  });
+
+  it('moveFunnelInstance overwrites whatever matter sits at the destination, same as placement', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid);
+    grid.set(70, 60, SpeciesId.Fe, PhaseCode.Solid);
+
+    moveFunnelInstance(grid, instance, 70, 60);
+
+    expect(grid.specId[grid.index(70, 60)]).toBe(GLASS_WALL_SPEC_ID);
   });
 });
