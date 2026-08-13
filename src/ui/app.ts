@@ -18,6 +18,7 @@ import { buildToolbar, type ToolbarCallbacks } from './toolbar';
 import { buildSidePanel, type SidePanelCallbacks, type ToolMeta } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { isElementLabel } from './species-classify';
+import { SPECIES } from '../sim/species-data';
 import { formatCelsius } from './format';
 
 const DEFAULT_RADIUS = 2;
@@ -155,13 +156,15 @@ export function mountApp(root: HTMLElement): void {
   let isPointerDown = false;
   let isGrabbing = false;
 
-  // Label lookup for the probe: palette species and walls. Reaction
-  // products (M5) can mint specIds beyond the initial palette -- the
-  // inspector falls back to `spec N` for those (see updateInspector); a
-  // real formula lookup would need the main thread to see the worker's
-  // InternedPool, which it deliberately doesn't.
+  // Label lookup for the probe: every species (SPECIES is a fully static
+  // table shared by main thread and worker, so specIds are stable array
+  // indices -- no need to round-trip through the worker) plus walls.
   const labelBySpecId = new Map<number, string>();
   const colorBySpecId = new Map<number, string>();
+  SPECIES.forEach((data, specId) => {
+    labelBySpecId.set(specId, data.name);
+    colorBySpecId.set(specId, data.color);
+  });
   for (const wall of wallList()) {
     labelBySpecId.set(wall.specId, wall.label);
     colorBySpecId.set(wall.specId, wall.color);
