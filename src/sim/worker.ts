@@ -442,7 +442,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       maxTempKObserved = 0;
       activeScenario = msg.scenario;
       activeRestrictions = msg.scenario.rules;
-      applyScenarioSetup(grid, species, msg.scenario);
+      applyScenarioSetup(grid, species, funnels, msg.scenario);
       break;
     case 'snapshotWorld':
       worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);
