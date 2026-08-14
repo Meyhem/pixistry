@@ -27,10 +27,12 @@ body {
 #app {
   width: 100%;
   height: 100vh;
+  min-height: 0;
   padding: 16px 28px 20px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .app-header {
@@ -275,6 +277,15 @@ body {
 .canvas-wrap {
   position: relative;
   flex: none;
+  /* app.ts's fitCanvasWrap sets an exact pixel height/width to fit
+     canvas-col's available space every ResizeObserver tick. Content-box
+     (the default) would make that an exact *content* size, so this
+     element's real rendered height would always be 2px taller than what
+     was set (this 1px+1px border) -- canvas-col.clientHeight, which
+     fitCanvasWrap reads back next tick, would then reflect that inflated
+     total, adding another 2px forever. border-box makes the set height the
+     real rendered height, closing that loop. */
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1044,4 +1055,229 @@ input[type='range'] {
   font-size: 13px;
   color: var(--accent);
   letter-spacing: 0.1em;
+}
+
+/* Campaign mode: briefing/win overlay ------------------------------------ */
+
+.campaign-overlay {
+  z-index: 60;
+}
+
+.campaign-modal {
+  width: min(480px, 92vw);
+  max-height: 88vh;
+  background: var(--panel-bg);
+  border: 1px solid #2b302d;
+  border-radius: 16px;
+  padding: 26px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+  text-align: center;
+  align-items: center;
+}
+
+.campaign-modal-title {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.campaign-modal-blurb {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.briefing-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.briefing-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #c2c7c3;
+}
+
+.briefing-line::before {
+  content: '• ';
+  color: var(--accent);
+}
+
+.campaign-primary-btn,
+.campaign-secondary-btn {
+  height: 36px;
+  padding: 0 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.campaign-primary-btn {
+  border: none;
+  background: var(--accent);
+  color: #0c1210;
+}
+
+.campaign-primary-btn:hover {
+  filter: brightness(1.08);
+}
+
+.campaign-secondary-btn {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #1e2120;
+  color: var(--text);
+}
+
+.campaign-secondary-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.win-stars {
+  font-size: 32px;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+
+.win-time {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.win-fact {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #c2c7c3;
+}
+
+.win-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Campaign mode: persistent objective HUD --------------------------------- */
+
+.campaign-hud {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+}
+
+.campaign-hud-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.campaign-hud-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-objective {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.hud-objective-label {
+  font-size: 13px;
+}
+
+.hud-objective.complete .hud-objective-label {
+  color: var(--accent);
+}
+
+.hud-objective.failed .hud-objective-label {
+  color: #e05a5a;
+}
+
+.hud-bar-track {
+  height: 10px;
+  border-radius: 6px;
+  background: #0c0d0c;
+  border: 1px solid var(--panel-border);
+  overflow: hidden;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  border-radius: 6px 0 0 6px;
+  transition: width 0.15s ease-out;
+}
+
+.hud-objective-readout {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.campaign-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.hint-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #c2c7c3;
+}
+
+.hint-line::before {
+  content: '💡 ';
+}
+
+.hint-btn {
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Campaign mode: locked toolbar entries ------------------------------------ */
+
+.palette-btn.locked,
+.pt-open-btn.locked {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+  cursor: not-allowed;
+}
+
+.dropdown-select option:disabled {
+  color: var(--text-faint);
 }

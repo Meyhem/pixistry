@@ -52,6 +52,21 @@ export interface ToolbarCallbacks {
   onResetWorld(): void;
   onSnapshotWorld(): void;
   onRestoreWorld(): void;
+  /** Whether the pin (📌) button appears on quick-species buttons -- false
+   * in campaign mode, where the quick row is the scenario's fixed allowed
+   * reagent list, not the player's own customizable pins (see app.ts). */
+  pinnable: boolean;
+  /** Sandbox mode (the default, absent callback) never locks anything.
+   * Campaign mode (see .grill/campaign-mode.md's Restrictions) passes these
+   * so a forbidden tool/wall renders greyed with a padlock, explaining why a
+   * click does nothing, instead of silently no-op'ing at the worker. */
+  isWallLocked?(specId: number): boolean;
+  isToolLocked?(kind: ToolKind): boolean;
+  periodicTableLocked?: boolean;
+  /** "Clear All" by default -- app.ts relabels it "Reset Experiment" in
+   * campaign mode, where the button restarts the active scenario instead of
+   * wiping to a blank sandbox. */
+  resetWorldLabel?: string;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -66,7 +81,13 @@ function makeRow(label: string): { row: HTMLDivElement; items: HTMLDivElement } 
   return { row, items };
 }
 
-function makePaletteButton(label: string, swatch: string | null, active: boolean, onClick: () => void, disabled = false): HTMLButtonElement {
+function makePaletteButton(
+  label: string,
+  swatch: string | null,
+  active: boolean,
+  onClick: () => void,
+  opts: { disabled?: boolean; locked?: boolean } = {},
+): HTMLButtonElement {
   const button = el('button', 'palette-btn');
   if (active) button.classList.add('active');
   if (swatch) {
@@ -76,8 +97,12 @@ function makePaletteButton(label: string, swatch: string | null, active: boolean
   } else {
     button.classList.add('erase-btn');
   }
-  button.textContent = label;
-  button.disabled = disabled;
+  button.textContent = opts.locked ? `🔒 ${label}` : label;
+  button.disabled = !!opts.disabled || !!opts.locked;
+  if (opts.locked) {
+    button.classList.add('locked');
+    button.title = 'Not available in this experiment';
+  }
   button.onclick = onClick;
   return button;
 }
@@ -87,6 +112,7 @@ interface DropdownOption {
   label: string;
   active: boolean;
   onSelect: () => void;
+  locked?: boolean;
 }
 
 function makeDropdown(placeholder: string, options: DropdownOption[]): HTMLSelectElement {
@@ -99,7 +125,9 @@ function makeDropdown(placeholder: string, options: DropdownOption[]): HTMLSelec
   for (const opt of options) {
     const option = el('option');
     option.value = opt.value;
-    option.textContent = opt.label;
+    option.textContent = opt.locked ? `🔒 ${opt.label}` : opt.label;
+    option.disabled = !!opt.locked;
+    if (opt.locked) option.title = 'Not available in this experiment';
     select.appendChild(option);
   }
   const activeOpt = options.find((opt) => opt.active);
@@ -116,15 +144,17 @@ function makeQuickSpeciesButton(entry: PaletteEntry, active: boolean, pinned: bo
   const button = makePaletteButton(entry.label, entry.color, active, () => cb.onSelectPaint(entry.specId));
   wrap.appendChild(button);
 
-  const pinButton = el('button', 'pin-btn');
-  pinButton.title = pinned ? 'Unpin' : 'Pin';
-  pinButton.classList.toggle('pinned', pinned);
-  pinButton.textContent = '📌';
-  pinButton.onclick = (event) => {
-    event.stopPropagation();
-    cb.onTogglePin(entry.label);
-  };
-  wrap.appendChild(pinButton);
+  if (cb.pinnable) {
+    const pinButton = el('button', 'pin-btn');
+    pinButton.title = pinned ? 'Unpin' : 'Pin';
+    pinButton.classList.toggle('pinned', pinned);
+    pinButton.textContent = '📌';
+    pinButton.onclick = (event) => {
+      event.stopPropagation();
+      cb.onTogglePin(entry.label);
+    };
+    wrap.appendChild(pinButton);
+  }
 
   return wrap;
 }
@@ -150,7 +180,12 @@ export function buildToolbar(
   const dots = el('span', 'pt-dots');
   for (let i = 0; i < 9; i++) dots.appendChild(el('span', 'pt-dot'));
   ptButton.appendChild(dots);
-  ptButton.appendChild(document.createTextNode('Periodic table'));
+  ptButton.appendChild(document.createTextNode(cb.periodicTableLocked ? '🔒 Periodic table' : 'Periodic table'));
+  ptButton.disabled = !!cb.periodicTableLocked;
+  if (cb.periodicTableLocked) {
+    ptButton.classList.add('locked');
+    ptButton.title = 'Not available in this experiment';
+  }
   ptButton.onclick = cb.onOpenPeriodicTable;
   elements.items.appendChild(ptButton);
   container.appendChild(elements.row);
@@ -165,12 +200,14 @@ export function buildToolbar(
       label: 'Erlenmeyer',
       active: cb.isToolActive('flask-erlenmeyer'),
       onSelect: () => cb.onSelectTool('flask-erlenmeyer'),
+      locked: cb.isToolLocked?.('flask-erlenmeyer'),
     },
     {
       value: 'flask-erlenmeyer-stirred',
       label: 'Erlenmeyer (stirred)',
       active: cb.isToolActive('flask-erlenmeyer-stirred'),
       onSelect: () => cb.onSelectTool('flask-erlenmeyer-stirred'),
+      locked: cb.isToolLocked?.('flask-erlenmeyer-stirred'),
     },
   ];
   if (glassWall) {
@@ -179,6 +216,7 @@ export function buildToolbar(
       label: 'Free Draw',
       active: cb.isWallActive(glassWall.specId),
       onSelect: () => cb.onSelectWall(glassWall.specId),
+      locked: cb.isWallLocked?.(glassWall.specId),
     });
   }
   apparatus.items.appendChild(makeDropdown('Glassware', glasswareOptions));
@@ -190,28 +228,50 @@ export function buildToolbar(
       label: 'Insulator',
       active: cb.isWallActive(insulatorWall.specId),
       onSelect: () => cb.onSelectWall(insulatorWall.specId),
+      locked: cb.isWallLocked?.(insulatorWall.specId),
     });
   }
   thermalOptions.push(
-    { value: 'radiator', label: RADIATOR_LABEL, active: cb.isToolActive('radiator'), onSelect: () => cb.onSelectTool('radiator') },
-    { value: 'stirrer', label: STIRRER_LABEL, active: cb.isToolActive('stirrer'), onSelect: () => cb.onSelectTool('stirrer') },
+    {
+      value: 'radiator',
+      label: RADIATOR_LABEL,
+      active: cb.isToolActive('radiator'),
+      onSelect: () => cb.onSelectTool('radiator'),
+      locked: cb.isToolLocked?.('radiator'),
+    },
+    {
+      value: 'stirrer',
+      label: STIRRER_LABEL,
+      active: cb.isToolActive('stirrer'),
+      onSelect: () => cb.onSelectTool('stirrer'),
+      locked: cb.isToolLocked?.('stirrer'),
+    },
   );
   apparatus.items.appendChild(makeDropdown('Thermal & Mixing', thermalOptions));
 
   const flowOptions: DropdownOption[] = [
-    { value: 'funnel', label: FUNNEL_LABEL, active: cb.isToolActive('funnel'), onSelect: () => cb.onSelectTool('funnel') },
-    { value: 'tube', label: TUBE_LABEL, active: cb.isToolActive('tube'), onSelect: () => cb.onSelectTool('tube') },
-    { value: 'filter', label: FILTER_LABEL, active: cb.isToolActive('filter'), onSelect: () => cb.onSelectTool('filter') },
-    { value: 'sink', label: SINK_LABEL, active: cb.isToolActive('sink'), onSelect: () => cb.onSelectTool('sink') },
+    { value: 'funnel', label: FUNNEL_LABEL, active: cb.isToolActive('funnel'), onSelect: () => cb.onSelectTool('funnel'), locked: cb.isToolLocked?.('funnel') },
+    { value: 'tube', label: TUBE_LABEL, active: cb.isToolActive('tube'), onSelect: () => cb.onSelectTool('tube'), locked: cb.isToolLocked?.('tube') },
+    { value: 'filter', label: FILTER_LABEL, active: cb.isToolActive('filter'), onSelect: () => cb.onSelectTool('filter'), locked: cb.isToolLocked?.('filter') },
+    { value: 'sink', label: SINK_LABEL, active: cb.isToolActive('sink'), onSelect: () => cb.onSelectTool('sink'), locked: cb.isToolLocked?.('sink') },
   ];
   apparatus.items.appendChild(makeDropdown('Flow Control', flowOptions));
 
   container.appendChild(apparatus.row);
 
   const tools = makeRow('TOOLS');
-  tools.items.appendChild(makePaletteButton('Erase', null, cb.isToolActive('erase'), () => cb.onSelectTool('erase')));
-  tools.items.appendChild(makePaletteButton('Mix', '#c9a8ff', cb.isToolActive('mixer'), () => cb.onSelectTool('mixer')));
-  tools.items.appendChild(makePaletteButton('Grab', '#f2d94e', cb.isToolActive('grabber'), () => cb.onSelectTool('grabber')));
+  tools.items.appendChild(
+    makePaletteButton('Erase', null, cb.isToolActive('erase'), () => cb.onSelectTool('erase'), { locked: cb.isToolLocked?.('erase') }),
+  );
+  tools.items.appendChild(
+    makePaletteButton('Mix', '#c9a8ff', cb.isToolActive('mixer'), () => cb.onSelectTool('mixer'), { locked: cb.isToolLocked?.('mixer') }),
+  );
+  tools.items.appendChild(
+    makePaletteButton('Grab', '#f2d94e', cb.isToolActive('grabber'), () => cb.onSelectTool('grabber'), { locked: cb.isToolLocked?.('grabber') }),
+  );
+  // select-apparatus only edits already-placed apparatus (no matter creation
+  // of its own), so it's never locked -- there's no sim-side ToolKind for it
+  // to check against (see scenario-data.ts's ToolKind doc comment).
   tools.items.appendChild(
     makePaletteButton(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, cb.isToolActive('select-apparatus'), () =>
       cb.onSelectTool('select-apparatus'),
@@ -256,7 +316,7 @@ export function buildToolbar(
   sim.items.appendChild(restoreButton);
 
   const resetWorldButton = el('button', 'world-reset-btn');
-  resetWorldButton.textContent = 'Clear All';
+  resetWorldButton.textContent = cb.resetWorldLabel ?? 'Clear All';
   resetWorldButton.title = 'Wipe the whole grid and start over';
   resetWorldButton.onclick = cb.onResetWorld;
   sim.items.appendChild(resetWorldButton);

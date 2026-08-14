@@ -1,9 +1,8 @@
 // Campaign scenario picker: cards with title/blurb/stars, locked ones
-// disabled. `ScenarioSummary` is a display-only shape independent of the
-// real `Scenario` data type Phase 3 (.grill/campaign-mode.md) will add to
-// src/sim/scenario-data.ts -- this screen only needs enough to render a
-// grid and report which id was picked, so it doesn't need to wait on that
-// engine work to exist.
+// disabled. `ScenarioSummary` stays a display-only shape independent of
+// src/sim/scenario-data.ts's real `Scenario` -- this screen only needs
+// enough to render a grid and report which id was picked (main.ts maps
+// SCENARIOS + campaign-progress.ts's saved stars into it).
 import { el } from './dom';
 
 export interface ScenarioSummary {

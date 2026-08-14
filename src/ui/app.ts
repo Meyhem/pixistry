@@ -8,7 +8,10 @@
 // together).
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
+import type { GoalProgress } from '../sim/objectives';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/protocol';
+import { isPaintAllowed, isToolAllowed } from '../sim/scenario';
+import { SCENARIOS, type Restrictions, type Scenario, type ToolKind as SimToolKind } from '../sim/scenario-data';
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
@@ -22,15 +25,21 @@ import { SINK_COLOR, SINK_LABEL, sinkLineCells } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
-import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
+import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks, type ToolKind as UiToolKind } from './toolbar';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
+import { buildBriefing, buildObjectiveHud, buildWinOverlay } from './campaign-hud';
+import { loadProgress, recordCompletion, saveProgress, starsForCompletion } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
 import { isElementLabel } from './species-classify';
 import { buildSpeciesLookup } from './species-lookup';
+import { describeObjectives, isScenarioWon } from './objective-display';
 import { formatCelsius } from './format';
 
+/** Matches worker.ts's TICK_MS (1000/60) -- used to turn a frame's raw tick
+ * count into an elapsed-seconds readout for the win overlay/star rating. */
+const TICKS_PER_SECOND = 60;
 const DEFAULT_RADIUS = 2;
 const DEFAULT_RADIATION_RADIUS = 3;
 const DEFAULT_RADIATOR_TARGET_C = 100;
@@ -63,6 +72,24 @@ type Tool =
  * wider default splash is what those actually want. */
 function wallBrushRadius(tool: Tool | null, width: number): number {
   return tool?.kind === 'wall' || tool?.kind === 'filter' || tool?.kind === 'sink' ? Math.max(0, width - 1) : width;
+}
+
+/** Maps the toolbar's own ToolKind (kept separate from scenario-data.ts's --
+ * see that file's doc comment on why sim can't import ui's) onto the
+ * sim-scoped one Restrictions.tools and isToolAllowed actually check
+ * against, so the toolbar can grey out what a campaign scenario forbids.
+ * null for 'select-apparatus', which only edits already-placed apparatus and
+ * has no restriction of its own to check. */
+function toSimToolKind(kind: UiToolKind): SimToolKind | null {
+  switch (kind) {
+    case 'flask-erlenmeyer':
+    case 'flask-erlenmeyer-stirred':
+      return 'flask';
+    case 'select-apparatus':
+      return null;
+    default:
+      return kind;
+  }
 }
 
 const PHASE_LABEL: Record<number, string> = {
@@ -123,18 +150,22 @@ function savePinnedLabels(labels: readonly string[]): void {
 }
 
 export interface MountAppOptions {
-  /** Which shell launched this mount -- purely cosmetic today (shows a
-   * CAMPAIGN badge in the header); Phase 3/4 (.grill/campaign-mode.md) will
-   * use it to load scenario restrictions and HUD. */
+  /** Which shell launched this mount -- shows a CAMPAIGN badge in the
+   * header, and in campaign mode gates loadScenarioInto's lookup below. */
   mode?: 'sandbox' | 'campaign';
-  /** Which scenario to load in campaign mode. Unused until Phase 3 adds the
-   * scenario engine; accepted now so main.ts's routing doesn't need to
-   * change shape again when that lands. */
+  /** Which scenario to load in campaign mode -- looked up in
+   * scenario-data.ts's SCENARIOS by id. A campaign mount with no matching
+   * id (or mode !== 'campaign') just runs as an unrestricted bench, same as
+   * sandbox. */
   scenarioId?: string;
   /** Present when a menu shell mounted this app and can take it down again
    * -- shows a "Menu" button in the header that calls back rather than
    * leaving the player stuck in Sandbox/Campaign with no way out. */
   onExitToMenu?: () => void;
+  /** Campaign mode only: the win overlay's "Campaign menu" button uses this
+   * to go back to the scenario picker rather than all the way out to the
+   * title screen (onExitToMenu) -- falls back to onExitToMenu if unset. */
+  onExitToScenarioSelect?: () => void;
 }
 
 /** Mounts the whole app into `root` and returns an `unmount` teardown --
@@ -188,6 +219,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   const canvasCol = document.createElement('div');
   canvasCol.className = 'canvas-col';
   workspace.appendChild(canvasCol);
+
+  // Campaign objective HUD -- above the canvas (see design doc's "progress
+  // bar filled with the product's own color... this is the game"), empty
+  // and hidden in sandbox mode and before the briefing's Start is clicked.
+  const campaignHud = document.createElement('div');
+  campaignHud.className = 'campaign-hud';
+  campaignHud.style.display = 'none';
+  canvasCol.appendChild(campaignHud);
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'canvas-wrap';
@@ -259,14 +298,29 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // block to fit *both* axes at once (it'll happily overflow one dimension
   // while respecting the other), so this is done in JS instead.
   const fitCanvasWrap = (): void => {
-    const availW = canvasCol.clientWidth;
-    const availH = canvasCol.clientHeight - legend.getBoundingClientRect().height - 12; // 12 = legend's margin-top
+    const availW = Math.floor(canvasCol.clientWidth);
+    // The campaign HUD (see canvasCol's first child) sits above the canvas
+    // and, unlike the legend below it, only takes up space some of the time
+    // -- its rendered height has to come out of the same budget or the
+    // canvas would overflow canvas-col whenever it's showing.
+    const hudH = campaignHud.style.display === 'none' ? 0 : Math.ceil(campaignHud.getBoundingClientRect().height) + 12;
+    const legendH = Math.ceil(legend.getBoundingClientRect().height);
+    const availH = Math.floor(canvasCol.clientHeight - legendH - 12 - hudH); // 12 = legend's margin-top
     if (availW <= 0 || availH <= 0) return;
-    canvasWrap.style.width = `${availW}px`;
-    canvasWrap.style.height = `${availH}px`;
+    // canvasWrap/canvas are children of the ResizeObserver's own target
+    // (canvasCol), so writing new sizes here re-triggers that same
+    // observer -- canvas-wrap's box-sizing:border-box (see style.css) is
+    // what makes that converge instead of amplifying forever. This guard
+    // just avoids the redundant write (and the observer wakeup it'd cause)
+    // once a call has already reached that fixed point.
+    const widthPx = `${availW}px`;
+    const heightPx = `${availH}px`;
+    if (canvasWrap.style.width === widthPx && canvasWrap.style.height === heightPx) return;
+    canvasWrap.style.width = widthPx;
+    canvasWrap.style.height = heightPx;
     const ratio = gridWidth > 0 && gridHeight > 0 ? gridWidth / gridHeight : 1.6;
-    const width = Math.min(availW, availH * ratio);
-    const height = width / ratio;
+    const width = Math.floor(Math.min(availW, availH * ratio));
+    const height = Math.floor(width / ratio);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     updateApparatusOverlay(lastHoverX, lastHoverY);
@@ -285,8 +339,31 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   ptOverlay.style.display = 'none';
   root.appendChild(ptOverlay);
 
+  // Campaign briefing/win modal -- same fixed backdrop as ptOverlay (see
+  // .campaign-overlay in style.css), shown full-screen over an otherwise
+  // inert bench until Start is clicked, and again once the goals are met.
+  const campaignOverlay = document.createElement('div');
+  campaignOverlay.className = 'pt-overlay campaign-overlay';
+  campaignOverlay.style.display = 'none';
+  root.appendChild(campaignOverlay);
+
   const worker = new Worker(new URL('../sim/worker.ts', import.meta.url), { type: 'module' });
   const send = (message: MainToWorkerMessage): void => worker.postMessage(message);
+
+  // Campaign state -- null/false/empty for the whole session in sandbox
+  // mode. `activeScenario` is looked up once from options.scenarioId; every
+  // other field here is mutated by loadScenarioInto (Start/Replay/Next) and
+  // the 'frame' handler's win check below.
+  const initialScenario: Scenario | null =
+    options.mode === 'campaign' && options.scenarioId ? (SCENARIOS.find((s) => s.id === options.scenarioId) ?? null) : null;
+  let activeScenario: Scenario | null = initialScenario;
+  let restrictions: Restrictions | null = initialScenario?.rules ?? null;
+  let briefingAcknowledged = false;
+  let scenarioWon = false;
+  let winStars = 0;
+  let winElapsedSeconds = 0;
+  let revealedHints: string[] = [];
+  let lastObjectives: GoalProgress[] = [];
 
   let gridWidth = 0;
   let gridHeight = 0;
@@ -541,6 +618,113 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     return entries;
   }
 
+  /** The ELEMENTS quick-row in campaign mode: the scenario's exact allowed
+   * paint species (the "gear you get" from the briefing), replacing the
+   * player's own sandbox pins for the duration -- 'all' falls back to the
+   * normal pinned row (a future sandbox-like scenario), 'none' shows no
+   * species at all (a funnel-only continuous-process scenario). */
+  function effectivePinnedLabels(): string[] {
+    if (!restrictions || restrictions.paintSpecies === 'all') return pinnedLabels;
+    if (restrictions.paintSpecies === 'none') return [];
+    return restrictions.paintSpecies.map((specId) => speciesLookup.labelOf(specId)).filter((label): label is string => !!label);
+  }
+
+  /** The species a freshly (re)loaded scenario should start the paint tool
+   * on -- the first of the scenario's allowed reagents, or the usual
+   * sandbox pinned-species default when unrestricted. undefined (no default
+   * paint tool) for a 'none' scenario, which only works through funnels. */
+  function defaultPaintSpecId(): number | undefined {
+    if (restrictions && restrictions.paintSpecies !== 'all') {
+      return restrictions.paintSpecies === 'none' ? undefined : restrictions.paintSpecies[0];
+    }
+    const firstPinned = pinnedLabels.map((label) => palette.find((entry) => entry.label === label)).find((entry): entry is PaletteEntry => !!entry);
+    return (firstPinned ?? palette[0])?.specId;
+  }
+
+  /** Stamps a scenario onto the worker (fresh bench, restrictions active)
+   * and resets every piece of campaign UI state back to "briefing not yet
+   * acknowledged" -- shared by the initial mount, the win overlay's Replay,
+   * and its Next experiment, so all three go through exactly one path. */
+  function loadScenarioInto(scenario: Scenario): void {
+    activeScenario = scenario;
+    restrictions = scenario.rules;
+    briefingAcknowledged = false;
+    scenarioWon = false;
+    winStars = 0;
+    winElapsedSeconds = 0;
+    revealedHints = [];
+    lastObjectives = [];
+    const specId = defaultPaintSpecId();
+    tool = specId !== undefined ? { kind: 'paint', specId } : null;
+    send({ type: 'loadScenario', scenario });
+    render();
+    renderCampaignHud();
+    renderCampaignOverlay();
+  }
+
+  /** The persistent in-experiment progress panel (see campaign-hud.ts's
+   * buildObjectiveHud) -- hidden in sandbox mode and before Start, since
+   * there's nothing to show yet. Rebuilt on every frame while a scenario is
+   * running so its bars track the worker's live objectives. */
+  function renderCampaignHud(): void {
+    if (!activeScenario || !briefingAcknowledged) {
+      campaignHud.style.display = 'none';
+      campaignHud.innerHTML = '';
+      return;
+    }
+    campaignHud.style.display = 'flex';
+    buildObjectiveHud(campaignHud, activeScenario, describeObjectives(lastObjectives, speciesLookup), revealedHints, {
+      onRevealHint: () => {
+        const next = activeScenario?.hints[revealedHints.length];
+        if (next === undefined) return;
+        revealedHints = [...revealedHints, next];
+        renderCampaignHud();
+        // A revealed hint adds a line and changes the HUD's height, unlike
+        // the routine per-frame progress-bar updates below -- re-fit the
+        // canvas so it doesn't end up overlapping the taller panel.
+        fitCanvasWrap();
+      },
+    });
+  }
+
+  /** The full-screen briefing (before Start) / win (after every goal is
+   * met) modal -- mutually exclusive, both hidden in sandbox mode and once
+   * the player is mid-experiment. */
+  function renderCampaignOverlay(): void {
+    if (!activeScenario) {
+      campaignOverlay.style.display = 'none';
+      campaignOverlay.innerHTML = '';
+      return;
+    }
+    if (!briefingAcknowledged) {
+      campaignOverlay.style.display = 'flex';
+      buildBriefing(campaignOverlay, activeScenario, {
+        onStart: () => {
+          briefingAcknowledged = true;
+          renderCampaignOverlay();
+          renderCampaignHud();
+          // The HUD just went from hidden to visible -- see the hint-reveal
+          // handler's comment on why this needs an explicit re-fit.
+          fitCanvasWrap();
+        },
+      });
+      return;
+    }
+    if (scenarioWon) {
+      campaignOverlay.style.display = 'flex';
+      const index = SCENARIOS.findIndex((s) => s.id === activeScenario?.id);
+      const next = index >= 0 ? SCENARIOS[index + 1] : undefined;
+      buildWinOverlay(campaignOverlay, activeScenario, winStars, winElapsedSeconds, {
+        onReplay: () => loadScenarioInto(activeScenario as Scenario),
+        onNextScenario: next ? () => loadScenarioInto(next) : undefined,
+        onExitToSelect: () => (options.onExitToScenarioSelect ?? options.onExitToMenu)?.(),
+      });
+      return;
+    }
+    campaignOverlay.style.display = 'none';
+    campaignOverlay.innerHTML = '';
+  }
+
   function render(): void {
     renderToolbar();
     renderSidePanel();
@@ -585,13 +769,34 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       },
       hasSnapshot,
       onResetWorld: () => {
+        // In campaign mode, "Clear All" means "start this experiment over"
+        // -- a bare resetWorld would wipe the worker's activeScenario too
+        // (see worker.ts's 'resetWorld' handler), leaving this module still
+        // thinking a scenario is active while the worker no longer
+        // restricts anything.
+        if (activeScenario) {
+          if (!window.confirm('Reset this experiment back to the start?')) return;
+          loadScenarioInto(activeScenario);
+          return;
+        }
         if (!window.confirm('Clear the whole grid? This cannot be undone unless you Save first.')) return;
         send({ type: 'resetWorld' });
       },
       onSnapshotWorld: () => send({ type: 'snapshotWorld' }),
       onRestoreWorld: () => send({ type: 'restoreWorld' }),
+      pinnable: !restrictions,
+      periodicTableLocked: !!restrictions && restrictions.paintSpecies !== 'all',
+      resetWorldLabel: activeScenario ? 'Reset Experiment' : 'Clear All',
     };
-    buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
+    if (restrictions) {
+      const activeRestrictions = restrictions;
+      toolbarCallbacks.isWallLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
+      toolbarCallbacks.isToolLocked = (kind) => {
+        const simKind = toSimToolKind(kind);
+        return simKind === null ? false : !isToolAllowed(activeRestrictions, simKind);
+      };
+    }
+    buildToolbar(toolbar, palette, wallList(), effectivePinnedLabels(), toolbarCallbacks);
   }
 
   function renderSidePanel(): void {
@@ -1205,13 +1410,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       for (const entry of msg.palette) renderer.setColorForSpec(entry.specId, entry.color);
       for (const wall of wallList()) renderer.setColorForSpec(wall.specId, wall.color);
 
-      const firstPinned = pinnedLabels.map((label) => palette.find((entry) => entry.label === label)).find((entry): entry is PaletteEntry => !!entry);
-      const initial = firstPinned ?? palette[0];
-      if (initial) {
-        tool = { kind: 'paint', specId: initial.specId };
-        funnelDraft.specId = initial.specId;
+      if (activeScenario) {
+        loadScenarioInto(activeScenario);
+      } else {
+        const firstPinned = pinnedLabels.map((label) => palette.find((entry) => entry.label === label)).find((entry): entry is PaletteEntry => !!entry);
+        const initial = firstPinned ?? palette[0];
+        if (initial) {
+          tool = { kind: 'paint', specId: initial.specId };
+          funnelDraft.specId = initial.specId;
+        }
+        render();
       }
-      render();
     } else if (msg.type === 'frame') {
       lastSpecId = msg.specId;
       lastPhase = msg.phase;
@@ -1262,6 +1471,22 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // can't kill the browser's native drag gesture on the brush-width
         // slider.
         if (tool?.kind === 'sink' && !sidePanel.contains(document.activeElement)) renderSidePanel();
+      }
+
+      if (activeScenario) {
+        lastObjectives = msg.objectives;
+        // Gated on briefingAcknowledged too, not just isScenarioWon's own
+        // empty-array guard -- no reason to score a scenario the player
+        // hasn't even started yet, and it keeps this check from ever racing
+        // the worker's own 'loadScenario' handling on the very first frame.
+        if (briefingAcknowledged && !scenarioWon && isScenarioWon(msg.objectives)) {
+          scenarioWon = true;
+          winElapsedSeconds = msg.tick / TICKS_PER_SECOND;
+          winStars = starsForCompletion(activeScenario.par?.seconds, winElapsedSeconds);
+          saveProgress(recordCompletion(loadProgress(), activeScenario.id, winStars, winElapsedSeconds));
+          renderCampaignOverlay();
+        }
+        renderCampaignHud();
       }
     }
   };

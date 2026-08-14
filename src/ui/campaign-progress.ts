@@ -2,9 +2,7 @@
 // star ratings, best times, discovered species, and unlocked achievements.
 // Same defensive load/save pattern as app.ts's loadPinnedLabels/
 // savePinnedLabels: corrupt or missing storage just falls back to a fresh
-// empty progress rather than throwing. No mutation helpers yet -- Phase 3/4
-// (scenario engine, win screen) will shape those once there's an actual
-// scenario to complete.
+// empty progress rather than throwing.
 const PROGRESS_STORAGE_KEY = 'pixistry.campaignProgress';
 
 export interface CampaignProgress {
@@ -60,4 +58,36 @@ export function saveProgress(progress: CampaignProgress): void {
     // Storage unavailable (private browsing, quota) -- progress just won't
     // survive a reload, which is a fine degradation.
   }
+}
+
+/** Star thresholds relative to a scenario's par time -- 3 for beating par, 2
+ * for finishing within 1.5x par, 1 for finishing at all. A scenario with no
+ * par.seconds (nothing to race against) always awards 3: par is a bonus
+ * challenge, not a requirement, so its absence shouldn't cap the score. */
+export function starsForCompletion(parSeconds: number | undefined, elapsedSeconds: number): number {
+  if (parSeconds === undefined) return 3;
+  if (elapsedSeconds <= parSeconds) return 3;
+  if (elapsedSeconds <= parSeconds * 1.5) return 2;
+  return 1;
+}
+
+/** Folds a scenario win into progress: marks it completed, keeps the best
+ * (highest) star rating and the best (lowest) time seen across every
+ * completion, since a replay shouldn't be able to erase a better past run.
+ * Returns a new object rather than mutating -- callers own persistence via
+ * saveProgress. */
+export function recordCompletion(progress: CampaignProgress, scenarioId: string, stars: number, elapsedSeconds: number): CampaignProgress {
+  const prevStars = progress.starsByScenarioId[scenarioId] ?? 0;
+  const prevBestTime = progress.bestTimeSecByScenarioId[scenarioId];
+  return {
+    ...progress,
+    completedScenarioIds: progress.completedScenarioIds.includes(scenarioId)
+      ? progress.completedScenarioIds
+      : [...progress.completedScenarioIds, scenarioId],
+    starsByScenarioId: { ...progress.starsByScenarioId, [scenarioId]: Math.max(prevStars, stars) },
+    bestTimeSecByScenarioId: {
+      ...progress.bestTimeSecByScenarioId,
+      [scenarioId]: prevBestTime === undefined ? elapsedSeconds : Math.min(prevBestTime, elapsedSeconds),
+    },
+  };
 }
