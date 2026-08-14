@@ -216,7 +216,7 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
     hints: [
       'Draw a Filter line across the tank first, then paint your reagents in above it.',
-      "Open the filter's side panel and allow only NaCl(aq) through -- nothing else should pass.",
+      "With the Filter tool selected, allow only NaCl(aq) in its panel -- nothing else should pass. Each line keeps the list it was drawn with, so set it before you drag (or pick the line back up with Select to change it).",
       'Draw the Sink just below the filter line, so it only ever catches what the filter let through.',
     ],
     fact: 'AgCl is famously insoluble -- it stays solid in water, which is exactly why it makes such a clean precipitate.',
