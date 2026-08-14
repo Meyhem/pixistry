@@ -60,6 +60,7 @@ import {
   coneHoldMap,
   moveTubeKnee,
   moveTubeSegment,
+  normalizeTubePoints,
   placeTubeInstance,
   stepTubes,
   unstampTube,
@@ -568,14 +569,18 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'moveFunnel':
       editApparatus({ kind: 'funnel', id: msg.id }, () => withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y)));
       break;
-    case 'placeTube':
+    case 'placeTube': {
       if (!isToolAllowed(activeRestrictions, 'tube')) break;
+      // A tube whose knees all landed on one cell has no direction of travel
+      // and can never convey anything -- don't put a dead one on the bench
+      // (see tube.ts's normalizeTubePoints).
+      const points = normalizeTubePoints(msg.points);
+      if (points.length < 2) break;
       editApparatus(null, () =>
-        tubes.push(
-          placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
-        ),
+        tubes.push(placeTubeInstance(grid, species, { points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
       );
       break;
+    }
     case 'moveTubeKnee':
       editApparatus({ kind: 'tube', id: msg.id }, () =>
         withTube(msg.id, (instance) => moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y })),

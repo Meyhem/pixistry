@@ -201,12 +201,28 @@ export interface TubePlacement {
   readonly filter: ReadonlySet<number> | null;
 }
 
+/** Drops consecutive duplicate knees, which the draw tool produces whenever
+ * two clicks land on the same cell (snapOctant returns the anchor unchanged
+ * for a zero delta). A duplicate is a zero-length segment, and a tube built
+ * entirely out of them has no direction of travel at all -- see
+ * hasDegenerateSegment for what a collapsed tube behaves like. Callers should
+ * refuse to place the result if fewer than 2 knees survive. */
+export function normalizeTubePoints(points: readonly Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of points) {
+    const last = out[out.length - 1];
+    if (last && last.x === p.x && last.y === p.y) continue;
+    out.push({ x: p.x, y: p.y });
+  }
+  return out;
+}
+
 /** Places a new tube: stamps its walls/overlay and returns the tracked
  * instance. `points` must already be octant-snapped (see tube-shapes.ts's
  * snapOctant) -- the drawing UI is responsible for that, same as the
  * funnel tool owns its own facing before calling placeFunnelInstance. */
 export function placeTubeInstance(grid: SimGrid, species: SpeciesTable, placement: TubePlacement): TubeInstance {
-  const points = placement.points.map((p) => ({ x: p.x, y: p.y }));
+  const points = normalizeTubePoints(placement.points);
   const geometry = buildTubeGeometry(grid, points, placement.coneSize);
   stampTubeGeometry(grid, species, geometry);
   return {
@@ -228,6 +244,28 @@ function rebuildTubeGeometry(grid: SimGrid, species: SpeciesTable, instance: Tub
   instance.points = newPoints;
   instance.coneSize = newConeSize;
   instance.geometry = geometry;
+}
+
+/** Whether any two consecutive knees land on the same cell, which would
+ * shorten the tube by a whole segment -- and, for a two-knee tube, collapse
+ * it outright.
+ *
+ * A collapsed tube is a dead tube: polylineToLumenPath yields a single cell,
+ * so lumenOpenEnds returns null and the thing has no mouth, no exit and no
+ * cone. It's still selectable and still takes settings, they just can't do
+ * anything, which reads as "the conveyor stopped working and won't respond
+ * to anything" with nothing on screen to explain it. It was easy to hit by
+ * accident: snapOctant rounds its step count and floors it at 0, so dragging
+ * a knee within about half a cell of its neighbour -- a short drag on a short
+ * tube -- landed it exactly on top of that neighbour. Rejecting the drag step
+ * instead just means a knee won't push through its neighbour. */
+function hasDegenerateSegment(points: readonly Point[]): boolean {
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1] as Point;
+    const b = points[i] as Point;
+    if (a.x === b.x && a.y === b.y) return true;
+  }
+  return false;
 }
 
 /** Drags knee `kneeIndex` toward `raw`. An endpoint knee (the tube's mouth
@@ -253,6 +291,7 @@ export function moveTubeKnee(grid: SimGrid, species: SpeciesTable, instance: Tub
   }
   const newPoints = points.slice();
   newPoints[kneeIndex] = newPoint;
+  if (hasDegenerateSegment(newPoints)) return;
   rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
 }
 
@@ -279,6 +318,7 @@ export function moveTubeSegment(grid: SimGrid, species: SpeciesTable, instance: 
   const newPoints = points.slice();
   newPoints[i] = newI;
   newPoints[j] = newJ;
+  if (hasDegenerateSegment(newPoints)) return;
   rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
 }
 

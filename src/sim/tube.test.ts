@@ -9,6 +9,7 @@ import {
   DEFAULT_TUBE_CONE_SIZE,
   moveTubeKnee,
   moveTubeSegment,
+  normalizeTubePoints,
   placeTubeInstance,
   restampTubeMask,
   stepTubes,
@@ -422,5 +423,99 @@ describe('restampTubeMask', () => {
 
     for (const i of instance.geometry.lumenIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Lumen);
     expect(grid.isEmptyAt(grid.index(wall.x, wall.y))).toBe(true);
+  });
+});
+
+describe('degenerate geometry', () => {
+  it('refuses a knee drag that would drop a knee onto its neighbour', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const wallsBefore = instance.geometry.wallCells.length;
+    const pointsBefore = instance.points.map((p) => ({ ...p }));
+
+    // Dropping the mouth exactly on the exit collapses the tube to one cell:
+    // no mouth, no exit, no cone, and nothing can ever bring it back.
+    moveTubeKnee(grid, species, instance, 0, { x: 26, y: 20 });
+
+    expect(instance.points).toEqual(pointsBefore);
+    expect(instance.geometry.wallCells.length).toBe(wallsBefore);
+    expect(instance.geometry.exitOpenIdx).not.toBeNull();
+  });
+
+  it('still allows a knee drag that keeps the segment at least one cell long', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+
+    moveTubeKnee(grid, species, instance, 0, { x: 25, y: 20 });
+
+    expect(instance.points[0]).toEqual({ x: 25, y: 20 });
+  });
+
+  it('never lets a segment drag leave the tube collapsed, however far it is shoved', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, [
+      { x: 20, y: 20 },
+      { x: 26, y: 20 },
+      { x: 32, y: 20 },
+    ]);
+
+    // Shove the middle segment hard in every direction, well past its fixed
+    // outer neighbours -- resolveKneePosition keeps each knee at least a step
+    // clear, and the guard catches anything it doesn't.
+    for (const [dx, dy] of [
+      [-12, 0],
+      [12, 0],
+      [0, -12],
+      [0, 12],
+      [-20, -20],
+    ]) {
+      moveTubeSegment(grid, species, instance, 1, dx as number, dy as number);
+      for (let i = 1; i < instance.points.length; i++) {
+        expect(instance.points[i]).not.toEqual(instance.points[i - 1]);
+      }
+      expect(instance.geometry.exitOpenIdx).not.toBeNull();
+    }
+  });
+
+  it('drops duplicate knees at placement rather than building a dead stub', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, [
+      { x: 20, y: 20 },
+      { x: 20, y: 20 },
+      { x: 26, y: 20 },
+    ]);
+
+    expect(instance.points).toEqual([
+      { x: 20, y: 20 },
+      { x: 26, y: 20 },
+    ]);
+    expect(instance.geometry.exitOpenIdx).not.toBeNull();
+  });
+});
+
+describe('normalizeTubePoints', () => {
+  it('collapses only consecutive duplicates, keeping a knee that revisits a cell later', () => {
+    expect(
+      normalizeTubePoints([
+        { x: 1, y: 1 },
+        { x: 1, y: 1 },
+        { x: 5, y: 5 },
+        { x: 1, y: 1 },
+      ]),
+    ).toEqual([
+      { x: 1, y: 1 },
+      { x: 5, y: 5 },
+      { x: 1, y: 1 },
+    ]);
+  });
+
+  it('reduces an all-on-one-cell draw to a single point, which callers refuse to place', () => {
+    expect(
+      normalizeTubePoints([
+        { x: 3, y: 3 },
+        { x: 3, y: 3 },
+        { x: 3, y: 3 },
+      ]),
+    ).toEqual([{ x: 3, y: 3 }]);
   });
 });
