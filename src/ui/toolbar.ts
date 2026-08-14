@@ -12,6 +12,7 @@ import { FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_LABEL } from '../sim/stirrer';
 import { TUBE_LABEL } from '../sim/tube';
 import { FILTER_LABEL } from '../sim/filter-apparatus';
+import { SINK_LABEL } from '../sim/sink';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 
@@ -24,6 +25,7 @@ export type ToolKind =
   | 'stirrer'
   | 'tube'
   | 'filter'
+  | 'sink'
   | 'flask-erlenmeyer'
   | 'flask-erlenmeyer-stirred'
   | 'select-apparatus';
@@ -196,6 +198,7 @@ export function buildToolbar(
     { value: 'funnel', label: FUNNEL_LABEL, active: cb.isToolActive('funnel'), onSelect: () => cb.onSelectTool('funnel') },
     { value: 'tube', label: TUBE_LABEL, active: cb.isToolActive('tube'), onSelect: () => cb.onSelectTool('tube') },
     { value: 'filter', label: FILTER_LABEL, active: cb.isToolActive('filter'), onSelect: () => cb.onSelectTool('filter') },
+    { value: 'sink', label: SINK_LABEL, active: cb.isToolActive('sink'), onSelect: () => cb.onSelectTool('sink') },
   ];
   apparatus.items.appendChild(makeDropdown('Flow Control', flowOptions));
 

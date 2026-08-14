@@ -44,6 +44,13 @@ export type WorkerToMainMessage =
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
       tubes: TubeSnapshot[];
+      sinkMask: Uint8Array;
+      /** Indexed by specId (see species-data.ts's SPECIES array) -- how many
+       * pixels of each species every sink line on the grid has ever
+       * consumed. One global tally, not per-instance (see sink.ts's
+       * SinkCounter doc comment). */
+      sinkTotals: Uint32Array;
+      sinkGrandTotal: number;
       tick: number;
     };
 
@@ -81,4 +88,6 @@ export type MainToWorkerMessage =
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
   | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
-  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean };
+  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean }
+  | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number }
+  | { type: 'resetSinkCounts' };

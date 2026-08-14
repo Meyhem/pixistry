@@ -45,6 +45,11 @@ export interface FrameData {
    * matter and has no color of its own, so without this a drawn filter line
    * would be invisible once painted. */
   filterMask: Uint8Array;
+  /** Sink apparatus overlay (see grid.ts's sinkMask) -- nonzero where a sink
+   * line has been drawn. Like the filter mask, this isn't matter and has no
+   * color of its own, so without this a drawn sink line would be invisible
+   * once painted. */
+  sinkMask: Uint8Array;
 }
 
 export interface Renderer {
@@ -171,6 +176,9 @@ const TUBE_CONE_TINT_STRENGTH = 0.35;
 const FILTER_TINT_RGB: [number, number, number] = [140, 224, 150];
 const FILTER_TINT_STRENGTH = 0.3;
 
+const SINK_TINT_RGB: [number, number, number] = [224, 72, 158];
+const SINK_TINT_STRENGTH = 0.35;
+
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
   return [
@@ -279,7 +287,18 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       colorLUT.set(specId, hexToRgba(hex));
     },
 
-    drawFrame({ specId: specIdGrid, phase: phaseGrid, tempK, radiatorRadius, radiatorTargetK, stirrerMask, tubeMask, filterMask, funnelFillSpecId }: FrameData): void {
+    drawFrame({
+      specId: specIdGrid,
+      phase: phaseGrid,
+      tempK,
+      radiatorRadius,
+      radiatorTargetK,
+      stirrerMask,
+      tubeMask,
+      filterMask,
+      funnelFillSpecId,
+      sinkMask,
+    }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
       for (let cy = 0; cy < height; cy++) {
@@ -316,6 +335,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           if (tube === TubeMaskValue.Lumen) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
           else if (tube === TubeMaskValue.Cone) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_CONE_TINT_STRENGTH);
           if ((filterMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, FILTER_TINT_RGB, FILTER_TINT_STRENGTH);
+          if ((sinkMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, SINK_TINT_RGB, SINK_TINT_STRENGTH);
 
           let ringRgba = interiorRgba;
           if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);

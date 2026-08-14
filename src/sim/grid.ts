@@ -74,6 +74,15 @@ export class SimGrid {
    * vessel's actual mouth never consults this, so ordinary pouring is
    * unaffected. */
   readonly vesselMask: Uint8Array;
+  /** Sink apparatus overlay -- same "fixed background field, not matter"
+   * convention as the masks above: painted once by a drawn sink line (see
+   * worker.ts's 'paintSinkLine' handler), left untouched by set/clear/swap,
+   * and does NOT gate movement the way filterMask does -- matter passes
+   * through a sink cell exactly like open ground. Consumption happens once
+   * per tick, last in the tick order (see sink.ts's stepSinks and
+   * worker.ts's runOneTick): any non-empty, non-wall cell still sitting on a
+   * sink cell at that point is tallied by species and cleared. */
+  readonly sinkMask: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -88,6 +97,7 @@ export class SimGrid {
     this.tubeMask = new Uint8Array(size);
     this.filterMask = new Uint8Array(size);
     this.vesselMask = new Uint8Array(size);
+    this.sinkMask = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {

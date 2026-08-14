@@ -18,11 +18,12 @@ import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
+import { SINK_COLOR, SINK_LABEL, sinkLineCells } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks } from './toolbar';
-import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type ToolMeta, type TubeFieldValues } from './side-panel';
+import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
 import { installDebugHook } from './debug-hook';
@@ -50,6 +51,7 @@ type Tool =
   | { kind: 'stirrer' }
   | { kind: 'tube' }
   | { kind: 'filter' }
+  | { kind: 'sink' }
   | { kind: 'flask'; stirred: boolean }
   | { kind: 'select-apparatus' };
 
@@ -60,7 +62,7 @@ type Tool =
  * Species/erase/radiator/stirrer keep radius === width unchanged, since a
  * wider default splash is what those actually want. */
 function wallBrushRadius(tool: Tool | null, width: number): number {
-  return tool?.kind === 'wall' || tool?.kind === 'filter' ? Math.max(0, width - 1) : width;
+  return tool?.kind === 'wall' || tool?.kind === 'filter' || tool?.kind === 'sink' ? Math.max(0, width - 1) : width;
 }
 
 const PHASE_LABEL: Record<number, string> = {
@@ -88,6 +90,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   tubePanel: 'none',
   filterPanel: 'none',
   flaskPanel: 'none',
+  sinkPanel: 'none',
 };
 
 /** The three tools with no per-instance config of their own -- just a
@@ -317,6 +320,13 @@ export function mountApp(root: HTMLElement): void {
   let tubeDrawPoints: Point[] = [];
   let tubeDrawPreview: Point | null = null;
 
+  // In-progress sink line draw (tool === 'sink'): set on pointerdown, held
+  // through the drag, and committed as one paintSinkLine message on
+  // pointerup -- see the window pointerup handler below. Unlike every brush
+  // tool, a sink is a single free-form drag from anchor to release point,
+  // not a repeated per-move paint.
+  let sinkDrawStart: Point | null = null;
+
   // Label/color/palette-entry lookup for the probe, funnel field display,
   // and debug hook (see species-lookup.ts).
   const speciesLookup = buildSpeciesLookup();
@@ -328,6 +338,9 @@ export function mountApp(root: HTMLElement): void {
   let lastTempK: Float32Array | null = null;
   let lastRadiatorRadius: Uint8Array | null = null;
   let lastRadiatorTargetK: Float32Array | null = null;
+  let lastSinkMask: Uint8Array | null = null;
+  let lastSinkTotals: Uint32Array | null = null;
+  let lastSinkGrandTotal = 0;
   let lastTick = 0;
 
   function describeToolMeta(t: Tool | null): ToolMeta {
@@ -380,6 +393,9 @@ export function mountApp(root: HTMLElement): void {
     if (t.kind === 'filter') {
       return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', filterPanel: 'config' };
     }
+    if (t.kind === 'sink') {
+      return { ...TOOL_META_DEFAULTS, label: SINK_LABEL, color: SINK_COLOR, category: 'APPARATUS', sinkPanel: 'config' };
+    }
     if (t.kind === 'flask') {
       return {
         ...TOOL_META_DEFAULTS,
@@ -418,6 +434,12 @@ export function mountApp(root: HTMLElement): void {
       tubeDrawPoints = [];
       tubeDrawPreview = null;
     }
+    // Same discard-on-switch convention as the tube draw above: an
+    // in-progress sink drag shouldn't silently resume/commit if the player
+    // switches tools mid-drag.
+    if (tool?.kind === 'sink' && next.kind !== 'sink') {
+      sinkDrawStart = null;
+    }
     tool = next;
     render();
   }
@@ -453,6 +475,28 @@ export function mountApp(root: HTMLElement): void {
       coneSize: tubeEditDraft.coneSize,
       filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null,
     });
+  }
+
+  /** Non-zero entries of the Sink tool's global tally, sorted highest-first
+   * -- built fresh from the latest frame's sinkTotals each render rather
+   * than stored incrementally, since the worker is the source of truth (a
+   * Reset zeroes it there, not just in the UI). Species with no palette
+   * entry (a non-paintable reaction product, same as the inspector's
+   * fallback) are skipped rather than shown as "spec N" -- a raw id means
+   * nothing to the player in a tally list. */
+  function sinkTallyEntries(): SinkTallyEntry[] {
+    if (!lastSinkTotals) return [];
+    const entries: SinkTallyEntry[] = [];
+    for (let specId = 0; specId < lastSinkTotals.length; specId++) {
+      const count = lastSinkTotals[specId] as number;
+      if (count === 0) continue;
+      const label = speciesLookup.labelOf(specId);
+      const color = speciesLookup.colorOf(specId);
+      if (!label || !color) continue;
+      entries.push({ label, color, count });
+    }
+    entries.sort((a, b) => b.count - a.count);
+    return entries;
   }
 
   function render(): void {
@@ -693,6 +737,9 @@ export function mountApp(root: HTMLElement): void {
       onSetFlaskSize: (value) => {
         flaskSizeScale = value;
       },
+      sinkTally: sinkTallyEntries(),
+      sinkGrandTotal: lastSinkGrandTotal,
+      onResetSinkCounts: () => send({ type: 'resetSinkCounts' }),
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
 
@@ -809,8 +856,9 @@ export function mountApp(root: HTMLElement): void {
     const showFunnelGhost = tool?.kind === 'funnel';
     const showFlaskGhost = tool?.kind === 'flask';
     const showTubeDraw = tool?.kind === 'tube' && tubeDrawPoints.length > 0;
+    const showSinkDraw = tool?.kind === 'sink' && sinkDrawStart !== null;
     const editingTube = tool?.kind === 'select-apparatus' ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
-    if ((!showFunnelGhost && !showFlaskGhost && !showTubeDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
+    if ((!showFunnelGhost && !showFlaskGhost && !showTubeDraw && !showSinkDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
     }
@@ -860,6 +908,14 @@ export function mountApp(root: HTMLElement): void {
 
     if (editingTube) {
       drawTubeGhost(previewCtx, editingTube.points, cellPxX, cellPxY, false);
+    }
+
+    if (showSinkDraw && sinkDrawStart) {
+      const width = wallBrushRadius(tool, brushWidth);
+      previewCtx.fillStyle = 'rgba(224, 72, 158, 0.5)';
+      for (const cell of sinkLineCells(sinkDrawStart.x, sinkDrawStart.y, x, y, width)) {
+        previewCtx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+      }
     }
   }
 
@@ -929,6 +985,12 @@ export function mountApp(root: HTMLElement): void {
       case 'filter':
         send({ type: 'paintFilter', x, y, radius: wallBrushRadius(tool, brushWidth) });
         break;
+      case 'sink':
+        // Handled directly by the pointerdown/pointermove/pointerup handlers
+        // below (sinkDrawStart, committed on release) rather than here -- a
+        // sink is a single free-form drag from anchor to release point, not
+        // a repeated per-move paint like the other brush tools.
+        break;
       case 'flask':
         send({ type: 'placeFlask', x, y, facing: flaskFacing, sizeScale: flaskSizeScale, stirred: tool.stirred });
         break;
@@ -971,9 +1033,10 @@ export function mountApp(root: HTMLElement): void {
     const specId = lastSpecId[idx] as number;
     const hasRadiator = lastRadiatorRadius ? (lastRadiatorRadius[idx] as number) > 0 : false;
     const radiatorNote = hasRadiator && lastRadiatorTargetK ? ` · radiator target ${formatCelsius(kelvinToCelsius(lastRadiatorTargetK[idx] as number))}` : '';
+    const sinkNote = lastSinkMask && (lastSinkMask[idx] as number) > 0 ? ` · ${SINK_LABEL}` : '';
     if (specId === EMPTY) {
       inspector.classList.add('empty');
-      inspectorText.textContent = `empty${radiatorNote}`;
+      inspectorText.textContent = `empty${radiatorNote}${sinkNote}`;
       return;
     }
     inspector.classList.remove('empty');
@@ -982,7 +1045,7 @@ export function mountApp(root: HTMLElement): void {
     const tempC = kelvinToCelsius(lastTempK[idx] as number);
     const phaseCode = lastPhase[idx] as number;
     const phase = PHASE_LABEL[phaseCode] ?? 'unknown';
-    inspectorText.textContent = `${label} · ${tempC.toFixed(1)}°C · ${phase}${radiatorNote}`;
+    inspectorText.textContent = `${label} · ${tempC.toFixed(1)}°C · ${phase}${radiatorNote}${sinkNote}`;
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -994,6 +1057,9 @@ export function mountApp(root: HTMLElement): void {
     } else if (tool?.kind === 'mixer') {
       isMixing = true;
       send({ type: 'stirStart', x, y, radius: brushWidth });
+    } else if (tool?.kind === 'sink') {
+      sinkDrawStart = { x, y };
+      updateApparatusOverlay(x, y);
     } else {
       applyTool(x, y);
     }
@@ -1013,7 +1079,7 @@ export function mountApp(root: HTMLElement): void {
         // knee/segment, dragging moves it -- see continueDrag's doc comment.
         const msg = apparatusSelection.continueDrag(x, y);
         if (msg) send(msg);
-      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'tube') {
+      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'tube' && tool?.kind !== 'sink') {
         // Single-click action (place once) rather than a brush --
         // applyTool already ran once on pointerdown, so a drag shouldn't
         // re-place on every move.
@@ -1066,6 +1132,12 @@ export function mountApp(root: HTMLElement): void {
       send({ type: 'stirEnd' });
       isMixing = false;
     }
+    if (sinkDrawStart) {
+      const width = wallBrushRadius(tool, brushWidth);
+      send({ type: 'paintSinkLine', x0: sinkDrawStart.x, y0: sinkDrawStart.y, x1: lastHoverX, y1: lastHoverY, width });
+      sinkDrawStart = null;
+      updateApparatusOverlay(lastHoverX, lastHoverY);
+    }
     apparatusSelection.endDrag();
     isPointerDown = false;
   });
@@ -1094,6 +1166,9 @@ export function mountApp(root: HTMLElement): void {
       lastTempK = msg.tempK;
       lastRadiatorRadius = msg.radiatorRadius;
       lastRadiatorTargetK = msg.radiatorTargetK;
+      lastSinkMask = msg.sinkMask;
+      lastSinkTotals = msg.sinkTotals;
+      lastSinkGrandTotal = msg.sinkGrandTotal;
       apparatusSelection.setFunnels(msg.funnels);
       apparatusSelection.setTubes(msg.tubes);
       lastTick = msg.tick;
@@ -1107,6 +1182,7 @@ export function mountApp(root: HTMLElement): void {
         tubeMask: msg.tubeMask,
         filterMask: msg.filterMask,
         funnelFillSpecId: msg.funnelFillSpecId,
+        sinkMask: msg.sinkMask,
       });
       // The select-apparatus tool's edit panel shows a placed funnel's live
       // "Remaining" count and needs to reflect Reset immediately -- only the
@@ -1122,6 +1198,12 @@ export function mountApp(root: HTMLElement): void {
         if (!sidePanel.contains(document.activeElement)) renderSidePanel();
       } else {
         updateSelectionBox();
+        // The Sink tool's tally panel shows a live running count -- same
+        // "skip while a slider drag is in progress" guard as the funnel
+        // edit panel above (see its comment), so a tick landing mid-drag
+        // can't kill the browser's native drag gesture on the brush-width
+        // slider.
+        if (tool?.kind === 'sink' && !sidePanel.contains(document.activeElement)) renderSidePanel();
       }
     }
   };

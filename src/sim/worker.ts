@@ -42,6 +42,7 @@ import { stirRegion } from './mixer';
 import type { MainToWorkerMessage, WorkerToMainMessage } from './protocol';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
+import { SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
 import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
@@ -103,6 +104,10 @@ let tubes: TubeInstance[] = [];
 // stepMovement every tick (see runOneTick).
 let filterAllowSpecies = new Set<number>();
 
+// The Sink apparatus's global tally (see sink.ts) -- one counter shared by
+// every sink line drawn on the grid, not per-instance.
+const sinkCounter = new SinkCounter();
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -142,10 +147,14 @@ function runOneTick(): void {
   stepAmbient(grid, species, TICK_DT_SECONDS);
   stepRadiativeLoss(grid, species, TICK_DT_SECONDS);
   stepReactions(grid, species, rng);
+  // Last in the tick, after reactions: a sink is a collection port, so it
+  // counts (and consumes) whatever's really present at the end of the tick
+  // -- see sink.ts's stepSinks doc comment.
+  stepSinks(grid, sinkCounter);
 }
 
 function postFrame(): void {
-  post(buildFrame(grid, species, { funnels, tubes, grabState, tick }));
+  post(buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, tick }));
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -189,6 +198,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.tubeMask[grid.index(px, py)] = 0;
         grid.filterMask[grid.index(px, py)] = 0;
         grid.vesselMask[grid.index(px, py)] = 0;
+        grid.sinkMask[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the
@@ -304,6 +314,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       }
       break;
     }
+    case 'paintSinkLine':
+      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
+        if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = 1;
+      }
+      break;
+    case 'resetSinkCounts':
+      sinkCounter.reset();
+      break;
   }
 };
 

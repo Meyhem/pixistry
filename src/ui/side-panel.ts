@@ -43,6 +43,18 @@ export interface ToolMeta {
    * a placed flask isn't a tracked instance either, so there's no "edit"
    * mode, only pre-placement config. */
   flaskPanel: 'none' | 'config';
+  /** The Sink tool's live tally panel -- same 2-state convention as
+   * filterPanel/flaskPanel: a sink line isn't a tracked instance (there's
+   * one global counter shared by every sink drawn on the grid, see
+   * sink.ts's SinkCounter), so there's no "edit" mode either. */
+  sinkPanel: 'none' | 'config';
+}
+
+/** One species' running total for the Sink tool's tally panel. */
+export interface SinkTallyEntry {
+  readonly label: string;
+  readonly color: string;
+  readonly count: number;
 }
 
 export interface TubeFieldValues {
@@ -96,6 +108,11 @@ export interface SidePanelCallbacks {
   onRemoveFilterSpecies(specId: number): void;
   flaskSizeScale: number;
   onSetFlaskSize(value: number): void;
+  /** Non-zero running totals only, already sorted highest-first -- see
+   * app.ts's sinkTallyEntries. */
+  sinkTally: readonly SinkTallyEntry[];
+  sinkGrandTotal: number;
+  onResetSinkCounts(): void;
 }
 
 const MIN_RADIUS = 1;
@@ -336,6 +353,47 @@ function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCall
   );
 }
 
+function addSinkPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
+  if (meta.sinkPanel === 'none') return;
+  addDivider(container);
+
+  const wrap = el('div', 'setting');
+  const label = el('span', 'setting-label');
+  label.textContent = 'Collected';
+  wrap.appendChild(label);
+
+  if (cb.sinkTally.length === 0) {
+    wrap.appendChild(hintBox('Nothing collected yet -- draw a line and let matter fall onto it.'));
+  } else {
+    const list = el('div', 'species-chip-list');
+    for (const entry of cb.sinkTally) {
+      const chip = el('div', 'species-chip');
+      chip.style.setProperty('--swatch', entry.color);
+      chip.style.color = contrastTextColor(entry.color);
+      chip.style.textShadow = contrastTextShadow(entry.color);
+      const name = el('span', 'species-chip-name');
+      name.textContent = `${entry.label} ×${entry.count}`;
+      chip.appendChild(name);
+      list.appendChild(chip);
+    }
+    wrap.appendChild(list);
+  }
+  container.appendChild(wrap);
+  container.appendChild(propRow('Total', String(cb.sinkGrandTotal)));
+
+  const resetBtn = el('button', 'funnel-reset-btn');
+  resetBtn.textContent = 'Reset count';
+  resetBtn.onclick = cb.onResetSinkCounts;
+  container.appendChild(resetBtn);
+
+  container.appendChild(
+    hintBox(
+      'Draw a straight line like a wall. Anything that touches it is consumed and tallied here -- one shared count for every sink line on the grid.',
+      'HOW IT WORKS',
+    ),
+  );
+}
+
 export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   container.innerHTML = '';
 
@@ -397,4 +455,5 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   addTubePanel(container, meta, cb);
   addFilterPanel(container, meta, cb);
   addFlaskPanel(container, meta, cb);
+  addSinkPanel(container, meta, cb);
 }

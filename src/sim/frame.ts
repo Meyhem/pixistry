@@ -10,6 +10,7 @@ import { funnelShapeFor } from './apparatus-shapes';
 import type { FunnelInstance } from './funnel';
 import { kelvinToCelsius, massOf, temperatureOf } from './heat';
 import { rateFromIntervalTicks } from './funnel';
+import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
 import type { TubeInstance } from './tube';
 import type { FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
@@ -103,6 +104,7 @@ export interface FrameState {
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
   readonly grabState: GrabState | null;
+  readonly sinkCounter: SinkCounter;
   readonly tick: number;
 }
 
@@ -118,6 +120,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
   const tubeMask = grid.tubeMask.slice();
   const filterMask = grid.filterMask.slice();
   const funnelFillSpecId = computeFunnelFill(grid, state.funnels);
+  const sinkMask = grid.sinkMask.slice();
   overlayGrabbedCells(grid, species, state.grabState, specId, phase, tempK);
   return {
     type: 'frame',
@@ -132,6 +135,9 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     funnelFillSpecId,
     funnels: funnelSnapshots(state.funnels),
     tubes: tubeSnapshots(state.tubes),
+    sinkMask,
+    sinkTotals: state.sinkCounter.totals.slice(),
+    sinkGrandTotal: state.sinkCounter.grandTotal,
     tick: state.tick,
   };
 }
