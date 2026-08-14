@@ -4,15 +4,46 @@ import { buildMenu } from './ui/menu';
 import { buildScenarioSelect, type ScenarioSummary } from './ui/scenario-select';
 import { loadProgress } from './ui/campaign-progress';
 import { SCENARIOS } from './sim/scenario-data';
+import { buildCabinet } from './ui/cabinet';
+import { buildRecipeBook } from './ui/recipe-book';
+import { buildComfortScreen } from './ui/comfort-screen';
+import { applyComfortSettings, loadComfortSettings, saveComfortSettings } from './ui/comfort-settings';
 
 const rootEl = document.getElementById('app');
 if (!rootEl) throw new Error('missing #app root element');
 const root: HTMLElement = rootEl;
 
+// Comfort settings apply globally (menu screens included, not just an
+// active mountApp session) -- see comfort-settings.ts.
+applyComfortSettings(loadComfortSettings());
+
 function showMenu(): void {
   buildMenu(root, {
     onSandbox: showSandbox,
     onCampaign: showScenarioSelect,
+    onCabinet: showCabinet,
+    onRecipeBook: showRecipeBook,
+    onComfortSettings: showComfortSettings,
+  });
+}
+
+function showCabinet(): void {
+  buildCabinet(root, loadProgress(), { onBack: showMenu });
+}
+
+function showRecipeBook(): void {
+  buildRecipeBook(root, { onBack: showMenu });
+}
+
+function showComfortSettings(): void {
+  const settings = loadComfortSettings();
+  buildComfortScreen(root, settings, {
+    onChange: (next) => {
+      saveComfortSettings(next);
+      applyComfortSettings(next);
+      showComfortSettings();
+    },
+    onBack: showMenu,
   });
 }
 

@@ -1315,3 +1315,282 @@ input[type='range'] {
 .dropdown-select option:disabled {
   color: var(--text-faint);
 }
+
+/* Phase 6: sink sparkle ---------------------------------------------------- */
+
+.sink-sparkle {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.sink-sparkle.flash {
+  animation: sink-sparkle-fade 450ms ease-out;
+}
+
+@keyframes sink-sparkle-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Comfort settings: reduce motion turns off every non-essential CSS
+ * animation/transition app-wide, not just the sink sparkle above -- see
+ * comfort-settings.ts's applyComfortSettings. */
+.comfort-reduce-motion * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+.comfort-high-contrast {
+  --panel-border: #6a6f6c;
+  --text-muted: #d8dbd9;
+}
+
+.comfort-high-contrast .menu-card,
+.comfort-high-contrast .scenario-card,
+.comfort-high-contrast .cabinet-card {
+  border-width: 2px;
+}
+
+.comfort-big-ui {
+  font-size: 17px;
+}
+
+.comfort-big-ui .menu-card-title,
+.comfort-big-ui .scenario-card-title {
+  font-size: 20px;
+}
+
+.comfort-big-ui button {
+  min-height: 34px;
+  font-size: 1em;
+}
+
+.settings-btn {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* Comfort settings screen ------------------------------------------------- */
+
+.comfort-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+}
+
+.comfort-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, 90vw);
+}
+
+.comfort-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  cursor: pointer;
+}
+
+.comfort-toggle-checkbox {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.comfort-toggle-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.comfort-toggle-blurb {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Cabinet ------------------------------------------------------------------ */
+
+.cabinet-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cabinet-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cabinet-section-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.cabinet-achievements {
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 16px;
+}
+
+.achievement-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.achievement-badge {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.02);
+  opacity: 0.5;
+}
+
+.achievement-badge.unlocked {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-bg));
+}
+
+.achievement-badge-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.achievement-badge-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.cabinet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.cabinet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+}
+
+.cabinet-swatch {
+  width: 100%;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.cabinet-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+
+.cabinet-card-phase {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cabinet-card-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cabinet-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.cabinet-stat-label {
+  color: var(--text-muted);
+}
+
+.cabinet-card-source {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* Recipe Book --------------------------------------------------------------- */
+
+.recipe-book-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.recipe-search-row {
+  display: flex;
+}
+
+.recipe-search-input {
+  width: min(420px, 90vw);
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: #1e2120;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.recipe-results {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.recipe-section {
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.recipe-rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recipe-rule {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}

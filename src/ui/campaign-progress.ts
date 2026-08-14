@@ -11,6 +11,11 @@ export interface CampaignProgress {
   bestTimeSecByScenarioId: Record<string, number>;
   discoveredSpeciesLabels: string[];
   achievementIds: string[];
+  /** Where each discovered species was first made -- a scenario's title, or
+   * 'Sandbox'. Shown on its Cabinet card (see cabinet.ts). Added after the
+   * other fields shipped; loadProgress merges it in for records saved
+   * before it existed (see the merge-with-empty pattern below). */
+  discoverySourceByLabel: Record<string, string>;
 }
 
 function emptyProgress(): CampaignProgress {
@@ -20,6 +25,7 @@ function emptyProgress(): CampaignProgress {
     bestTimeSecByScenarioId: {},
     discoveredSpeciesLabels: [],
     achievementIds: [],
+    discoverySourceByLabel: {},
   };
 }
 
@@ -45,7 +51,11 @@ export function loadProgress(): CampaignProgress {
     const raw = localStorage.getItem(PROGRESS_STORAGE_KEY);
     if (!raw) return emptyProgress();
     const parsed: unknown = JSON.parse(raw);
-    return isCampaignProgress(parsed) ? parsed : emptyProgress();
+    // Spread onto a fresh emptyProgress() rather than returning `parsed`
+    // as-is: a record saved before discoverySourceByLabel existed is still
+    // valid per isCampaignProgress (which never required it), and this way
+    // it just gets backfilled with {} instead of coming back undefined.
+    return isCampaignProgress(parsed) ? { ...emptyProgress(), ...parsed } : emptyProgress();
   } catch {
     return emptyProgress();
   }
@@ -90,4 +100,23 @@ export function recordCompletion(progress: CampaignProgress, scenarioId: string,
       [scenarioId]: prevBestTime === undefined ? elapsedSeconds : Math.min(prevBestTime, elapsedSeconds),
     },
   };
+}
+
+/** Records a species' first appearance for the Cabinet (see cabinet.ts) --
+ * a no-op if it's already discovered, so `source` (the scenario title, or
+ * 'Sandbox') only ever reflects where a species was *first* made. */
+export function recordDiscovery(progress: CampaignProgress, label: string, source: string): CampaignProgress {
+  if (progress.discoveredSpeciesLabels.includes(label)) return progress;
+  return {
+    ...progress,
+    discoveredSpeciesLabels: [...progress.discoveredSpeciesLabels, label],
+    discoverySourceByLabel: { ...progress.discoverySourceByLabel, [label]: source },
+  };
+}
+
+/** Unlocks an achievement id (see achievements.ts) -- a no-op if already
+ * unlocked, same idempotent-fold convention as recordDiscovery. */
+export function unlockAchievement(progress: CampaignProgress, id: string): CampaignProgress {
+  if (progress.achievementIds.includes(id)) return progress;
+  return { ...progress, achievementIds: [...progress.achievementIds, id] };
 }

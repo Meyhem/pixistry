@@ -15,7 +15,7 @@ import { SCENARIOS, type Restrictions, type Scenario, type ToolKind as SimToolKi
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
-import { getWall, wallList } from '../sim/walls';
+import { getWall, isWallSpecId, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
@@ -30,12 +30,17 @@ import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type S
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
 import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
-import { loadProgress, recordCompletion, saveProgress, starsForCompletion } from './campaign-progress';
+import { loadProgress, recordCompletion, recordDiscovery, saveProgress, starsForCompletion, unlockAchievement } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
 import { isElementLabel } from './species-classify';
 import { buildSpeciesLookup } from './species-lookup';
 import { describeObjectives, isScenarioWon } from './objective-display';
 import { formatCelsius } from './format';
+import { applyComfortSettings, loadComfortSettings, saveComfortSettings } from './comfort-settings';
+import { buildComfortScreen } from './comfort-screen';
+import { playChime, type ChimePitch } from './sound';
+import { MADE_IT_RAIN_LIQUID_H2O_COUNT, PRECIPITATE_LABELS, THERMAL_RUNAWAY_THRESHOLD_K } from './achievements';
+import { scanFrameMeta } from './frame-meta';
 
 /** Matches worker.ts's TICK_MS (1000/60) -- used to turn a frame's raw tick
  * count into an elapsed-seconds readout for the win overlay/star rating. */
@@ -201,6 +206,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     modeBadge.textContent = 'CAMPAIGN';
     header.appendChild(modeBadge);
   }
+  const settingsButton = document.createElement('button');
+  settingsButton.className = 'menu-exit-btn settings-btn';
+  settingsButton.textContent = '⚙';
+  settingsButton.title = 'Comfort settings';
+  settingsButton.onclick = () => toggleSettingsOverlay(true);
+  header.appendChild(settingsButton);
   if (options.onExitToMenu) {
     const menuButton = document.createElement('button');
     menuButton.className = 'menu-exit-btn';
@@ -213,6 +224,33 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     header.appendChild(menuButton);
   }
   root.appendChild(header);
+
+  const settingsOverlay = document.createElement('div');
+  settingsOverlay.className = 'pt-overlay';
+  settingsOverlay.style.display = 'none';
+  root.appendChild(settingsOverlay);
+
+  function renderSettingsOverlay(): void {
+    buildComfortScreen(settingsOverlay, comfortSettings, {
+      onChange: (next) => {
+        comfortSettings = next;
+        saveComfortSettings(next);
+        applyComfortSettings(next);
+        renderSettingsOverlay();
+      },
+      onBack: () => toggleSettingsOverlay(false),
+    });
+  }
+
+  function toggleSettingsOverlay(show: boolean): void {
+    if (!show) {
+      settingsOverlay.style.display = 'none';
+      settingsOverlay.innerHTML = '';
+      return;
+    }
+    settingsOverlay.style.display = 'flex';
+    renderSettingsOverlay();
+  }
 
   const toolbar = document.createElement('div');
   toolbar.className = 'toolbar';
@@ -269,6 +307,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   apparatusPreview.style.display = 'none';
   canvasWrap.appendChild(apparatusPreview);
   let previewCtx: CanvasRenderingContext2D | null = null;
+
+  // Sink sparkle overlay (see .grill/campaign-mode.md's §6 point 2) -- a
+  // second 2D canvas, same sizing/positioning convention as apparatusPreview
+  // above, but always present rather than tool-gated: it's redrawn (and its
+  // CSS fade re-triggered) from the 'frame' handler whenever a sink's
+  // sinkTotals grew since the last frame, regardless of which tool is
+  // currently selected.
+  const sinkSparkle = document.createElement('canvas');
+  sinkSparkle.className = 'sink-sparkle';
+  canvasWrap.appendChild(sinkSparkle);
+  let sparkleCtx: CanvasRenderingContext2D | null = null;
 
   // Selection box for the select-apparatus tool: 4 corner brackets
   // positioned over the selected funnel's bounding box (see
@@ -355,6 +404,29 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
   const worker = new Worker(new URL('../sim/worker.ts', import.meta.url), { type: 'module' });
   const send = (message: MainToWorkerMessage): void => worker.postMessage(message);
+
+  // Comfort settings (see .grill/campaign-mode.md's §6 point 5) -- loaded
+  // once per mount, applied immediately so body classes are correct before
+  // the first frame; `renderSettingsOverlay`'s onChange keeps both this
+  // variable and localStorage in sync on every toggle.
+  let comfortSettings = loadComfortSettings();
+  applyComfortSettings(comfortSettings);
+
+  // In-memory campaign-progress cache (see campaign-progress.ts) -- loaded
+  // once and only ever written back to localStorage when it actually
+  // changes (a discovery, an achievement, or a win), not every frame. Used
+  // for species discovery (Cabinet) and achievement checks in the 'frame'
+  // handler below, in addition to the win-recording checkForWin already did.
+  let progress = loadProgress();
+  const knownSpeciesIds = new Set<number>();
+  // Milestone-chime bookkeeping: the previous frame's goal fractions, so a
+  // 25/50/75/100% crossing can be detected without re-deriving it from raw
+  // totals (see maybePlayMilestoneChimes below).
+  let prevGoalFractions: number[] = [];
+  // Sink-sparkle bookkeeping: the previous frame's sinkTotals, diffed
+  // against the new one to find out which species (and how much of it) got
+  // consumed this frame -- see maybeSparkleSinks below.
+  let prevSinkTotals: Uint32Array | null = null;
 
   // Campaign state -- null/false/empty for the whole session in sandbox
   // mode. `activeScenario` is looked up once from options.scenarioId; every
@@ -664,6 +736,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     winElapsedSeconds = 0;
     revealedHints = [];
     lastObjectives = [];
+    prevGoalFractions = [];
     burst = null;
     canvasWrap.classList.remove('bursting');
     const specId = defaultPaintSpecId();
@@ -1457,6 +1530,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       lastSinkMask = msg.sinkMask;
       lastSinkTotals = msg.sinkTotals;
       lastSinkGrandTotal = msg.sinkGrandTotal;
+      const frameMeta = scanFrameMeta(msg.specId, msg.phase, msg.tempK);
+      maybeRecordDiscoveries(frameMeta);
+      maybeCheckAchievements(frameMeta, msg.objectives);
+      maybeSparkleSinks(msg.sinkMask, msg.sinkTotals);
       const snapshotChanged = hasSnapshot !== msg.hasSnapshot;
       hasSnapshot = msg.hasSnapshot;
       apparatusSelection.setFunnels(msg.funnels);
@@ -1517,6 +1594,149 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
   };
 
+  /** Cabinet bookkeeping (see cabinet.ts): the first time a specId shows up
+   * on the grid this session, record it against `progress` if it's not
+   * already known from an earlier session. `knownSpeciesIds` is purely a
+   * perf guard -- once a specId has been checked once, it's never rechecked
+   * against the (growing) discoveredSpeciesLabels array again. Works
+   * identically in sandbox and campaign, matching the design doc's "works
+   * in sandbox too" for the Cabinet. */
+  function maybeRecordDiscoveries(meta: ReturnType<typeof scanFrameMeta>): void {
+    let changed = false;
+    for (const specId of meta.presentSpecIds) {
+      if (knownSpeciesIds.has(specId) || isWallSpecId(specId)) continue;
+      knownSpeciesIds.add(specId);
+      const label = speciesLookup.labelOf(specId);
+      if (!label || progress.discoveredSpeciesLabels.includes(label)) continue;
+      progress = recordDiscovery(progress, label, activeScenario?.title ?? 'Sandbox');
+      changed = true;
+    }
+    if (changed) saveProgress(progress);
+  }
+
+  /** Achievement checks (see achievements.ts) -- each trigger reads only
+   * data a frame already carries (present species, max temperature, live
+   * water count, goal progress), no new sim instrumentation. Runs every
+   * frame in both modes; unlockAchievement is idempotent so re-checking an
+   * already-unlocked one is just a cheap no-op array scan. */
+  function maybeCheckAchievements(meta: ReturnType<typeof scanFrameMeta>, objectives: readonly GoalProgress[]): void {
+    let changed = false;
+    const unlock = (id: string): void => {
+      const next = unlockAchievement(progress, id);
+      if (next !== progress) {
+        progress = next;
+        changed = true;
+      }
+    };
+    for (const specId of meta.presentSpecIds) {
+      const label = speciesLookup.labelOf(specId);
+      if (!label) continue;
+      if (PRECIPITATE_LABELS.has(label)) unlock('first-precipitate');
+      if (label === 'NH4Cl') unlock('white-smoke');
+    }
+    if (meta.maxTempK >= THERMAL_RUNAWAY_THRESHOLD_K) unlock('thermal-runaway-survivor');
+    if (meta.liquidH2OCount >= MADE_IT_RAIN_LIQUID_H2O_COUNT) unlock('made-it-rain');
+    for (const goal of objectives) {
+      if (goal.kind === 'purity' && goal.currentFraction >= 0.999) unlock('zero-waste');
+    }
+    if (changed) saveProgress(progress);
+  }
+
+  const CHIMEABLE_GOAL_KINDS = new Set<GoalProgress['kind']>(['collect', 'collectAny', 'rate', 'purity']);
+  const MILESTONES: ReadonlyArray<{ frac: number; pitch: ChimePitch }> = [
+    { frac: 0.25, pitch: 'quarter' },
+    { frac: 0.5, pitch: 'half' },
+    { frac: 0.75, pitch: 'threeQuarter' },
+    { frac: 1.0, pitch: 'full' },
+  ];
+
+  /** Milestone chimes (see .grill/campaign-mode.md's §6 point 3) -- plays
+   * the highest newly-crossed 25/50/75/100% threshold per goal per frame.
+   * Only for goals where "fraction" means "progress towards done"
+   * ('collect'/'collectAny'/'rate'/'purity') -- a 'limit'/'maxTempK'
+   * ceiling goal's fraction means "how close to failing" (see
+   * objective-display.ts), which isn't something to celebrate rising. */
+  function maybePlayMilestoneChimes(objectives: readonly GoalProgress[]): void {
+    const display = describeObjectives(objectives, speciesLookup);
+    display.forEach((obj, i) => {
+      const kind = objectives[i]?.kind;
+      if (!kind || !CHIMEABLE_GOAL_KINDS.has(kind)) return;
+      const prevFraction = prevGoalFractions[i] ?? 0;
+      for (let m = MILESTONES.length - 1; m >= 0; m--) {
+        const milestone = MILESTONES[m] as (typeof MILESTONES)[number];
+        if (prevFraction < milestone.frac && obj.fraction >= milestone.frac) {
+          playChime(milestone.pitch, comfortSettings.quiet);
+          break;
+        }
+      }
+    });
+    prevGoalFractions = display.map((obj) => obj.fraction);
+  }
+
+  /** Sink sparkle (see .grill/campaign-mode.md's §6 point 2) -- diffs this
+   * frame's sinkTotals against the last one; any species whose count grew
+   * gets a handful of dots flashed along the sink line, tinted with that
+   * species' own color, then faded out by a CSS animation (see
+   * style.css's .sink-sparkle.flash). A no-op under Reduce Motion. */
+  function maybeSparkleSinks(sinkMask: Uint8Array, sinkTotals: Uint32Array): void {
+    const prev = prevSinkTotals;
+    prevSinkTotals = sinkTotals;
+    if (comfortSettings.reduceMotion || !prev || gridWidth === 0 || gridHeight === 0) return;
+
+    const deltas: Array<{ specId: number; count: number }> = [];
+    for (let specId = 0; specId < sinkTotals.length; specId++) {
+      const delta = (sinkTotals[specId] ?? 0) - (prev[specId] ?? 0);
+      if (delta > 0) deltas.push({ specId, count: delta });
+    }
+    if (deltas.length === 0) return;
+
+    const cells: Point[] = [];
+    for (let y = 0; y < gridHeight; y++) {
+      for (let x = 0; x < gridWidth; x++) {
+        if (sinkMask[y * gridWidth + x]) cells.push({ x, y });
+      }
+    }
+    if (cells.length === 0) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
+    if (sinkSparkle.width !== width || sinkSparkle.height !== height) {
+      sinkSparkle.width = width;
+      sinkSparkle.height = height;
+      sparkleCtx = sinkSparkle.getContext('2d');
+    }
+    if (!sparkleCtx) return;
+    sinkSparkle.style.left = `${canvas.offsetLeft}px`;
+    sinkSparkle.style.top = `${canvas.offsetTop}px`;
+    sinkSparkle.style.width = `${width}px`;
+    sinkSparkle.style.height = `${height}px`;
+    const cellPxX = rect.width / gridWidth;
+    const cellPxY = rect.height / gridHeight;
+    sparkleCtx.clearRect(0, 0, sinkSparkle.width, sinkSparkle.height);
+
+    const totalDelta = deltas.reduce((sum, d) => sum + d.count, 0);
+    const DOTS_PER_SPARKLE = 24;
+    for (const { specId, count } of deltas) {
+      sparkleCtx.fillStyle = speciesLookup.colorOf(specId) ?? '#ffffff';
+      const dots = Math.max(1, Math.round((count / totalDelta) * DOTS_PER_SPARKLE));
+      const r = Math.max(cellPxX, cellPxY) * 0.9;
+      for (let i = 0; i < dots; i++) {
+        const cell = cells[Math.floor(Math.random() * cells.length)] as Point;
+        sparkleCtx.beginPath();
+        sparkleCtx.arc(cell.x * cellPxX + cellPxX / 2, cell.y * cellPxY + cellPxY / 2, r, 0, Math.PI * 2);
+        sparkleCtx.fill();
+      }
+    }
+
+    // Remove+reflow+add re-triggers the CSS fade-out animation even if a
+    // previous sparkle is still fading -- otherwise re-adding a class
+    // that's already present is a no-op and the animation wouldn't restart.
+    sinkSparkle.classList.remove('flash');
+    void sinkSparkle.offsetWidth;
+    sinkSparkle.classList.add('flash');
+  }
+
   /** Shared by the 'frame' and 'burstProgress' handlers: scores the active
    * scenario's live objectives and, the first time every goal is met, locks
    * in the win (stars/elapsed time from `tickNum`, persisted) and shows the
@@ -1525,6 +1745,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function checkForWin(objectives: GoalProgress[], tickNum: number): void {
     if (!activeScenario) return;
     lastObjectives = objectives;
+    if (briefingAcknowledged) maybePlayMilestoneChimes(objectives);
     // Gated on briefingAcknowledged too, not just isScenarioWon's own
     // empty-array guard -- no reason to score a scenario the player hasn't
     // even started yet, and it keeps this check from ever racing the
@@ -1533,7 +1754,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       scenarioWon = true;
       winElapsedSeconds = tickNum / TICKS_PER_SECOND;
       winStars = starsForCompletion(activeScenario.par?.seconds, winElapsedSeconds);
-      saveProgress(recordCompletion(loadProgress(), activeScenario.id, winStars, winElapsedSeconds));
+      // Folds onto the shared in-memory `progress` (not a fresh loadProgress()
+      // call) so it can't clobber a discovery/achievement this same tick's
+      // maybeRecordDiscoveries/maybeCheckAchievements already wrote -- both
+      // write through the same variable and saveProgress call.
+      progress = recordCompletion(progress, activeScenario.id, winStars, winElapsedSeconds);
+      saveProgress(progress);
+      playChime('win', comfortSettings.quiet);
       renderCampaignOverlay();
     }
     renderCampaignHud();
