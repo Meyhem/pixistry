@@ -39,9 +39,12 @@ import {
 } from './funnel';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
+import { evaluateGoals } from './objectives';
 import type { MainToWorkerMessage, WorkerToMainMessage } from './protocol';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
+import { applyScenarioSetup, isFunnelSpeciesAllowed, isPaintAllowed, isToolAllowed } from './scenario';
+import type { Restrictions, Scenario } from './scenario-data';
 import { SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
@@ -115,6 +118,21 @@ const sinkCounter = new SinkCounter();
 // button instead of sending a message that would silently do nothing).
 let worldSnapshot: WorldSnapshot | null = null;
 
+// The active campaign scenario, if any (see scenario-data.ts/scenario.ts) --
+// null in sandbox mode. activeRestrictions mirrors activeScenario.rules
+// whenever a scenario is loaded; every message handler that creates matter
+// or activates a tool checks it via scenario.ts's isPaintAllowed/
+// isFunnelSpeciesAllowed/isToolAllowed, so a scenario's rules can't be
+// bypassed by a UI bug or a devtools postMessage call.
+let activeScenario: Scenario | null = null;
+let activeRestrictions: Restrictions | null = null;
+// Highest cell temperature (K) seen anywhere on the grid since the active
+// scenario was loaded -- a running max (see objectives.ts's GoalSnapshot
+// doc comment on why 'maxTempK' goals latch rather than reading
+// instantaneous temperature). Updated every postFrame from the temp grid
+// buildFrame already computes for rendering, so this is free.
+let maxTempKObserved = 0;
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -161,13 +179,22 @@ function runOneTick(): void {
 }
 
 function postFrame(): void {
-  post(buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, hasSnapshot: worldSnapshot !== null, tick }));
+  const frame = buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
+  if (activeScenario) {
+    for (let i = 0; i < frame.tempK.length; i++) {
+      const t = frame.tempK[i] as number;
+      if (t > maxTempKObserved) maxTempKObserved = t;
+    }
+    frame.objectives = evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: [], tick, maxTempK: maxTempKObserved });
+  }
+  post(frame);
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case 'paint': {
+      if (!isPaintAllowed(activeRestrictions, msg.specId)) break;
       const mass = massOf(species, msg.specId);
       const thermal = species.thermalOf(msg.specId);
       const tempK = Math.min(MAX_TEMP_K, Math.max(0, celsiusToKelvin(msg.tempC)));
@@ -176,6 +203,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     }
     case 'paintRadiator': {
+      if (!isToolAllowed(activeRestrictions, 'radiator')) break;
       const targetK = celsiusToKelvin(msg.targetTempC);
       paintCircle(msg.x, msg.y, msg.brushRadius, (px, py) => {
         const idx = grid.index(px, py);
@@ -185,11 +213,13 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     }
     case 'paintStirrer':
+      if (!isToolAllowed(activeRestrictions, 'stirrer')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.stirrerMask[grid.index(px, py)] = 1;
       });
       break;
     case 'paintFilter':
+      if (!isToolAllowed(activeRestrictions, 'filter')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.filterMask[grid.index(px, py)] = 1;
       });
@@ -198,6 +228,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       filterAllowSpecies = new Set(msg.species);
       break;
     case 'erase':
+      if (!isToolAllowed(activeRestrictions, 'erase')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
         grid.clear(px, py);
         grid.radiatorRadius[grid.index(px, py)] = 0;
@@ -229,6 +260,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
       break;
     case 'stirStart':
+      if (!isToolAllowed(activeRestrictions, 'mixer')) break;
       stirState = { x: msg.x, y: msg.y, radius: msg.radius };
       break;
     case 'stirMove':
@@ -241,6 +273,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       stirState = null;
       break;
     case 'grabStart':
+      if (!isToolAllowed(activeRestrictions, 'grabber')) break;
       grabState = grabPickUp(grid, msg.x, msg.y, msg.radius);
       break;
     case 'grabMove':
@@ -256,6 +289,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       }
       break;
     case 'placeFunnel':
+      if (!isToolAllowed(activeRestrictions, 'funnel') || !isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
       funnels.push(
         placeFunnelInstance(grid, species, {
           x: msg.x,
@@ -269,6 +303,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       );
       break;
     case 'updateFunnel':
+      if (!isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
       withFunnel(msg.id, (instance) =>
         updateFunnelInstance(instance, { specId: msg.specId, tempC: msg.tempC, ratePerMinute: msg.ratePerMinute, total: msg.total }),
       );
@@ -283,6 +318,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y));
       break;
     case 'placeTube':
+      if (!isToolAllowed(activeRestrictions, 'tube')) break;
       tubes.push(
         placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
       );
@@ -297,6 +333,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
       break;
     case 'placeFlask': {
+      if (!isToolAllowed(activeRestrictions, 'flask')) break;
       // A placed flask isn't tracked state like a funnel/tube -- it's a
       // one-shot stamp (real glass walls, plus stirrerMask for the stirred
       // variant), same as painting a wall material. No instance array, no
@@ -322,6 +359,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     }
     case 'paintSinkLine':
+      if (!isToolAllowed(activeRestrictions, 'sink')) break;
       for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
         if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = 1;
       }
@@ -338,6 +376,23 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       grabState = null;
       stirState = null;
       tick = 0;
+      activeScenario = null;
+      activeRestrictions = null;
+      maxTempKObserved = 0;
+      break;
+    case 'loadScenario':
+      grid.clearAll();
+      funnels = [];
+      tubes = [];
+      sinkCounter.reset();
+      filterAllowSpecies = new Set();
+      grabState = null;
+      stirState = null;
+      tick = 0;
+      maxTempKObserved = 0;
+      activeScenario = msg.scenario;
+      activeRestrictions = msg.scenario.rules;
+      applyScenarioSetup(grid, species, msg.scenario);
       break;
     case 'snapshotWorld':
       worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);

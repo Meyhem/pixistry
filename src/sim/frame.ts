@@ -10,6 +10,7 @@ import { funnelShapeFor } from './apparatus-shapes';
 import type { FunnelInstance } from './funnel';
 import { kelvinToCelsius, massOf, temperatureOf } from './heat';
 import { rateFromIntervalTicks } from './funnel';
+import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
 import type { TubeInstance } from './tube';
@@ -107,6 +108,10 @@ export interface FrameState {
   readonly sinkCounter: SinkCounter;
   readonly hasSnapshot: boolean;
   readonly tick: number;
+  /** Pre-computed by the caller (worker.ts, via objectives.ts's
+   * evaluateGoals) -- buildFrame just embeds it, since it has no scenario
+   * state of its own to evaluate goals against. Empty in sandbox mode. */
+  readonly objectives: GoalProgress[];
 }
 
 /** Builds one 'frame' message from the grid + apparatus-instance state --
@@ -141,5 +146,6 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     sinkGrandTotal: state.sinkCounter.grandTotal,
     hasSnapshot: state.hasSnapshot,
     tick: state.tick,
+    objectives: state.objectives,
   };
 }

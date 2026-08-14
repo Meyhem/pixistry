@@ -287,7 +287,7 @@ Each phase is independently shippable and leaves `main` working.
 | **0** ✅ | `resetWorld`, world snapshot/restore, `mountApp` teardown | done -- `grid.clearAll`, `world-snapshot.ts`, Save/Restore/Clear All buttons in sandbox, `mountApp` returns `unmount()` (unused by main.ts until Phase 2's menu needs it) |
 | **1** ✅ | **Sink tool** end to end (mask, `stepSinks`, line-draw UI, tally panel, renderer, tests) | done -- shipped to sandbox alone |
 | **2** ✅ | Menu + mode shell + progress persistence | done -- `menu.ts`, `scenario-select.ts` (empty-state until Phase 3), `campaign-progress.ts` (localStorage), `mountApp` gains `{mode, scenarioId, onExitToMenu}` + a header Menu button, `main.ts` routes Menu ↔ Sandbox ↔ Campaign |
-| **3** | `scenario-data.ts`, `scenario.ts`, `objectives.ts`, worker restrictions, solvability test | 3 scenarios only |
+| **3** ✅ | `scenario-data.ts`, `scenario.ts`, `objectives.ts`, worker restrictions, solvability test | done -- 3 scenarios (`table-salt`, `dissolve-it`, `hydrogen-factory` = ladder #1/#4/#7), `applyScenarioSetup` handles `rect`/`wallRect` (more `SetupCommand` kinds added when a scenario needs one), worker gains `loadScenario` + gates paint/tool/funnel-species messages against `Restrictions`, posts live `objectives: GoalProgress[]` in every frame (`rate` goals wired correctly but worker doesn't yet feed real per-second history -- no scenario needs one yet), BFS solvability test in `scenario.test.ts` |
 | **4** | Campaign UI: briefing, HUD progress bars, locked tools, hints, win + stars | first playable slice ends here |
 | **5** | Run Test (`runBurst`, progress, cancel, rewind) | unlocks Tier 3 |
 | **6** | Juice + meta: sparkle, chimes, comfort settings, Cabinet, achievements, recipe book | |

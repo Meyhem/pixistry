@@ -5,6 +5,8 @@
 // entry point -- worker.ts re-exports nothing.
 import type { FunnelFacing } from './apparatus-shapes';
 import type { FlaskFacing } from './flask-shapes';
+import type { GoalProgress } from './objectives';
+import type { Scenario } from './scenario-data';
 import type { PaletteEntry } from './species';
 import type { Point } from './tube-shapes';
 
@@ -56,6 +58,10 @@ export type WorkerToMainMessage =
        * than sending a message the worker would just silently no-op. */
       hasSnapshot: boolean;
       tick: number;
+      /** Live pass/fail progress for the active scenario's goals (see
+       * objectives.ts's evaluateGoals) -- empty in sandbox mode, where
+       * there's no active scenario to score. */
+      objectives: GoalProgress[];
     };
 
 export type MainToWorkerMessage =
@@ -104,4 +110,9 @@ export type MainToWorkerMessage =
   | { type: 'snapshotWorld' }
   /** Copies the last snapshotWorld save back over the live world. A no-op
    * if nothing's been saved yet (see the frame message's hasSnapshot). */
-  | { type: 'restoreWorld' };
+  | { type: 'restoreWorld' }
+  /** Clears the grid/apparatus/sink state (same as resetWorld) and stamps a
+   * campaign scenario's setup onto it, activating its Restrictions -- see
+   * scenario.ts's applyScenarioSetup and worker.ts's 'loadScenario'
+   * handler. */
+  | { type: 'loadScenario'; scenario: Scenario };
