@@ -29,7 +29,7 @@ import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type Tool
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
-import { buildBriefing, buildObjectiveHud, buildWinOverlay } from './campaign-hud';
+import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
 import { loadProgress, recordCompletion, saveProgress, starsForCompletion } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
 import { isElementLabel } from './species-classify';
@@ -40,6 +40,12 @@ import { formatCelsius } from './format';
 /** Matches worker.ts's TICK_MS (1000/60) -- used to turn a frame's raw tick
  * count into an elapsed-seconds readout for the win overlay/star rating. */
 const TICKS_PER_SECOND = 60;
+/** Run Test's fast-forward length (see .grill/campaign-mode.md's Phase 5) --
+ * 30 sim-seconds, the exact figure the design doc measures against. Fixed
+ * for now since no shipped scenario needs a different duration yet; would
+ * become scenario-configurable if a future Tier 3 level's sustain window
+ * needs more runway than this. */
+const RUN_TEST_TICKS = 30 * TICKS_PER_SECOND;
 const DEFAULT_RADIUS = 2;
 const DEFAULT_RADIATION_RADIUS = 3;
 const DEFAULT_RADIATOR_TARGET_C = 100;
@@ -364,6 +370,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let winElapsedSeconds = 0;
   let revealedHints: string[] = [];
   let lastObjectives: GoalProgress[] = [];
+  // Run Test burst status (see campaign-hud.ts's BurstStatus) -- null
+  // whenever no 'runBurst' is in flight, mirrored from worker.ts's own
+  // 'burstProgress' messages.
+  let burst: BurstStatus | null = null;
 
   let gridWidth = 0;
   let gridHeight = 0;
@@ -654,6 +664,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     winElapsedSeconds = 0;
     revealedHints = [];
     lastObjectives = [];
+    burst = null;
+    canvasWrap.classList.remove('bursting');
     const specId = defaultPaintSpecId();
     tool = specId !== undefined ? { kind: 'paint', specId } : null;
     send({ type: 'loadScenario', scenario });
@@ -673,18 +685,33 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return;
     }
     campaignHud.style.display = 'flex';
-    buildObjectiveHud(campaignHud, activeScenario, describeObjectives(lastObjectives, speciesLookup), revealedHints, {
-      onRevealHint: () => {
-        const next = activeScenario?.hints[revealedHints.length];
-        if (next === undefined) return;
-        revealedHints = [...revealedHints, next];
-        renderCampaignHud();
-        // A revealed hint adds a line and changes the HUD's height, unlike
-        // the routine per-frame progress-bar updates below -- re-fit the
-        // canvas so it doesn't end up overlapping the taller panel.
-        fitCanvasWrap();
+    buildObjectiveHud(
+      campaignHud,
+      activeScenario,
+      describeObjectives(lastObjectives, speciesLookup),
+      revealedHints,
+      burst,
+      hasSnapshot,
+      !scenarioWon,
+      {
+        onRevealHint: () => {
+          const next = activeScenario?.hints[revealedHints.length];
+          if (next === undefined) return;
+          revealedHints = [...revealedHints, next];
+          renderCampaignHud();
+          // A revealed hint adds a line and changes the HUD's height, unlike
+          // the routine per-frame progress-bar updates below -- re-fit the
+          // canvas so it doesn't end up overlapping the taller panel.
+          fitCanvasWrap();
+        },
+        onRunTest: () => {
+          if (burst) return;
+          send({ type: 'runBurst', ticks: RUN_TEST_TICKS });
+        },
+        onCancelTest: () => send({ type: 'cancelBurst' }),
+        onRewind: () => send({ type: 'restoreWorld' }),
       },
-    });
+    );
   }
 
   /** The full-screen briefing (before Start) / win (after every goal is
@@ -1474,22 +1501,43 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       }
 
       if (activeScenario) {
-        lastObjectives = msg.objectives;
-        // Gated on briefingAcknowledged too, not just isScenarioWon's own
-        // empty-array guard -- no reason to score a scenario the player
-        // hasn't even started yet, and it keeps this check from ever racing
-        // the worker's own 'loadScenario' handling on the very first frame.
-        if (briefingAcknowledged && !scenarioWon && isScenarioWon(msg.objectives)) {
-          scenarioWon = true;
-          winElapsedSeconds = msg.tick / TICKS_PER_SECOND;
-          winStars = starsForCompletion(activeScenario.par?.seconds, winElapsedSeconds);
-          saveProgress(recordCompletion(loadProgress(), activeScenario.id, winStars, winElapsedSeconds));
-          renderCampaignOverlay();
-        }
-        renderCampaignHud();
+        checkForWin(msg.objectives, msg.tick);
+      }
+    } else if (msg.type === 'burstProgress') {
+      burst = msg.ticksRemaining > 0 ? { ticksTotal: msg.ticksTotal, ticksRemaining: msg.ticksRemaining } : null;
+      canvasWrap.classList.toggle('bursting', burst !== null);
+      // A Run Test can win a continuous-process scenario on its own -- the
+      // burst is exactly "let it run and see if it holds up" (see
+      // .grill/campaign-mode.md's Phase 5), so this uses the same win check
+      // real-time frames do rather than requiring the player to separately
+      // notice and declare victory.
+      if (activeScenario) {
+        checkForWin(msg.objectives, msg.tick);
       }
     }
   };
+
+  /** Shared by the 'frame' and 'burstProgress' handlers: scores the active
+   * scenario's live objectives and, the first time every goal is met, locks
+   * in the win (stars/elapsed time from `tickNum`, persisted) and shows the
+   * win overlay. Both real-time play and a Run Test burst can trigger this
+   * -- see worker.ts's 'burstProgress' doc comment. */
+  function checkForWin(objectives: GoalProgress[], tickNum: number): void {
+    if (!activeScenario) return;
+    lastObjectives = objectives;
+    // Gated on briefingAcknowledged too, not just isScenarioWon's own
+    // empty-array guard -- no reason to score a scenario the player hasn't
+    // even started yet, and it keeps this check from ever racing the
+    // worker's own 'loadScenario' handling on the very first frame.
+    if (briefingAcknowledged && !scenarioWon && isScenarioWon(objectives)) {
+      scenarioWon = true;
+      winElapsedSeconds = tickNum / TICKS_PER_SECOND;
+      winStars = starsForCompletion(activeScenario.par?.seconds, winElapsedSeconds);
+      saveProgress(recordCompletion(loadProgress(), activeScenario.id, winStars, winElapsedSeconds));
+      renderCampaignOverlay();
+    }
+    renderCampaignHud();
+  }
 
   // Dev-only debug hook (see debug-hook.ts) -- not part of the app's real
   // API, never imported by app code, purely a debugging aid.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
-import { SinkCounter, sinkLineCells, stepSinks } from './sink';
+import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID, wallThermalProfile, getWall } from './walls';
 import { SpeciesTable } from './species';
@@ -148,5 +148,42 @@ describe('stepSinks', () => {
     counter.reset();
     expect(counter.grandTotal).toBe(0);
     expect(counter.totals[SpeciesId.NaCl]).toBe(0);
+  });
+});
+
+describe('recordSinkHistory', () => {
+  it('only snapshots on a 60-tick boundary, leaving history untouched between them', () => {
+    const counter = new SinkCounter();
+    counter.totals[SpeciesId.NaCl] = 5;
+    recordSinkHistory(counter, 1);
+    recordSinkHistory(counter, 59);
+    expect(counter.history).toHaveLength(0);
+    recordSinkHistory(counter, 60);
+    expect(counter.history).toHaveLength(1);
+    expect(counter.history[0]).toEqual({ tick: 60, totals: counter.totals });
+  });
+
+  it('each snapshot is an independent copy, unaffected by totals mutated afterward', () => {
+    const counter = new SinkCounter();
+    counter.totals[SpeciesId.NaCl] = 5;
+    recordSinkHistory(counter, 60);
+    counter.totals[SpeciesId.NaCl] = 99;
+    expect(counter.history[0]?.totals[SpeciesId.NaCl]).toBe(5);
+  });
+
+  it('trims the oldest entry once the ring buffer exceeds 120 snapshots', () => {
+    const counter = new SinkCounter();
+    for (let tick = 60; tick <= 121 * 60; tick += 60) recordSinkHistory(counter, tick);
+    expect(counter.history).toHaveLength(120);
+    expect(counter.history[0]?.tick).toBe(2 * 60);
+    expect(counter.history[counter.history.length - 1]?.tick).toBe(121 * 60);
+  });
+
+  it('reset() clears history along with the totals', () => {
+    const counter = new SinkCounter();
+    recordSinkHistory(counter, 60);
+    expect(counter.history).toHaveLength(1);
+    counter.reset();
+    expect(counter.history).toHaveLength(0);
   });
 });

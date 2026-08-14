@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PhaseCode, SimGrid } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { placeFunnelInstance } from './funnel';
-import { SinkCounter, stepSinks } from './sink';
+import { recordSinkHistory, SinkCounter, stepSinks } from './sink';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { placeTubeInstance } from './tube';
@@ -47,6 +47,21 @@ describe('world snapshot/restore', () => {
     expect(restored.tick).toBe(42);
     expect(restored.funnels[0]!.remaining).toBe(10);
     expect(restored.tubes[0]!.coneSize).toBe(3);
+  });
+
+  it('round-trips the sink history ring buffer, independent of the live one', () => {
+    const grid = new SimGrid(5, 5);
+    const sinkCounter = new SinkCounter();
+    recordSinkHistory(sinkCounter, 60);
+    recordSinkHistory(sinkCounter, 120);
+
+    const snapshot = captureWorldSnapshot(grid, [], [], sinkCounter, 120);
+    sinkCounter.reset();
+    expect(sinkCounter.history).toHaveLength(0);
+
+    restoreWorldSnapshot(grid, sinkCounter, snapshot);
+    expect(sinkCounter.history).toHaveLength(2);
+    expect(sinkCounter.history.map((h) => h.tick)).toEqual([60, 120]);
   });
 
   it('restored funnel/tube instances are independent copies, not aliases of the originals', () => {

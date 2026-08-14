@@ -30,6 +30,7 @@ export interface WorldSnapshot {
   readonly tubes: readonly TubeInstance[];
   readonly sinkTotals: Uint32Array;
   readonly sinkGrandTotal: number;
+  readonly sinkHistory: SinkCounter['history'];
   readonly tick: number;
 }
 
@@ -62,6 +63,7 @@ export function captureWorldSnapshot(
     tubes: structuredClone(tubes as TubeInstance[]),
     sinkTotals: sinkCounter.totals.slice(),
     sinkGrandTotal: sinkCounter.grandTotal,
+    sinkHistory: structuredClone(sinkCounter.history),
     tick,
   };
 }
@@ -90,6 +92,7 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, sn
   grid.sinkMask.set(snapshot.sinkMask);
   sinkCounter.totals.set(snapshot.sinkTotals);
   sinkCounter.grandTotal = snapshot.sinkGrandTotal;
+  sinkCounter.history = structuredClone(snapshot.sinkHistory);
   return {
     funnels: structuredClone(snapshot.funnels as FunnelInstance[]),
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),

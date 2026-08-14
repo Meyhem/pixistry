@@ -62,6 +62,22 @@ export type WorkerToMainMessage =
        * objectives.ts's evaluateGoals) -- empty in sandbox mode, where
        * there's no active scenario to score. */
       objectives: GoalProgress[];
+    }
+  | {
+      /** Progress update for an in-flight 'runBurst' fast-forward (see
+       * .grill/campaign-mode.md's Phase 5) -- posted once per chunk instead
+       * of once per tick, since a burst deliberately skips the normal
+       * per-tick 'frame' message. `ticksRemaining === 0` marks the final
+       * chunk (the burst is over and normal frames resume next tick); the
+       * UI computes pass/fail itself from `objectives` via
+       * objective-display.ts's isScenarioWon, the same function real-time
+       * play already uses, so a scenario can be won either by playing it
+       * out live or by a Run Test proving the built apparatus holds up. */
+      type: 'burstProgress';
+      tick: number;
+      ticksTotal: number;
+      ticksRemaining: number;
+      objectives: GoalProgress[];
     };
 
 export type MainToWorkerMessage =
@@ -115,4 +131,18 @@ export type MainToWorkerMessage =
    * campaign scenario's setup onto it, activating its Restrictions -- see
    * scenario.ts's applyScenarioSetup and worker.ts's 'loadScenario'
    * handler. */
-  | { type: 'loadScenario'; scenario: Scenario };
+  | { type: 'loadScenario'; scenario: Scenario }
+  /** Fast-forwards `ticks` sim ticks without posting per-tick 'frame'
+   * messages, in chunks so a 'cancelBurst' can still land between them --
+   * see worker.ts's runBurstChunk and .grill/campaign-mode.md's Phase 5.
+   * Auto-snapshots the world first (overwriting any existing
+   * 'snapshotWorld' save -- see the 'frame' message's hasSnapshot) and
+   * resets the sink counters, so a scenario's goals are evaluated against
+   * only what the burst itself produces, and a bad result can be undone
+   * with 'restoreWorld' at no cost. Ignored if a burst is already running. */
+  | { type: 'runBurst'; ticks: number }
+  /** Stops an in-flight burst before it reaches its requested tick count and
+   * restores the world to exactly how it was right before 'runBurst' ran --
+   * an interrupted test is treated the same as a bad one, not a partial
+   * result to keep. No-op if no burst is running. */
+  | { type: 'cancelBurst' };

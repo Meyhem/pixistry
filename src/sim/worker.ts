@@ -23,6 +23,7 @@ import {
   energyForTemperature,
   MAX_TEMP_K,
   massOf,
+  scanMaxTempK,
   stepAmbient,
   stepConduction,
   stepRadiators,
@@ -45,7 +46,7 @@ import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { applyScenarioSetup, isFunnelSpeciesAllowed, isPaintAllowed, isToolAllowed } from './scenario';
 import type { Restrictions, Scenario } from './scenario-data';
-import { SinkCounter, sinkLineCells, stepSinks } from './sink';
+import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
@@ -64,6 +65,11 @@ const MAX_SPEED = 4;
 // in sim-time instead of wall-clock time (tick count, not setInterval count)
 // so it stays consistent regardless of the speed multiplier's ticks-per-frame.
 const STIR_INTERVAL_TICKS = Math.round(0.25 / TICK_DT_SECONDS);
+// Run Test (see .grill/campaign-mode.md's Phase 5): a burst runs this many
+// ticks per macrotask before yielding, so a 'cancelBurst' message sitting in
+// the event queue behind it still gets a chance to land between chunks
+// instead of only after the whole burst finishes.
+const BURST_CHUNK_TICKS = 200;
 
 const palette = buildPalette();
 const species = new SpeciesTable();
@@ -117,6 +123,14 @@ const sinkCounter = new SinkCounter();
 // frame message's hasSnapshot, which lets the UI grey out its Restore
 // button instead of sending a message that would silently do nothing).
 let worldSnapshot: WorldSnapshot | null = null;
+
+// Run Test fast-forward state (see .grill/campaign-mode.md's Phase 5) --
+// null when no burst is in flight. While bursting, the normal setInterval
+// tick loop and every message but 'cancelBurst' are suppressed (see
+// self.onmessage and the setInterval callback below), so the live grid isn't
+// mutated by anything other than runBurstChunk's own ticking until the burst
+// ends or is cancelled.
+let burst: { ticksTotal: number; ticksRemaining: number } | null = null;
 
 // The active campaign scenario, if any (see scenario-data.ts/scenario.ts) --
 // null in sandbox mode. activeRestrictions mirrors activeScenario.rules
@@ -176,6 +190,7 @@ function runOneTick(): void {
   // counts (and consumes) whatever's really present at the end of the tick
   // -- see sink.ts's stepSinks doc comment.
   stepSinks(grid, sinkCounter);
+  recordSinkHistory(sinkCounter, tick);
 }
 
 function postFrame(): void {
@@ -185,13 +200,48 @@ function postFrame(): void {
       const t = frame.tempK[i] as number;
       if (t > maxTempKObserved) maxTempKObserved = t;
     }
-    frame.objectives = evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: [], tick, maxTempK: maxTempKObserved });
+    frame.objectives = evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved });
   }
   post(frame);
 }
 
+/** Runs one BURST_CHUNK_TICKS-sized slice of an in-flight Run Test, posts a
+ * 'burstProgress' update, and either schedules the next slice (via
+ * setTimeout, so a queued 'cancelBurst' gets processed between chunks) or
+ * -- once ticksRemaining hits 0 -- ends the burst and resumes normal framed
+ * ticking. Guarded on `burst` still being set at the top so a chunk already
+ * scheduled before a cancel lands is a no-op instead of ticking a world
+ * cancelBurst just restored. */
+function runBurstChunk(): void {
+  if (!burst) return;
+  const chunk = Math.min(BURST_CHUNK_TICKS, burst.ticksRemaining);
+  for (let i = 0; i < chunk; i++) runOneTick();
+  burst.ticksRemaining -= chunk;
+
+  if (activeScenario) {
+    const observed = scanMaxTempK(grid, species);
+    if (observed > maxTempKObserved) maxTempKObserved = observed;
+  }
+  const objectives = activeScenario
+    ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
+    : [];
+  post({ type: 'burstProgress', tick, ticksTotal: burst.ticksTotal, ticksRemaining: burst.ticksRemaining, objectives });
+
+  if (burst.ticksRemaining > 0) {
+    setTimeout(runBurstChunk, 0);
+  } else {
+    burst = null;
+    postFrame();
+  }
+}
+
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
+  // While a burst is in flight, the only message that should reach the live
+  // world is the one that can stop it -- see runBurstChunk's doc comment on
+  // why nothing else may mutate grid/funnels/tubes/etc concurrently with its
+  // own ticking.
+  if (burst && msg.type !== 'cancelBurst') return;
   switch (msg.type) {
     case 'paint': {
       if (!isPaintAllowed(activeRestrictions, msg.specId)) break;
@@ -410,12 +460,55 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       stirState = null;
       break;
     }
+    case 'runBurst': {
+      if (burst) break;
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);
+      sinkCounter.reset();
+      burst = { ticksTotal: msg.ticks, ticksRemaining: msg.ticks };
+      runBurstChunk();
+      break;
+    }
+    case 'cancelBurst': {
+      if (!burst) break;
+      const ticksTotal = burst.ticksTotal;
+      burst = null;
+      // Cancelling is treated the same as a bad result: unwind straight back
+      // to the pre-burst snapshot 'runBurst' just took, same as the UI's own
+      // explicit 'restoreWorld', rather than leaving a half-finished test's
+      // world state live.
+      if (worldSnapshot) {
+        const restored = restoreWorldSnapshot(grid, sinkCounter, worldSnapshot);
+        funnels = restored.funnels;
+        tubes = restored.tubes;
+        tick = restored.tick;
+        grabState = null;
+        stirState = null;
+      }
+      // A final 'burstProgress' with ticksRemaining 0 -- same shape
+      // runBurstChunk's own completion posts -- is what tells the main
+      // thread the burst is over so it clears its local `bursting` state
+      // (un-dims the canvas, re-enables the Run Test button). Without this,
+      // a cancelled burst never gets that signal, since cancelling skips
+      // runBurstChunk's normal completion path entirely.
+      const objectives = activeScenario
+        ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
+        : [];
+      post({ type: 'burstProgress', tick, ticksTotal, ticksRemaining: 0, objectives });
+      postFrame();
+      break;
+    }
   }
 };
 
 post({ type: 'ready', width: WIDTH, height: HEIGHT, palette });
 
 setInterval(() => {
+  // A Run Test burst drives its own ticking (via runBurstChunk's setTimeout
+  // chain) and deliberately posts no per-tick frames -- see .grill/
+  // campaign-mode.md's Phase 5. Skip both halves of the normal loop while
+  // one is in flight so ticks aren't applied twice and no stale frame
+  // overwrites the "running test" state client-side.
+  if (burst) return;
   if (running) {
     tickAccumulator += speed;
     while (tickAccumulator >= 1) {

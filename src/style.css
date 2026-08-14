@@ -1269,6 +1269,40 @@ input[type='range'] {
   cursor: pointer;
 }
 
+.campaign-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.campaign-test-row .campaign-secondary-btn {
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  flex: none;
+}
+
+.test-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.campaign-test-row .hud-bar-track {
+  flex: 1;
+}
+
+/* Run Test fast-forward: no per-tick frames arrive while a burst is in
+ * flight (see worker.ts's runBurstChunk), so the canvas would otherwise sit
+ * frozen with no indication anything's happening -- dim it and stop
+ * swallowing clicks the worker would ignore anyway. */
+.canvas-wrap.bursting {
+  pointer-events: none;
+  filter: saturate(0.4) brightness(0.7);
+}
+
 /* Campaign mode: locked toolbar entries ------------------------------------ */
 
 .palette-btn.locked,

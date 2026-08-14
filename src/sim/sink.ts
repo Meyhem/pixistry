@@ -7,8 +7,19 @@
 // since "how much have I made" is a fun toy on its own with no campaign code
 // at all.
 import type { SimGrid } from './grid';
+import type { GoalHistoryEntry } from './objectives';
 import { SPECIES } from './species-data';
 import { isWallSpecId } from './walls';
+
+// How often (in ticks) stepSinks' running totals get snapshotted into
+// SinkCounter.history, and how many of those snapshots are kept -- 60 ticks
+// = 1 real second at the sim's fixed tick rate, 120 entries = ~2 minutes,
+// comfortably longer than any 'rate' goal's sustainSeconds window or a
+// Run Test burst (see .grill/campaign-mode.md's Phase 1/5). Evaluated
+// against by objectives.ts's evaluateRate, which walks this backward from
+// the most recent entry.
+const HISTORY_INTERVAL_TICKS = 60;
+const HISTORY_MAX_ENTRIES = 120;
 
 export const SINK_LABEL = 'Sink';
 export const SINK_COLOR = '#e0489e';
@@ -76,11 +87,31 @@ export function sinkLineCells(x0: number, y0: number, x1: number, y1: number, wi
 export class SinkCounter {
   readonly totals = new Uint32Array(SPECIES.length);
   grandTotal = 0;
+  /** Per-second snapshots of `totals`, oldest first -- what 'rate' goals
+   * measure a sustained throughput against (see objectives.ts's
+   * evaluateRate). Populated by recordSinkHistory, called once per tick from
+   * worker.ts's runOneTick (a no-op most ticks -- see
+   * HISTORY_INTERVAL_TICKS). */
+  history: GoalHistoryEntry[] = [];
 
   reset(): void {
     this.totals.fill(0);
     this.grandTotal = 0;
+    this.history = [];
   }
+}
+
+/** Appends a `{tick, totals}` snapshot to `counter.history` every
+ * HISTORY_INTERVAL_TICKS ticks, trimming the oldest entry once the ring
+ * buffer exceeds HISTORY_MAX_ENTRIES -- called every tick (cheap no-op on
+ * ticks that aren't a snapshot boundary) rather than only while a 'rate'
+ * goal is active, so history is already warm the moment a scenario adds one
+ * and so a Run Test burst (which runs many ticks without posting frames)
+ * still gets a real per-second history to evaluate against. */
+export function recordSinkHistory(counter: SinkCounter, tick: number): void {
+  if (tick % HISTORY_INTERVAL_TICKS !== 0) return;
+  counter.history.push({ tick, totals: counter.totals.slice() });
+  if (counter.history.length > HISTORY_MAX_ENTRIES) counter.history.shift();
 }
 
 /** One tick's worth of sink consumption: every non-empty, non-wall cell

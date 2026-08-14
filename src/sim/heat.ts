@@ -91,6 +91,26 @@ export function massOf(species: SpeciesTable, specId: number): number {
   return species.densityOf(specId) * CELL_VOLUME_CM3;
 }
 
+/** Highest temperature (K) among all occupied cells right now -- a single
+ * scan with no allocation, for callers that only need the max and not a
+ * full per-cell array (worker.ts's Run Test burst chunks, which skip
+ * building a whole 'frame' between chunks -- see .grill/campaign-mode.md's
+ * Phase 5). frame.ts's computeTempGrid computes the same per-cell
+ * temperatures but returns the whole array, which postFrame's own max-scan
+ * already gets for free since it builds a frame every real-time tick
+ * anyway. */
+export function scanMaxTempK(grid: SimGrid, species: SpeciesTable): number {
+  let max = 0;
+  for (let idx = 0; idx < grid.specId.length; idx++) {
+    if (grid.isEmptyAt(idx)) continue;
+    const specId = grid.specId[idx] as number;
+    const mass = massOf(species, specId);
+    const { tempK } = temperatureOf(species.thermalOf(specId), mass, grid.u[idx] as number);
+    if (tempK > max) max = tempK;
+  }
+  return max;
+}
+
 /** Derives {temperature, phase} from stored internal energy. */
 export function temperatureOf(thermal: ThermalProfile, massG: number, u: number): { tempK: number; phase: PhaseCode } {
   if (massG <= 0) return { tempK: thermal.meltK, phase: PhaseCode.Solid };

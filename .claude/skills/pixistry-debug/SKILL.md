@@ -34,6 +34,10 @@ from `javascript_tool` instead of clicking/hovering the canvas.
 - `findSpecId(label)` → numeric specId for a species name (e.g. `'H2O'`, `'NaCl'`), or
   `undefined` if not found — species/wall labels come from `species-data.ts` and `walls.ts`
 - `paint(x, y, specId, { radius?, tempC? })`, `erase(x, y, radius?)`
+- `send(message)` -- raw escape hatch that posts any `MainToWorkerMessage` (see
+  `protocol.ts`) straight to the worker, for messages with no dedicated wrapper above
+  (`runBurst`/`cancelBurst`, `loadScenario`, `snapshotWorld`/`restoreWorld`, ...), e.g.
+  `api.send({ type: 'runBurst', ticks: 1800 })`
 
 ## Example: pause, place a reagent, read it back
 

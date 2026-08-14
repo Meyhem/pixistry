@@ -105,5 +105,9 @@ export function installDebugHook(deps: DebugHookDeps): void {
     paint: (x: number, y: number, specId: number, opts: { radius?: number; tempC?: number } = {}) =>
       deps.send({ type: 'paint', x, y, radius: opts.radius ?? 0, specId, tempC: opts.tempC ?? deps.getState().brushTempC }),
     erase: (x: number, y: number, radius = 0) => deps.send({ type: 'erase', x, y, radius }),
+    // Raw escape hatch for protocol messages with no dedicated wrapper above
+    // (runBurst/cancelBurst, loadScenario, ...) -- deliberately untyped here
+    // since this is a devtools-console-facing dev aid, not app code.
+    send: (message: MainToWorkerMessage) => deps.send(message),
   };
 }
