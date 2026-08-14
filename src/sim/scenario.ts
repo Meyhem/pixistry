@@ -110,7 +110,7 @@ function applyFunnel(grid: SimGrid, species: SpeciesTable, funnels: FunnelInstan
 }
 
 /** A non-physical per-cell heat-source overlay, same as the interactive
- * Radiator tool's 'paintRadiator' handler (worker.ts) -- a single `radius`
+ * Radiator tool's 'paintRadiatorLine' handler (worker.ts) -- a single `radius`
  * doubles as both the painted brush area and each cell's own radiation
  * reach, since SetupCommand's 'radiator' kind (matching the design doc)
  * exposes only one radius parameter, not the tool's separate brush/radiation

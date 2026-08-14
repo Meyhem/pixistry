@@ -47,7 +47,7 @@ export class SimGrid {
    * radiator is placed; where nonzero it's that cell's radiation reach, and
    * radiatorTargetK is its target temperature -- both are a snapshot of the
    * side panel's sliders taken once, at paint time (see worker.ts's
-   * 'paintRadiator' handler), so moving those sliders afterward never
+   * 'paintRadiatorLine' handler), so moving those sliders afterward never
    * retroactively changes a radiator already on the grid. See heat.ts's
    * stepRadiators and radiators.ts. */
   readonly radiatorRadius: Uint8Array;

@@ -141,7 +141,7 @@ function closeOnBackdropClick(overlay: HTMLElement, close: () => void): void {
 /** Tools drawn as a single straight drag from anchor to release point (see
  * lineDrawStart), rather than a repeated per-move brush paint. */
 function isLineDragTool(t: Tool | null): boolean {
-  return t?.kind === 'sink' || t?.kind === 'filter';
+  return t?.kind === 'sink' || t?.kind === 'filter' || t?.kind === 'radiator';
 }
 
 /** Tools drawn as a clicked point chain, committed on right-click and
@@ -728,7 +728,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return { ...TOOL_META_DEFAULTS, label: wall.label, color: wall.color, category: 'APPARATUS', showBrushTemp: true };
     }
     if (t.kind === 'radiator') {
-      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', isThermal: true };
+      // Drawn as a one-cell-wide line drag -- the radiation radius slider
+      // already sets how far it reaches, so there's no brush width to show.
+      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', isThermal: true, showBrushWidth: false };
     }
     if (t.kind === 'funnel') {
       return {
@@ -1545,7 +1547,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const { x, y } = gridCoordsFromEvent(event);
     const centerPxX = (x + 0.5) * cellPxX;
     const centerPxY = (y + 0.5) * cellPxY;
-    const radius = wallBrushRadius(tool, brushWidth);
+    // The filter and radiator lines are always one cell wide whatever the
+    // width slider says (the sink line is the one line tool that still
+    // scales with it), so their cursor outline is a single cell too.
+    const radius = tool?.kind === 'filter' || tool?.kind === 'radiator' ? 0 : wallBrushRadius(tool, brushWidth);
     const diameterX = (2 * radius + 1) * cellPxX;
     const diameterY = (2 * radius + 1) * cellPxY;
     brushOutline.style.display = 'block';
@@ -1672,13 +1677,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
 
     if (showLineDraw && lineDrawStart) {
-      const isFilter = tool?.kind === 'filter';
-      const width = isFilter ? 0 : wallBrushRadius(tool, brushWidth);
-      previewCtx.fillStyle = isFilter
-        ? 'rgba(140, 224, 150, 0.6)'
-        : tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent
-          ? 'rgba(111, 143, 168, 0.5)'
-          : 'rgba(224, 72, 158, 0.5)';
+      // Filter and radiator are always the bare one-cell line; only the
+      // sink/vent line scales with the brush-width slider.
+      const isSink = tool?.kind === 'sink';
+      const width = isSink ? wallBrushRadius(tool, brushWidth) : 0;
+      previewCtx.fillStyle =
+        tool?.kind === 'filter'
+          ? 'rgba(140, 224, 150, 0.6)'
+          : tool?.kind === 'radiator'
+            ? 'rgba(255, 157, 92, 0.6)'
+            : tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent
+              ? 'rgba(111, 143, 168, 0.5)'
+              : 'rgba(224, 72, 158, 0.5)';
       for (const cell of sinkLineCells(lineDrawStart.x, lineDrawStart.y, x, y, width)) {
         previewCtx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
       }
@@ -1759,7 +1769,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         send({ type: 'paint', x, y, radius: wallBrushRadius(tool, brushWidth), specId: tool.specId, tempC: brushTempC });
         break;
       case 'radiator':
-        send({ type: 'paintRadiator', x, y, brushRadius: brushWidth, radiationRadius, targetTempC });
+        // Handled by the line-drag handlers below (lineDrawStart, committed
+        // on release), same as the filter and the sink -- a radiator is one
+        // straight one-cell-wide line, not a brush.
         break;
       case 'erase':
         send({ type: 'erase', x, y, radius: brushWidth });
@@ -2011,6 +2023,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (lineDrawStart) {
       if (tool?.kind === 'filter') {
         send({ type: 'paintFilterLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, species: [...filterDraft.species] });
+      } else if (tool?.kind === 'radiator') {
+        send({ type: 'paintRadiatorLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, radiationRadius, targetTempC });
       } else {
         const width = wallBrushRadius(tool, brushWidth);
         const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;

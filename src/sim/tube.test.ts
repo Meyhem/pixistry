@@ -131,6 +131,29 @@ describe('stepTubes: transport', () => {
     expect(grid.specId[instance.geometry.exitOpenIdx as number]).toBe(SpeciesId.H2O);
     for (const i of lumen) expect(grid.isEmptyAt(i)).toBe(true);
   });
+
+  it('bores out a pre-existing wall the tube was drawn across instead of conveying it', () => {
+    const grid = new SimGrid(100, 100);
+    grid.set(23, 20, GLASS_WALL_SPEC_ID, PhaseCode.Solid); // a vessel wall on the tube's path
+    const instance = place(grid, STRAIGHT);
+    expect(grid.isEmptyAt(grid.index(23, 20))).toBe(true);
+
+    for (let t = 0; t < 20; t++) stepTubes(grid, [instance]);
+    // Conveyed glass would have been ejected into the tip's one open cell and
+    // plugged it there permanently -- see boreWallsFromLumen.
+    expect(grid.specId[instance.geometry.exitOpenIdx as number]).not.toBe(GLASS_WALL_SPEC_ID);
+  });
+
+  it('bores out a wall stamped over the lumen after placement, so it never plugs the exit', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    grid.set(23, 20, GLASS_WALL_SPEC_ID, PhaseCode.Solid); // another apparatus stamped across it later
+
+    stepTubes(grid, [instance]);
+    expect(grid.isEmptyAt(grid.index(23, 20))).toBe(true);
+    for (let t = 0; t < 20; t++) stepTubes(grid, [instance]);
+    expect(grid.specId[instance.geometry.exitOpenIdx as number]).not.toBe(GLASS_WALL_SPEC_ID);
+  });
 });
 
 describe('stepTubes: suction', () => {

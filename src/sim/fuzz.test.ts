@@ -119,7 +119,7 @@ describe('fuzz: long random-activity run stays numerically stable', () => {
       }
       // Occasional radiator placement -- grid.radiatorRadius/radiatorTargetK
       // are a plain overlay (see grid.ts), painted the same way worker.ts's
-      // 'paintRadiator' handler does: direct field writes, no dedicated
+      // 'paintRadiatorLine' handler does: direct field writes, no dedicated
       // helper exported for it.
       if (rng() < 0.1) {
         const { x, y } = randomCell();

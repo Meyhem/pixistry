@@ -128,6 +128,21 @@ function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
   }
 }
 
+/** The lumen is a bored hole, never cargo: any wall matter sitting in a
+ * lumen cell -- an existing vessel wall the tube was drawn across, or
+ * another apparatus stamped over the lumen afterward -- is cleared rather
+ * than carried along. Without this the glass pixel rode the conveyor to the
+ * exit and was ejected into the tip's single open cell, plugging it
+ * permanently: nothing can eject into an occupied cell, and glass never
+ * moves on its own once out there. (stepOneTube's intake already refuses to
+ * suck walls in through the mouth for the same reason; this is the same rule
+ * applied to walls that arrive by being stamped, not sucked.) */
+function boreWallsFromLumen(grid: SimGrid, lumenIdx: readonly number[]): void {
+  for (const i of lumenIdx) {
+    if (isWallSpecId(grid.specId[i] as number)) grid.clearAt(i);
+  }
+}
+
 /** Stamps wall cells as glass (see apparatus.ts's stampGlass -- same
  * "overwrite, seed at ambient" convention placeFunnelInstance uses) and
  * marks lumen/cone cells in the overlay mask -- lumen cells' existing
@@ -136,6 +151,7 @@ function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
  * here clears it). */
 function stampTubeGeometry(grid: SimGrid, species: SpeciesTable, geometry: TubeGeometry): void {
   stampGlass(grid, species, geometry.wallCells);
+  boreWallsFromLumen(grid, geometry.lumenIdx);
   for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
   for (const i of geometry.coneSrcIdx) {
     if ((grid.tubeMask[i] as TubeMaskValue) !== TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.Cone;
@@ -266,6 +282,10 @@ function stepOneTube(grid: SimGrid, instance: TubeInstance): void {
   const { lumenIdx, exitOpenIdx, coneSrcIdx, conePullTargetIdx } = instance.geometry;
   const n = lumenIdx.length;
   if (n === 0) return;
+  // Re-checked every tick, not just at placement: a flask/funnel/glass line
+  // (or another tube's wall ring) stamped over this lumen later would
+  // otherwise plug the exit on its way out -- see boreWallsFromLumen.
+  boreWallsFromLumen(grid, lumenIdx);
 
   const lastIdx = lumenIdx[n - 1] as number;
   if (!grid.isEmptyAt(lastIdx)) {

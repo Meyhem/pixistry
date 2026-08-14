@@ -12,7 +12,7 @@
 // a cooler falls out of the target the player picked, not a separate tool.
 // Both fields are captured once, at paint time, from whatever the side
 // panel's radiation-radius/target-temperature sliders read at that moment
-// (see worker.ts's 'paintRadiator' handler), so moving those sliders
+// (see worker.ts's 'paintRadiatorLine' handler), so moving those sliders
 // afterward never changes a radiator already placed on the grid.
 export const RADIATOR_WATTS = 400;
 export const RADIATOR_LABEL = 'Radiator';

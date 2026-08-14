@@ -307,14 +307,20 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       });
       break;
     }
-    case 'paintRadiator': {
+    case 'paintRadiatorLine': {
       if (!isToolAllowed(activeRestrictions, 'radiator')) break;
+      // A radiator is drawn as one bare one-cell-wide line (the same drag
+      // the sink/filter tools use), not a brush splat: the radiation radius
+      // slider already controls how far a placement reaches, so a second
+      // "how thick is the emitter itself" width was just a second way to
+      // spend heat.
       const targetK = celsiusToKelvin(msg.targetTempC);
-      paintCircle(msg.x, msg.y, msg.brushRadius, (px, py) => {
-        const idx = grid.index(px, py);
+      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, 0)) {
+        if (!grid.inBounds(x, y)) continue;
+        const idx = grid.index(x, y);
         grid.radiatorRadius[idx] = msg.radiationRadius;
         grid.radiatorTargetK[idx] = targetK;
-      });
+      }
       break;
     }
     case 'paintCatalyst':

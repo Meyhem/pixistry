@@ -111,7 +111,7 @@ export type WorkerToMainMessage =
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
-  | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
+  | { type: 'paintRadiatorLine'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
   | { type: 'paintStirrer'; x: number; y: number; radius: number }
   /** Paints a catalyst pad (see grid.ts's catalystStrength). `strength` is
    * the whole-number reaction-rate multiplier; 0 is a no-op rather than an
