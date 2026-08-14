@@ -10,12 +10,37 @@ const H2O = 15;
 function snapshot(overrides: Partial<GoalSnapshot> = {}): GoalSnapshot {
   return {
     totals: new Uint32Array(SPECIES.length),
+    ventTotals: new Uint32Array(SPECIES.length),
     history: [],
     tick: 0,
     maxTempK: 0,
     ...overrides,
   };
 }
+
+describe('evaluateGoals: ventLimit', () => {
+  it('reads the vent tally, not the sink tally', () => {
+    const ventTotals = new Uint32Array(SPECIES.length);
+    ventTotals[NA_CL] = 5;
+    const totals = new Uint32Array(SPECIES.length);
+    // Deliberately over the limit in the *sink* tally: a ventLimit goal must
+    // ignore collected product entirely and score only what was vented.
+    totals[NA_CL] = 999;
+
+    const [progress] = evaluateGoals([{ kind: 'ventLimit', specId: NA_CL, max: 10 }], snapshot({ totals, ventTotals }));
+
+    expect(progress).toEqual({ kind: 'ventLimit', specId: NA_CL, max: 10, current: 5, failed: false });
+  });
+
+  it('fails once the vented count exceeds the max', () => {
+    const ventTotals = new Uint32Array(SPECIES.length);
+    ventTotals[NA_CL] = 11;
+
+    const [progress] = evaluateGoals([{ kind: 'ventLimit', specId: NA_CL, max: 10 }], snapshot({ ventTotals }));
+
+    expect(progress).toMatchObject({ current: 11, failed: true });
+  });
+});
 
 describe('evaluateGoals: collect', () => {
   it('is incomplete below the target amount', () => {

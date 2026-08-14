@@ -6,7 +6,7 @@
 // .grill/campaign-mode.md) -- this first pass ships it to sandbox standalone,
 // since "how much have I made" is a fun toy on its own with no campaign code
 // at all.
-import type { SimGrid } from './grid';
+import { SinkMaskValue, type SimGrid } from './grid';
 import type { GoalHistoryEntry } from './objectives';
 import { SPECIES } from './species-data';
 import { isWallSpecId } from './walls';
@@ -23,6 +23,12 @@ const HISTORY_MAX_ENTRIES = 120;
 
 export const SINK_LABEL = 'Sink';
 export const SINK_COLOR = '#e0489e';
+
+// The Vent (see grid.ts's SinkMaskValue): the same drawn-line primitive as a
+// Sink, in a colder grey-blue so the two read as different apparatus at a
+// glance even though they behave identically on the grid.
+export const VENT_LABEL = 'Vent';
+export const VENT_COLOR = '#6f8fa8';
 
 export interface Point {
   readonly x: number;
@@ -114,20 +120,23 @@ export function recordSinkHistory(counter: SinkCounter, tick: number): void {
   if (counter.history.length > HISTORY_MAX_ENTRIES) counter.history.shift();
 }
 
-/** One tick's worth of sink consumption: every non-empty, non-wall cell
- * sitting on a sink-masked cell is tallied by specId into `counter` and
- * cleared from the grid. Called last in worker.ts's runOneTick, after
- * stepReactions -- a reactant pair that lands on a sink cell gets its normal
- * chance to react there first, so a sink counts whatever's really present
- * at the end of the tick (a collection port) rather than intercepting
- * feedstock the moment it arrives (a drain) -- see
- * .grill/campaign-mode.md's tick-order decision. */
-export function stepSinks(grid: SimGrid, counter: SinkCounter): void {
+/** One tick's worth of sink/vent consumption: every non-empty, non-wall cell
+ * sitting on a masked cell is tallied by specId into the counter its port
+ * kind feeds (`sinkCounter` for a Sink, `ventCounter` for a Vent -- see
+ * grid.ts's SinkMaskValue) and cleared from the grid. Called last in
+ * worker.ts's runOneTick, after stepReactions -- a reactant pair that lands
+ * on a sink cell gets its normal chance to react there first, so a sink
+ * counts whatever's really present at the end of the tick (a collection
+ * port) rather than intercepting feedstock the moment it arrives (a drain)
+ * -- see .grill/campaign-mode.md's tick-order decision. */
+export function stepSinks(grid: SimGrid, sinkCounter: SinkCounter, ventCounter: SinkCounter): void {
   for (let idx = 0; idx < grid.sinkMask.length; idx++) {
-    if (grid.sinkMask[idx] === 0) continue;
+    const port = grid.sinkMask[idx] as SinkMaskValue;
+    if (port === SinkMaskValue.None) continue;
     if (grid.isEmptyAt(idx)) continue;
     const specId = grid.specId[idx] as number;
     if (isWallSpecId(specId)) continue;
+    const counter = port === SinkMaskValue.Vent ? ventCounter : sinkCounter;
     counter.totals[specId] = (counter.totals[specId] as number) + 1;
     counter.grandTotal += 1;
     grid.clearAt(idx);

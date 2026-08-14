@@ -18,6 +18,21 @@ export enum TubeMaskValue {
   Cone = 2,
 }
 
+/** What a drawn collection port on `sinkMask` does with what it eats. A Sink
+ * and a Vent are deliberately the *same* primitive -- same line-draw tool,
+ * same "consume whatever's resting here at end of tick" step -- differing
+ * only in which tally they feed and therefore how a scenario scores them: a
+ * Sink's tally is what 'collect'/'rate'/'purity' goals count towards, a
+ * Vent's is what a 'ventLimit' goal counts *against* (see
+ * .grill/campaign-mode.md's §6 point 12). Sharing one mask rather than two
+ * parallel arrays makes "a cell is a sink or a vent, never both" true by
+ * construction. */
+export enum SinkMaskValue {
+  None = 0,
+  Sink = 1,
+  Vent = 2,
+}
+
 export class SimGrid {
   readonly width: number;
   readonly height: number;
@@ -74,15 +89,31 @@ export class SimGrid {
    * vessel's actual mouth never consults this, so ordinary pouring is
    * unaffected. */
   readonly vesselMask: Uint8Array;
-  /** Sink apparatus overlay -- same "fixed background field, not matter"
-   * convention as the masks above: painted once by a drawn sink line (see
-   * worker.ts's 'paintSinkLine' handler), left untouched by set/clear/swap,
-   * and does NOT gate movement the way filterMask does -- matter passes
-   * through a sink cell exactly like open ground. Consumption happens once
-   * per tick, last in the tick order (see sink.ts's stepSinks and
-   * worker.ts's runOneTick): any non-empty, non-wall cell still sitting on a
-   * sink cell at that point is tallied by species and cleared. */
+  /** Sink/Vent apparatus overlay -- same "fixed background field, not matter"
+   * convention as the masks above: painted once by a drawn sink or vent line
+   * (see worker.ts's 'paintSinkLine' handler), left untouched by
+   * set/clear/swap, and does NOT gate movement the way filterMask does --
+   * matter passes through a sink cell exactly like open ground. Consumption
+   * happens once per tick, last in the tick order (see sink.ts's stepSinks
+   * and worker.ts's runOneTick): any non-empty, non-wall cell still sitting
+   * on a port cell at that point is tallied by species and cleared. Values
+   * are SinkMaskValue -- see its doc comment on why a Vent shares this array
+   * rather than getting one of its own. */
   readonly sinkMask: Uint8Array;
+  /** Catalyst-pad overlay -- same "fixed background field, not matter"
+   * convention as the masks above: painted by the catalyst tool, left
+   * untouched by set/clear/swap, and read by react.ts's tryReact, which
+   * multiplies a rule's per-tick `probability` by this cell's value before
+   * rolling against it. 0 means no pad (react.ts treats it as a plain 1x);
+   * anywhere nonzero it's the whole-number speed-up factor applied to any
+   * reaction whose reacting pair touches this cell. A per-cell multiplier
+   * rather than one global constant so a scenario can tune how much help a
+   * given bench gets, the same way radiatorRadius/radiatorTargetK are
+   * per-cell rather than global. Catalysis only changes reaction *rate*: it
+   * never adds energy, never changes which products a rule makes, and never
+   * bypasses a rule's minTempK ignition threshold -- see
+   * .grill/campaign-mode.md's §6 point 16. */
+  readonly catalystStrength: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -98,6 +129,7 @@ export class SimGrid {
     this.filterMask = new Uint8Array(size);
     this.vesselMask = new Uint8Array(size);
     this.sinkMask = new Uint8Array(size);
+    this.catalystStrength = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {
@@ -134,7 +166,7 @@ export class SimGrid {
 
   /** Wipes every field back to its constructor-time state, in place --
    * `specId`/`phase`/`u` themselves plus every overlay (radiator/stirrer/
-   * tube/filter/vessel/sink masks). Used by worker.ts's 'resetWorld'
+   * tube/filter/vessel/sink/catalyst masks). Used by worker.ts's 'resetWorld'
    * handler ("start fresh" -- not the same as restoreWorldSnapshot's
    * "rewind to a saved point", see world-snapshot.ts) so the grid stays one
    * stable instance for the worker's whole lifetime rather than being
@@ -150,6 +182,7 @@ export class SimGrid {
     this.filterMask.fill(0);
     this.vesselMask.fill(0);
     this.sinkMask.fill(0);
+    this.catalystStrength.fill(0);
   }
 
   swap(i: number, j: number): void {

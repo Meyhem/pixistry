@@ -35,69 +35,192 @@ body {
   overflow: hidden;
 }
 
-.app-header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding-bottom: 8px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--panel-border);
+/* The bench (app.ts's mountApp). Every other screen is a padded, centered
+   flex column; this one is a full-bleed positioning context whose only
+   children are the canvas layer, two floating HUD strips, and the modal
+   overlays -- no padding, because padding here is bench the player can't
+   experiment in. */
+#app.bench-root {
+  padding: 0;
+  display: block;
+  position: relative;
 }
 
-.app-title {
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+.bench {
+  position: absolute;
+  inset: 0;
 }
 
-.app-subtitle {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.toolbar {
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 14px;
-  padding: 8px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.control-row {
+/* The floating HUD strips. The strip itself spans the full width but is
+   click-through (the clusters inside it re-enable pointer events), so the
+   gap between the left and right clusters is still live canvas -- painting
+   there works exactly as if the HUD weren't on top. */
+.hud {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.hud-top {
+  top: 0;
+}
+
+.hud-bottom {
+  bottom: 0;
+}
+
+.hud-cluster {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 12px;
+  background: rgba(14, 16, 15, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  max-width: 100%;
   flex-wrap: wrap;
 }
 
-.control-row + .control-row {
-  padding-top: 6px;
-  border-top: 1px solid var(--panel-border);
-}
-
-.app-header,
-.toolbar,
-.legend {
-  flex: none;
-}
-
-.control-row-label {
+.hud-mark {
   font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: 0.09em;
-  color: var(--text-muted);
-  min-width: 88px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  padding: 0 4px;
+}
+
+/* The active-tool chip doubles as the Tool Chest button: the thing that
+   tells you what's selected is the thing you click to change it. */
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--panel-border);
+  background: #1c1f1d;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.tool-chip:hover {
+  border-color: var(--accent);
+}
+
+.tool-chip-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
 }
 
-.control-row-items {
+.tool-chip-text {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.tool-chip-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-chip-category {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.hud-key {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-left: 2px;
+}
+
+.hud-btn {
+  height: 28px;
+  min-width: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: #1c1f1d;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hud-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.hud-btn-labelled {
+  font-size: 12px;
+}
+
+.hud-btn-swatch {
+  background: var(--swatch, #1c1f1d);
+  border-color: rgba(0, 0, 0, 0.35);
+  font-weight: 600;
+}
+
+.hud-select {
+  height: 28px;
+}
+
+.hud-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--panel-border);
+}
+
+.hud-slider {
+  display: flex;
   align-items: center;
+  gap: 7px;
+}
+
+.hud-slider-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.hud-slider-input {
+  width: 96px;
+  accent-color: var(--accent);
+}
+
+.hud-slider-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 46px;
+  color: var(--text);
+}
+
+.hud-legend {
+  gap: 14px;
 }
 
 .quick-item {
@@ -257,40 +380,15 @@ body {
   cursor: not-allowed;
 }
 
-.workspace {
-  display: flex;
-  gap: 20px;
-  margin-top: 12px;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.canvas-col {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
+/* Pinned to the whole bench: nothing is docked beside it any more, so
+   fitCanvasWrap only has to size the canvas *within* this box (see its doc
+   comment) rather than size the box itself against a shrinking column. */
 .canvas-wrap {
-  position: relative;
-  flex: none;
-  /* app.ts's fitCanvasWrap sets an exact pixel height/width to fit
-     canvas-col's available space every ResizeObserver tick. Content-box
-     (the default) would make that an exact *content* size, so this
-     element's real rendered height would always be 2px taller than what
-     was set (this 1px+1px border) -- canvas-col.clientHeight, which
-     fitCanvasWrap reads back next tick, would then reflect that inflated
-     total, adding another 2px forever. border-box makes the set height the
-     real rendered height, closing that loop. */
-  box-sizing: border-box;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
-  border: 1px solid var(--panel-border);
   overflow: hidden;
   background-color: var(--canvas-bg);
   background-image: repeating-linear-gradient(135deg, #14181580 0px, #14181580 2px, transparent 2px, transparent 14px);
@@ -302,9 +400,12 @@ body {
   touch-action: none;
 }
 
+/* Below the top HUD strip rather than at the wrap's corner, so the two
+   don't stack on top of each other on a window whose aspect ratio leaves no
+   letterbox margin. */
 .inspector {
   position: absolute;
-  top: 12px;
+  top: 58px;
   left: 12px;
   background: rgba(10, 12, 11, 0.72);
   backdrop-filter: blur(6px);
@@ -337,13 +438,6 @@ body {
   border-radius: 50%;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   pointer-events: none;
-}
-
-.legend {
-  display: flex;
-  gap: 22px;
-  margin-top: 12px;
-  padding: 0 4px;
 }
 
 .legend-item {
@@ -397,6 +491,20 @@ body {
   flex-direction: column;
   gap: 16px;
   box-sizing: border-box;
+}
+
+/* Same builder (side-panel.ts), now rendered inside the tool-settings modal
+   instead of a docked column: the modal shell already supplies the card
+   chrome, so this strips the panel back to bare content and lets it use the
+   modal's full width. */
+.side-panel-modal {
+  width: 100%;
+  max-height: none;
+  overflow-y: visible;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
 }
 
 .side-panel-header {
@@ -1170,16 +1278,26 @@ input[type='range'] {
 
 /* Campaign mode: persistent objective HUD --------------------------------- */
 
+/* Floats over the canvas, centered under the top HUD strip, rather than
+   taking a layout share above it -- same treatment as the HUD clusters, so
+   the objective readout costs the bench nothing when it's showing and
+   nothing at all when it isn't. */
 .campaign-hud {
-  flex: none;
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  width: min(520px, calc(100% - 32px));
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-bottom: 12px;
   padding: 12px 16px;
   border-radius: 12px;
-  border: 1px solid var(--panel-border);
-  background: var(--panel-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(14, 16, 15, 0.86);
+  backdrop-filter: blur(8px);
 }
 
 .campaign-hud-title {
@@ -1593,4 +1711,120 @@ input[type='range'] {
   padding: 6px 8px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
+}
+
+/* --- Tool Chest modal (tool-chest.ts) ------------------------------------ */
+
+.chest-modal {
+  width: min(820px, 96vw);
+}
+
+.chest-search {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--panel-border);
+  background: #141715;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.chest-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chest-results {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.chest-section-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.chest-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chest-item {
+  position: relative;
+  display: inline-flex;
+}
+
+.chest-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 2px;
+}
+
+.chest-footer {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 14px;
+}
+
+/* --- Tool settings modal (side-panel.ts in a modal shell) ---------------- */
+
+.tool-settings-modal {
+  width: min(420px, 96vw);
+}
+
+/* --- Bench menu (hud.ts) ------------------------------------------------- */
+
+.bench-menu-modal {
+  width: min(420px, 96vw);
+}
+
+.bench-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bench-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: #1a1d1b;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.bench-menu-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.bench-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bench-menu-item.danger:hover:not(:disabled) {
+  border-color: var(--hot);
+}
+
+.bench-menu-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bench-menu-hint {
+  font-size: 11px;
+  color: var(--text-muted);
 }

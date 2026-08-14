@@ -151,8 +151,9 @@ function seedSpeciesFor(scenario: Scenario): number[] {
 }
 
 /** Goal kinds that name a species the player has to actually *produce*.
- * 'limit' and 'maxTempK' are constraints on what's already reachable, not
- * production targets, so they're excluded from the reachability check. */
+ * 'limit'/'ventLimit'/'maxTempK' are constraints on what's already
+ * reachable, not production targets, so they're excluded from the
+ * reachability check. */
 function productionTargetsOf(goal: Goal): number[] {
   switch (goal.kind) {
     case 'collect':
@@ -162,6 +163,7 @@ function productionTargetsOf(goal: Goal): number[] {
     case 'collectAny':
       return [...goal.specIds];
     case 'limit':
+    case 'ventLimit':
     case 'maxTempK':
       return [];
   }

@@ -1,11 +1,17 @@
 // M4+ UI: the full v1 tool set (paint, erase, wall materials, heater/cooler
 // radiators, probe, mixer, grabber) plus time controls (pause, single-step,
-// speed multiplier), a pinned-species quick row backed by a full
-// periodic-table modal, and a hover inspector -- all plain DOM per the
-// design doc's "src/ui plain DOM/React panels", no framework. Visual layout
-// follows the "Pixistry UI Refresh" design (see toolbar.ts, side-panel.ts,
-// periodic-table.ts for the three panel builders this module wires
-// together).
+// speed multiplier) and a hover inspector -- all plain DOM per the design
+// doc's "src/ui plain DOM/React panels", no framework.
+//
+// Layout is "full-bleed canvas + floating HUD + modals": the sim canvas fills
+// the entire mount, and the only permanent chrome is two translucent HUD
+// strips hovering over its top and bottom edges (hud.ts). Everything else is
+// a modal over that canvas -- the Tool Chest (tool-chest.ts) for picking a
+// tool, the tool-settings modal (side-panel.ts's builder, rendered into an
+// overlay) for configuring it, plus the periodic table, the bench menu, and
+// comfort settings. This replaced a docked 4-row toolbar card and a permanent
+// 260px side-panel column, which between them left the canvas about a sixth
+// of the window.
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
 import type { GoalProgress } from '../sim/objectives';
@@ -13,7 +19,7 @@ import type { MainToWorkerMessage, WorkerToMainMessage } from '../sim/protocol';
 import { isPaintAllowed, isToolAllowed } from '../sim/scenario';
 import { SCENARIOS, type Restrictions, type Scenario, type ToolKind as SimToolKind } from '../sim/scenario-data';
 import type { PaletteEntry } from '../sim/species';
-import { EMPTY, PhaseCode } from '../sim/grid';
+import { EMPTY, PhaseCode, SinkMaskValue } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
 import { getWall, isWallSpecId, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
@@ -21,11 +27,18 @@ import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
-import { SINK_COLOR, SINK_LABEL, sinkLineCells } from '../sim/sink';
+import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
-import { buildToolbar, SELECT_APPARATUS_COLOR, SELECT_APPARATUS_LABEL, type ToolbarCallbacks, type ToolKind as UiToolKind } from './toolbar';
+import {
+  buildToolChest,
+  SELECT_APPARATUS_COLOR,
+  SELECT_APPARATUS_LABEL,
+  type ToolChestCallbacks,
+  type ToolKind as UiToolKind,
+} from './tool-chest';
+import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
@@ -71,7 +84,12 @@ type Tool =
   | { kind: 'stirrer' }
   | { kind: 'tube' }
   | { kind: 'filter' }
-  | { kind: 'sink' }
+  // Sink and Vent are one tool variant carrying which port it draws (see
+  // grid.ts's SinkMaskValue) rather than two: everything about the
+  // interaction -- the free-form drag, the ghost preview, the commit on
+  // pointerup -- is identical, and only the committed mask value, the
+  // swatch, and the tally panel's heading differ.
+  | { kind: 'sink'; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
   | { kind: 'flask'; stirred: boolean }
   | { kind: 'select-apparatus' };
 
@@ -189,41 +207,13 @@ export interface MountAppOptions {
  * window listener each time. */
 export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () => void {
   root.innerHTML = '';
-
-  const header = document.createElement('div');
-  header.className = 'app-header';
-  const titleEl = document.createElement('div');
-  titleEl.className = 'app-title';
-  titleEl.textContent = 'PIXISTRY';
-  const subtitleEl = document.createElement('div');
-  subtitleEl.className = 'app-subtitle';
-  subtitleEl.textContent = 'falling-sand chemistry sandbox';
-  header.appendChild(titleEl);
-  header.appendChild(subtitleEl);
-  if (options.mode === 'campaign') {
-    const modeBadge = document.createElement('span');
-    modeBadge.className = 'mode-badge';
-    modeBadge.textContent = 'CAMPAIGN';
-    header.appendChild(modeBadge);
-  }
-  const settingsButton = document.createElement('button');
-  settingsButton.className = 'menu-exit-btn settings-btn';
-  settingsButton.textContent = '⚙';
-  settingsButton.title = 'Comfort settings';
-  settingsButton.onclick = () => toggleSettingsOverlay(true);
-  header.appendChild(settingsButton);
-  if (options.onExitToMenu) {
-    const menuButton = document.createElement('button');
-    menuButton.className = 'menu-exit-btn';
-    menuButton.textContent = '← Menu';
-    menuButton.title = 'Back to the title screen';
-    menuButton.onclick = () => {
-      if (!window.confirm('Leave and return to the menu? This will lose anything not saved.')) return;
-      options.onExitToMenu?.();
-    };
-    header.appendChild(menuButton);
-  }
-  root.appendChild(header);
+  // `root` is the one element every screen shares (main.ts hands the same
+  // #app to buildMenu, buildCabinet, mountApp, ...), and each of those sets
+  // its own class on it. Resetting it here matters: the title screen leaves
+  // behind `menu-screen`, whose `align-items: center` used to shrink-wrap
+  // this whole bench to its content width -- on a 1265px-wide window the
+  // bench rendered at 762px and simply threw the other 40% away.
+  root.className = 'bench-root';
 
   const settingsOverlay = document.createElement('div');
   settingsOverlay.className = 'pt-overlay';
@@ -252,29 +242,26 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     renderSettingsOverlay();
   }
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'toolbar';
-  root.appendChild(toolbar);
+  // The bench: one positioned box filling the whole mount, with the canvas
+  // and every canvas-anchored overlay inside it. The HUD strips (below) are
+  // siblings that float *over* this, so nothing here is ever squeezed by
+  // chrome taking a layout share.
+  const bench = document.createElement('div');
+  bench.className = 'bench';
+  root.appendChild(bench);
 
-  const workspace = document.createElement('div');
-  workspace.className = 'workspace';
-  root.appendChild(workspace);
-
-  const canvasCol = document.createElement('div');
-  canvasCol.className = 'canvas-col';
-  workspace.appendChild(canvasCol);
-
-  // Campaign objective HUD -- above the canvas (see design doc's "progress
-  // bar filled with the product's own color... this is the game"), empty
-  // and hidden in sandbox mode and before the briefing's Start is clicked.
+  // Campaign objective HUD -- floats over the top of the canvas, just under
+  // the top HUD strip (see design doc's "progress bar filled with the
+  // product's own color... this is the game"), empty and hidden in sandbox
+  // mode and before the briefing's Start is clicked.
   const campaignHud = document.createElement('div');
   campaignHud.className = 'campaign-hud';
   campaignHud.style.display = 'none';
-  canvasCol.appendChild(campaignHud);
+  bench.appendChild(campaignHud);
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'canvas-wrap';
-  canvasCol.appendChild(canvasWrap);
+  bench.appendChild(canvasWrap);
 
   const canvas = document.createElement('canvas');
   canvas.className = 'sim-canvas';
@@ -331,63 +318,73 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
   canvasWrap.appendChild(selectBox);
 
-  const legend = document.createElement('div');
-  legend.className = 'legend';
   const hotK = AMBIENT_TEMPERATURE_K + BORDER_RANGE_K;
   const coldK = AMBIENT_TEMPERATURE_K - BORDER_RANGE_K;
-  legend.innerHTML = `
-    <div class="legend-item"><span class="legend-swatch normal"></span><span class="legend-label">NORMAL</span></div>
-    <div class="legend-item"><span class="legend-swatch hot"></span><span class="legend-label">HOT &middot; &gt;${formatCelsius(kelvinToCelsius(hotK))}</span></div>
-    <div class="legend-item"><span class="legend-swatch cold"></span><span class="legend-label">COLD &middot; &lt;${formatCelsius(kelvinToCelsius(coldK))}</span></div>
-  `;
-  canvasCol.appendChild(legend);
 
-  // canvasWrap always fills all the space canvas-col has left after the
-  // toolbar/legend/side-panel take their share, so it never leaves dead
-  // space next to the side panel. The actual sim canvas inside it is sized
-  // to the largest box that preserves the grid's aspect ratio and fits
-  // within canvasWrap, then centered -- letterboxing (if any, when the
-  // available box is short and wide) lands above/below the canvas rather
-  // than as padding around the whole wrap. Re-run whenever canvas-col's box
-  // changes; plain CSS aspect-ratio auto-sizing doesn't reliably shrink a
+  // The two floating HUD strips (hud.ts). Siblings of `bench` rather than
+  // children, so a rebuild of either can never disturb the canvas subtree,
+  // and pointer events pass through the strips' own transparent gaps back to
+  // the bench (see .hud in style.css).
+  const hudTop = document.createElement('div');
+  hudTop.className = 'hud hud-top';
+  root.appendChild(hudTop);
+
+  const hudBottom = document.createElement('div');
+  hudBottom.className = 'hud hud-bottom';
+  root.appendChild(hudBottom);
+
+  // canvasWrap is pinned to the whole bench in CSS now (nothing docked left
+  // to subtract), so this only has to size the canvas *inside* it: the
+  // largest box preserving the grid's aspect ratio that still fits, centered,
+  // with any letterboxing landing in the wrap's margins -- which is exactly
+  // where the HUD strips float, so the chrome mostly covers dead space rather
+  // than bench. Plain CSS aspect-ratio auto-sizing doesn't reliably shrink a
   // block to fit *both* axes at once (it'll happily overflow one dimension
-  // while respecting the other), so this is done in JS instead.
+  // while respecting the other), so this stays in JS.
   const fitCanvasWrap = (): void => {
-    const availW = Math.floor(canvasCol.clientWidth);
-    // The campaign HUD (see canvasCol's first child) sits above the canvas
-    // and, unlike the legend below it, only takes up space some of the time
-    // -- its rendered height has to come out of the same budget or the
-    // canvas would overflow canvas-col whenever it's showing.
-    const hudH = campaignHud.style.display === 'none' ? 0 : Math.ceil(campaignHud.getBoundingClientRect().height) + 12;
-    const legendH = Math.ceil(legend.getBoundingClientRect().height);
-    const availH = Math.floor(canvasCol.clientHeight - legendH - 12 - hudH); // 12 = legend's margin-top
+    const availW = Math.floor(bench.clientWidth);
+    const availH = Math.floor(bench.clientHeight);
     if (availW <= 0 || availH <= 0) return;
-    // canvasWrap/canvas are children of the ResizeObserver's own target
-    // (canvasCol), so writing new sizes here re-triggers that same
-    // observer -- canvas-wrap's box-sizing:border-box (see style.css) is
-    // what makes that converge instead of amplifying forever. This guard
-    // just avoids the redundant write (and the observer wakeup it'd cause)
-    // once a call has already reached that fixed point.
-    const widthPx = `${availW}px`;
-    const heightPx = `${availH}px`;
-    if (canvasWrap.style.width === widthPx && canvasWrap.style.height === heightPx) return;
-    canvasWrap.style.width = widthPx;
-    canvasWrap.style.height = heightPx;
     const ratio = gridWidth > 0 && gridHeight > 0 ? gridWidth / gridHeight : 1.6;
     const width = Math.floor(Math.min(availW, availH * ratio));
     const height = Math.floor(width / ratio);
+    // The canvas is not the ResizeObserver's target (bench is, and bench's
+    // own size comes from root, not from its children), so unlike the old
+    // canvas-col arrangement there's no write-then-re-observe feedback loop
+    // to break here.
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     updateApparatusOverlay(lastHoverX, lastHoverY);
     updateSelectionBox();
   };
   const resizeObserver = new ResizeObserver(fitCanvasWrap);
-  resizeObserver.observe(canvasCol);
+  resizeObserver.observe(bench);
   window.addEventListener('resize', fitCanvasWrap);
 
+  // Tool Chest (tool-chest.ts), tool settings (side-panel.ts in a modal
+  // shell) and the bench menu (hud.ts) -- three more backdrop overlays with
+  // the same show/hide-and-rebuild convention as ptOverlay below.
+  const chestOverlay = document.createElement('div');
+  chestOverlay.className = 'pt-overlay';
+  chestOverlay.style.display = 'none';
+  root.appendChild(chestOverlay);
+
+  const toolSettingsOverlay = document.createElement('div');
+  toolSettingsOverlay.className = 'pt-overlay';
+  toolSettingsOverlay.style.display = 'none';
+  root.appendChild(toolSettingsOverlay);
+
+  // The tool-settings panel body is one long-lived node that gets moved into
+  // the modal shell each time it opens, rather than a fresh element per open:
+  // the frame handler below tests `sidePanel.contains(document.activeElement)`
+  // to skip rebuilds mid-slider-drag, and that test needs a stable identity.
   const sidePanel = document.createElement('div');
-  sidePanel.className = 'side-panel';
-  workspace.appendChild(sidePanel);
+  sidePanel.className = 'side-panel side-panel-modal';
+
+  const benchMenuOverlay = document.createElement('div');
+  benchMenuOverlay.className = 'pt-overlay';
+  benchMenuOverlay.style.display = 'none';
+  root.appendChild(benchMenuOverlay);
 
   const ptOverlay = document.createElement('div');
   ptOverlay.className = 'pt-overlay';
@@ -460,6 +457,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let targetTempC = DEFAULT_RADIATOR_TARGET_C;
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
+  // The three modal surfaces that replaced the docked toolbar/side panel.
+  // Their open state lives here (not in the DOM) for the same reason every
+  // other bit of UI state does: render() rebuilds these wholesale.
+  let chestOpen = false;
+  let chestQuery = '';
+  let toolSettingsOpen = false;
+  let benchMenuOpen = false;
   let ptSelectedSymbol: string | null = null;
   let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' = 'paint';
   let isPointerDown = false;
@@ -541,6 +545,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let lastSinkMask: Uint8Array | null = null;
   let lastSinkTotals: Uint32Array | null = null;
   let lastSinkGrandTotal = 0;
+  let lastVentTotals: Uint32Array | null = null;
+  let lastVentGrandTotal = 0;
   let hasSnapshot = false;
   let lastTick = 0;
 
@@ -595,7 +601,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', filterPanel: 'config' };
     }
     if (t.kind === 'sink') {
-      return { ...TOOL_META_DEFAULTS, label: SINK_LABEL, color: SINK_COLOR, category: 'APPARATUS', sinkPanel: 'config' };
+      const isVent = t.port === SinkMaskValue.Vent;
+      return {
+        ...TOOL_META_DEFAULTS,
+        label: isVent ? VENT_LABEL : SINK_LABEL,
+        color: isVent ? VENT_COLOR : SINK_COLOR,
+        category: 'APPARATUS',
+        sinkPanel: isVent ? 'vent' : 'sink',
+      };
     }
     if (t.kind === 'flask') {
       return {
@@ -638,7 +651,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // Same discard-on-switch convention as the tube draw above: an
     // in-progress sink drag shouldn't silently resume/commit if the player
     // switches tools mid-drag.
-    if (tool?.kind === 'sink' && next.kind !== 'sink') {
+    if (tool?.kind === 'sink' && (next.kind !== 'sink' || next.port !== tool.port)) {
       sinkDrawStart = null;
     }
     tool = next;
@@ -685,11 +698,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * entry (a non-paintable reaction product, same as the inspector's
    * fallback) are skipped rather than shown as "spec N" -- a raw id means
    * nothing to the player in a tally list. */
-  function sinkTallyEntries(): SinkTallyEntry[] {
-    if (!lastSinkTotals) return [];
+  function sinkTallyEntries(totals: Uint32Array | null): SinkTallyEntry[] {
+    if (!totals) return [];
     const entries: SinkTallyEntry[] = [];
-    for (let specId = 0; specId < lastSinkTotals.length; specId++) {
-      const count = lastSinkTotals[specId] as number;
+    for (let specId = 0; specId < totals.length; specId++) {
+      const count = totals[specId] as number;
       if (count === 0) continue;
       const label = speciesLookup.labelOf(specId);
       const color = speciesLookup.colorOf(specId);
@@ -826,32 +839,71 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   function render(): void {
-    renderToolbar();
+    renderHud();
+    renderToolChest();
+    renderBenchMenu();
     renderSidePanel();
     fitCanvasWrap();
   }
 
-  function renderToolbar(): void {
-    const toolbarCallbacks: ToolbarCallbacks = {
-      isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
-      isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
-      isToolActive: (kind) => {
-        if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && !tool.stirred;
-        if (kind === 'flask-erlenmeyer-stirred') return tool?.kind === 'flask' && tool.stirred;
-        return tool?.kind === kind;
+  /** Whether the active tool has anything to configure beyond the two brush
+   * sliders the HUD already carries -- decides whether the "⚙ Tool settings"
+   * button appears at all, so it never opens an empty modal. */
+  function hasToolSettings(meta: ToolMeta): boolean {
+    return (
+      meta.isSpecies ||
+      meta.isThermal ||
+      meta.funnelPanel !== 'none' ||
+      meta.tubePanel !== 'none' ||
+      meta.filterPanel !== 'none' ||
+      meta.flaskPanel !== 'none' ||
+      meta.sinkPanel !== 'none'
+    );
+  }
+
+  function isToolKindActive(kind: UiToolKind): boolean {
+    if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && !tool.stirred;
+    if (kind === 'flask-erlenmeyer-stirred') return tool?.kind === 'flask' && tool.stirred;
+    if (kind === 'sink') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Sink;
+    if (kind === 'vent') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent;
+    return tool?.kind === kind;
+  }
+
+  function selectToolKind(kind: UiToolKind): void {
+    if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', stirred: false });
+    else if (kind === 'flask-erlenmeyer-stirred') setTool({ kind: 'flask', stirred: true });
+    else if (kind === 'sink') setTool({ kind: 'sink', port: SinkMaskValue.Sink });
+    else if (kind === 'vent') setTool({ kind: 'sink', port: SinkMaskValue.Vent });
+    else setTool({ kind });
+  }
+
+  /** In campaign mode, "Clear All" means "start this experiment over" -- a
+   * bare resetWorld would wipe the worker's activeScenario too (see
+   * worker.ts's 'resetWorld' handler), leaving this module still thinking a
+   * scenario is active while the worker no longer restricts anything. */
+  function resetWorld(): void {
+    if (activeScenario) {
+      if (!window.confirm('Reset this experiment back to the start?')) return;
+      loadScenarioInto(activeScenario);
+      return;
+    }
+    if (!window.confirm('Clear the whole grid? This cannot be undone unless you Save first.')) return;
+    send({ type: 'resetWorld' });
+  }
+
+  function renderHud(): void {
+    const meta = describeToolMeta(tool);
+    const hudCallbacks: HudCallbacks = {
+      toolLabel: meta.label,
+      toolColor: meta.color,
+      toolCategory: meta.category,
+      onOpenChest: () => {
+        chestOpen = true;
+        render();
       },
-      isPinned: (label) => pinnedLabels.includes(label),
-      onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
-      onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
-      onSelectTool: (kind) => {
-        if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', stirred: false });
-        else if (kind === 'flask-erlenmeyer-stirred') setTool({ kind: 'flask', stirred: true });
-        else setTool({ kind });
-      },
-      onTogglePin: togglePin,
-      onOpenPeriodicTable: () => {
-        ptTarget = 'paint';
-        ptOpen = true;
+      hasToolSettings: hasToolSettings(meta),
+      onOpenToolSettings: () => {
+        toolSettingsOpen = true;
         render();
       },
       running,
@@ -867,40 +919,110 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         send({ type: 'setSpeed', speed });
         render();
       },
-      hasSnapshot,
-      onResetWorld: () => {
-        // In campaign mode, "Clear All" means "start this experiment over"
-        // -- a bare resetWorld would wipe the worker's activeScenario too
-        // (see worker.ts's 'resetWorld' handler), leaving this module still
-        // thinking a scenario is active while the worker no longer
-        // restricts anything.
-        if (activeScenario) {
-          if (!window.confirm('Reset this experiment back to the start?')) return;
-          loadScenarioInto(activeScenario);
-          return;
-        }
-        if (!window.confirm('Clear the whole grid? This cannot be undone unless you Save first.')) return;
-        send({ type: 'resetWorld' });
+      onOpenBenchMenu: () => {
+        benchMenuOpen = true;
+        render();
       },
-      onSnapshotWorld: () => send({ type: 'snapshotWorld' }),
-      onRestoreWorld: () => send({ type: 'restoreWorld' }),
+      campaign: options.mode === 'campaign',
+      showBrushWidth: meta.showBrushWidth,
+      brushWidth,
+      // No render() on either brush slider: a rebuild mid-drag would replace
+      // the input node under the browser's own drag gesture and kill it (same
+      // reasoning as side-panel.ts's addSlider). The slider updates its own
+      // readout in place.
+      onSetBrushWidth: (value) => {
+        brushWidth = value;
+      },
+      showBrushTemp: meta.showBrushTemp,
+      brushTempC,
+      onSetBrushTemp: (value) => {
+        brushTempC = value;
+      },
+      hotLabel: formatCelsius(kelvinToCelsius(hotK)),
+      coldLabel: formatCelsius(kelvinToCelsius(coldK)),
+    };
+    buildHud(hudTop, hudBottom, hudCallbacks);
+  }
+
+  function renderToolChest(): void {
+    if (!chestOpen) {
+      chestOverlay.style.display = 'none';
+      chestOverlay.innerHTML = '';
+      return;
+    }
+    chestOverlay.style.display = 'flex';
+    const chestCallbacks: ToolChestCallbacks = {
+      isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
+      isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
+      isToolActive: isToolKindActive,
+      isPinned: (label) => pinnedLabels.includes(label),
+      onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
+      onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
+      onSelectTool: selectToolKind,
+      onTogglePin: togglePin,
+      onOpenPeriodicTable: () => {
+        ptTarget = 'paint';
+        ptOpen = true;
+        chestOpen = false;
+        render();
+      },
+      onClose: () => {
+        chestOpen = false;
+        render();
+      },
       pinnable: !restrictions,
+      query: chestQuery,
+      // Owned here rather than inside the chest so the search box survives the
+      // rebuild that follows a pin toggle.
+      onSetQuery: (value) => {
+        chestQuery = value;
+      },
       periodicTableLocked: !!restrictions && restrictions.paintSpecies !== 'all',
-      resetWorldLabel: activeScenario ? 'Reset Experiment' : 'Clear All',
     };
     if (restrictions) {
       const activeRestrictions = restrictions;
-      toolbarCallbacks.isWallLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
-      toolbarCallbacks.isToolLocked = (kind) => {
+      chestCallbacks.isPaintLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
+      chestCallbacks.isWallLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
+      chestCallbacks.isToolLocked = (kind) => {
         const simKind = toSimToolKind(kind);
         return simKind === null ? false : !isToolAllowed(activeRestrictions, simKind);
       };
     }
-    buildToolbar(toolbar, palette, wallList(), effectivePinnedLabels(), toolbarCallbacks);
+    buildToolChest(chestOverlay, palette, wallList(), effectivePinnedLabels(), chestCallbacks);
+  }
+
+  function renderBenchMenu(): void {
+    if (!benchMenuOpen) {
+      benchMenuOverlay.style.display = 'none';
+      benchMenuOverlay.innerHTML = '';
+      return;
+    }
+    benchMenuOverlay.style.display = 'flex';
+    const close = (): void => {
+      benchMenuOpen = false;
+      render();
+    };
+    const benchMenuCallbacks: BenchMenuCallbacks = {
+      hasSnapshot,
+      onSnapshotWorld: () => send({ type: 'snapshotWorld' }),
+      onRestoreWorld: () => send({ type: 'restoreWorld' }),
+      resetWorldLabel: activeScenario ? 'Reset Experiment' : 'Clear All',
+      onResetWorld: resetWorld,
+      onOpenComfortSettings: () => toggleSettingsOverlay(true),
+      onClose: close,
+    };
+    if (options.onExitToMenu) {
+      benchMenuCallbacks.onExitToMenu = () => {
+        if (!window.confirm('Leave and return to the menu? This will lose anything not saved.')) return;
+        options.onExitToMenu?.();
+      };
+    }
+    buildBenchMenu(benchMenuOverlay, benchMenuCallbacks);
   }
 
   function renderSidePanel(): void {
     const meta = describeToolMeta(tool);
+    const showingVent = meta.sinkPanel === 'vent';
     const isEditMode = tool?.kind === 'select-apparatus';
     const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
     const selectedTube = isEditMode && !selectedFunnel ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
@@ -1091,11 +1213,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetFlaskSize: (value) => {
         flaskSizeScale = value;
       },
-      sinkTally: sinkTallyEntries(),
-      sinkGrandTotal: lastSinkGrandTotal,
+      // A Vent's panel shows what it threw away, a Sink's what it collected
+      // -- two tallies, one panel (see side-panel.ts's sinkPanel).
+      sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
+      sinkGrandTotal: showingVent ? lastVentGrandTotal : lastSinkGrandTotal,
       onResetSinkCounts: () => send({ type: 'resetSinkCounts' }),
     };
-    buildSidePanel(sidePanel, meta, sidePanelCallbacks);
+    // Brush width/temperature live permanently in the bottom HUD strip now,
+    // so the modal suppresses its own copies rather than showing the same two
+    // sliders twice (with the HUD's pair visible right behind the backdrop).
+    buildSidePanel(sidePanel, { ...meta, showBrushWidth: false, showBrushTemp: false }, sidePanelCallbacks);
+    renderToolSettingsOverlay(meta);
 
     if (ptOpen) {
       ptOverlay.style.display = 'flex';
@@ -1142,6 +1270,46 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     updateSelectionBox();
     updateApparatusOverlay(lastHoverX, lastHoverY);
+  }
+
+  /** Wraps the (already-built) `sidePanel` body in a modal shell. The body is
+   * moved, not rebuilt, so an in-flight slider drag inside it survives an
+   * overlay re-render -- see sidePanel's declaration. */
+  function renderToolSettingsOverlay(meta: ToolMeta): void {
+    // A tool with nothing left to configure once the HUD owns the brush
+    // sliders has no modal to open; if it became the active tool while the
+    // modal was up, close it rather than show an empty shell.
+    if (!toolSettingsOpen || !hasToolSettings(meta)) {
+      toolSettingsOpen = false;
+      toolSettingsOverlay.style.display = 'none';
+      // Detaches `sidePanel` along with the shell; the node itself lives on
+      // in this closure and is re-appended (still fully built) on reopen.
+      toolSettingsOverlay.innerHTML = '';
+      return;
+    }
+    toolSettingsOverlay.style.display = 'flex';
+    toolSettingsOverlay.innerHTML = '';
+
+    const modal = document.createElement('div');
+    modal.className = 'pt-modal tool-settings-modal';
+    const header = document.createElement('div');
+    header.className = 'pt-modal-header';
+    const title = document.createElement('div');
+    title.className = 'pt-modal-title';
+    title.textContent = `${meta.label} settings`;
+    header.appendChild(title);
+    const closeButton = document.createElement('button');
+    closeButton.className = 'pt-close-btn';
+    closeButton.textContent = '✕';
+    closeButton.title = 'Close (Esc)';
+    closeButton.onclick = () => {
+      toolSettingsOpen = false;
+      render();
+    };
+    header.appendChild(closeButton);
+    modal.appendChild(header);
+    modal.appendChild(sidePanel);
+    toolSettingsOverlay.appendChild(modal);
   }
 
   function gridCoordsFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -1266,7 +1434,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     if (showSinkDraw && sinkDrawStart) {
       const width = wallBrushRadius(tool, brushWidth);
-      previewCtx.fillStyle = 'rgba(224, 72, 158, 0.5)';
+      previewCtx.fillStyle = tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent ? 'rgba(111, 143, 168, 0.5)' : 'rgba(224, 72, 158, 0.5)';
       for (const cell of sinkLineCells(sinkDrawStart.x, sinkDrawStart.y, x, y, width)) {
         previewCtx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
       }
@@ -1387,7 +1555,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const specId = lastSpecId[idx] as number;
     const hasRadiator = lastRadiatorRadius ? (lastRadiatorRadius[idx] as number) > 0 : false;
     const radiatorNote = hasRadiator && lastRadiatorTargetK ? ` · radiator target ${formatCelsius(kelvinToCelsius(lastRadiatorTargetK[idx] as number))}` : '';
-    const sinkNote = lastSinkMask && (lastSinkMask[idx] as number) > 0 ? ` · ${SINK_LABEL}` : '';
+    const port = lastSinkMask ? (lastSinkMask[idx] as SinkMaskValue) : SinkMaskValue.None;
+    const sinkNote = port === SinkMaskValue.None ? '' : ` · ${port === SinkMaskValue.Vent ? VENT_LABEL : SINK_LABEL}`;
     if (specId === EMPTY) {
       inspector.classList.add('empty');
       inspectorText.textContent = `empty${radiatorNote}${sinkNote}`;
@@ -1472,9 +1641,66 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     event.preventDefault();
     finishTubeDraw();
   });
+  /** Any modal currently up. Escape closes the topmost one before it falls
+   * through to the tube-draw cancel below, and the single-letter shortcuts
+   * are suppressed while one is open (they'd otherwise fire underneath it). */
+  function anyModalOpen(): boolean {
+    return chestOpen || toolSettingsOpen || benchMenuOpen || ptOpen || settingsOverlay.style.display !== 'none';
+  }
+
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && tool?.kind === 'tube' && tubeDrawPoints.length > 0) {
-      cancelTubeDraw();
+    // Modals put real text inputs on screen (the chest's search box, the
+    // funnel's amount field): a bare letter typed into one of those is text,
+    // not a shortcut.
+    const target = event.target as HTMLElement | null;
+    const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+
+    if (event.key === 'Escape') {
+      if (benchMenuOpen || toolSettingsOpen || chestOpen || ptOpen) {
+        // Innermost-first: the periodic table can be opened *from* the chest.
+        if (ptOpen) {
+          ptOpen = false;
+          ptSelectedSymbol = null;
+        } else if (benchMenuOpen) benchMenuOpen = false;
+        else if (toolSettingsOpen) toolSettingsOpen = false;
+        else chestOpen = false;
+        render();
+        return;
+      }
+      if (settingsOverlay.style.display !== 'none') {
+        toggleSettingsOverlay(false);
+        return;
+      }
+      if (tool?.kind === 'tube' && tubeDrawPoints.length > 0) cancelTubeDraw();
+      return;
+    }
+
+    if (typing || anyModalOpen() || event.ctrlKey || event.metaKey || event.altKey) return;
+
+    // Now that picking a tool means opening a modal, the things you do most
+    // often between picks get keys of their own -- otherwise the redesign
+    // would trade screen space for clicks.
+    if (event.key === 't' || event.key === 'T') {
+      event.preventDefault();
+      chestOpen = true;
+      render();
+    } else if (event.key === 'e' || event.key === 'E') {
+      if (!hasToolSettings(describeToolMeta(tool))) return;
+      event.preventDefault();
+      toolSettingsOpen = true;
+      render();
+    } else if (event.key === 'm' || event.key === 'M') {
+      event.preventDefault();
+      benchMenuOpen = true;
+      render();
+    } else if (event.key === ' ') {
+      event.preventDefault();
+      running = !running;
+      send({ type: 'setRunning', running });
+      render();
+    } else if (event.key === '.') {
+      event.preventDefault();
+      send({ type: 'step' });
     }
   }
   window.addEventListener('keydown', handleKeydown);
@@ -1490,7 +1716,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
     if (sinkDrawStart) {
       const width = wallBrushRadius(tool, brushWidth);
-      send({ type: 'paintSinkLine', x0: sinkDrawStart.x, y0: sinkDrawStart.y, x1: lastHoverX, y1: lastHoverY, width });
+      const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;
+      send({ type: 'paintSinkLine', x0: sinkDrawStart.x, y0: sinkDrawStart.y, x1: lastHoverX, y1: lastHoverY, width, port });
       sinkDrawStart = null;
       updateApparatusOverlay(lastHoverX, lastHoverY);
     }
@@ -1530,6 +1757,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       lastSinkMask = msg.sinkMask;
       lastSinkTotals = msg.sinkTotals;
       lastSinkGrandTotal = msg.sinkGrandTotal;
+      lastVentTotals = msg.ventTotals;
+      lastVentGrandTotal = msg.ventGrandTotal;
       const frameMeta = scanFrameMeta(msg.specId, msg.phase, msg.tempK);
       maybeRecordDiscoveries(frameMeta);
       maybeCheckAchievements(frameMeta, msg.objectives);
@@ -1550,15 +1779,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         filterMask: msg.filterMask,
         funnelFillSpecId: msg.funnelFillSpecId,
         sinkMask: msg.sinkMask,
+        catalystStrength: msg.catalystStrength,
       });
-      // The Restore button's disabled state depends on hasSnapshot -- only
-      // rebuild the toolbar when it actually flips (Save/Restore/Reset
-      // World are the only things that change it), not every frame.
-      if (snapshotChanged) renderToolbar();
+      // Restore's disabled state depends on hasSnapshot -- only rebuild the
+      // bench menu when it actually flips (Save/Restore/Reset World are the
+      // only things that change it), not every frame. A no-op unless that
+      // menu happens to be open.
+      if (snapshotChanged) renderBenchMenu();
       // The select-apparatus tool's edit panel shows a placed funnel's live
       // "Remaining" count and needs to reflect Reset immediately -- only the
-      // side panel is rebuilt here, not the toolbar, so a rapid succession of
-      // frame ticks can't blow away a toolbar button mid-click.
+      // tool-settings panel is rebuilt here, not the HUD, so a rapid
+      // succession of frame ticks can't blow away a HUD control mid-click.
       //
       // Skipped while focus is inside the panel itself: a rebuild replaces
       // the DOM node under an active drag (e.g. the cone-size range input),

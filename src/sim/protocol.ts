@@ -5,6 +5,7 @@
 // entry point -- worker.ts re-exports nothing.
 import type { FunnelFacing } from './apparatus-shapes';
 import type { FlaskFacing } from './flask-shapes';
+import type { SinkMaskValue } from './grid';
 import type { GoalProgress } from './objectives';
 import type { Scenario } from './scenario-data';
 import type { PaletteEntry } from './species';
@@ -43,6 +44,7 @@ export type WorkerToMainMessage =
       stirrerMask: Uint8Array;
       tubeMask: Uint8Array;
       filterMask: Uint8Array;
+      catalystStrength: Uint8Array;
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
       tubes: TubeSnapshot[];
@@ -53,6 +55,11 @@ export type WorkerToMainMessage =
        * SinkCounter doc comment). */
       sinkTotals: Uint32Array;
       sinkGrandTotal: number;
+      /** Same shape as sinkTotals, but for what the grid's Vent lines have
+       * thrown away rather than what its Sink lines collected (see
+       * grid.ts's SinkMaskValue). */
+      ventTotals: Uint32Array;
+      ventGrandTotal: number;
       /** Whether a 'snapshotWorld' has been saved and is available to
        * 'restoreWorld' -- lets the UI grey out its Restore button rather
        * than sending a message the worker would just silently no-op. */
@@ -84,6 +91,10 @@ export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
   | { type: 'paintRadiator'; x: number; y: number; brushRadius: number; radiationRadius: number; targetTempC: number }
   | { type: 'paintStirrer'; x: number; y: number; radius: number }
+  /** Paints a catalyst pad (see grid.ts's catalystStrength). `strength` is
+   * the whole-number reaction-rate multiplier; 0 is a no-op rather than an
+   * eraser (use 'erase' to remove a pad). */
+  | { type: 'paintCatalyst'; x: number; y: number; radius: number; strength: number }
   | { type: 'paintFilter'; x: number; y: number; radius: number }
   | { type: 'setFilterSpecies'; species: number[] }
   | { type: 'erase'; x: number; y: number; radius: number }
@@ -115,7 +126,11 @@ export type MainToWorkerMessage =
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
   | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
   | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean }
-  | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number }
+  /** Draws a collection port line -- a Sink or a Vent, which differ only in
+   * which tally they feed (see grid.ts's SinkMaskValue). One message for
+   * both, since the drawn geometry is identical. */
+  | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
+  /** Zeroes both the sink and the vent tallies. */
   | { type: 'resetSinkCounts' }
   /** Wipes the whole grid/apparatus/sink state back to a blank sheet -- see
    * grid.ts's clearAll. Distinct from restoreWorld: this has no saved point

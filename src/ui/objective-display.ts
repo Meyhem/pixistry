@@ -88,6 +88,17 @@ export function describeObjectives(progress: readonly GoalProgress[], lookup: Sp
           failed: goal.failed,
         };
       }
+      case 'ventLimit': {
+        const label = lookup.labelOf(goal.specId) ?? `spec ${goal.specId}`;
+        return {
+          text: `Vent no more than ${goal.max} px of ${label}`,
+          color: goal.failed ? '#e05a5a' : NEUTRAL_COLOR,
+          fraction: clamp01(goal.current / goal.max),
+          readout: `${goal.current} / ${goal.max} px vented`,
+          complete: false,
+          failed: goal.failed,
+        };
+      }
       case 'maxTempK': {
         return {
           text: `Keep the bench under ${goal.limitK} K`,

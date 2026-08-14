@@ -47,7 +47,10 @@ export interface ToolMeta {
    * filterPanel/flaskPanel: a sink line isn't a tracked instance (there's
    * one global counter shared by every sink drawn on the grid, see
    * sink.ts's SinkCounter), so there's no "edit" mode either. */
-  sinkPanel: 'none' | 'config';
+  /** Which collection-port tally to show, if any -- a Sink shows what it
+   * has collected, a Vent what it has thrown away (see grid.ts's
+   * SinkMaskValue). Same panel, different wording and different tally. */
+  sinkPanel: 'none' | 'sink' | 'vent';
 }
 
 /** One species' running total for the Sink tool's tally panel. */
@@ -356,14 +359,21 @@ function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCall
 function addSinkPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   if (meta.sinkPanel === 'none') return;
   addDivider(container);
+  const isVent = meta.sinkPanel === 'vent';
 
   const wrap = el('div', 'setting');
   const label = el('span', 'setting-label');
-  label.textContent = 'Collected';
+  label.textContent = isVent ? 'Vented' : 'Collected';
   wrap.appendChild(label);
 
   if (cb.sinkTally.length === 0) {
-    wrap.appendChild(hintBox('Nothing collected yet -- draw a line and let matter fall onto it.'));
+    wrap.appendChild(
+      hintBox(
+        isVent
+          ? 'Nothing vented yet -- draw a line where you want waste to escape.'
+          : 'Nothing collected yet -- draw a line and let matter fall onto it.',
+      ),
+    );
   } else {
     const list = el('div', 'species-chip-list');
     for (const entry of cb.sinkTally) {

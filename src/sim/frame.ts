@@ -106,6 +106,7 @@ export interface FrameState {
   readonly tubes: readonly TubeInstance[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
+  readonly ventCounter: SinkCounter;
   readonly hasSnapshot: boolean;
   readonly tick: number;
   /** Pre-computed by the caller (worker.ts, via objectives.ts's
@@ -125,6 +126,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
   const stirrerMask = grid.stirrerMask.slice();
   const tubeMask = grid.tubeMask.slice();
   const filterMask = grid.filterMask.slice();
+  const catalystStrength = grid.catalystStrength.slice();
   const funnelFillSpecId = computeFunnelFill(grid, state.funnels);
   const sinkMask = grid.sinkMask.slice();
   overlayGrabbedCells(grid, species, state.grabState, specId, phase, tempK);
@@ -138,12 +140,15 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     stirrerMask,
     tubeMask,
     filterMask,
+    catalystStrength,
     funnelFillSpecId,
     funnels: funnelSnapshots(state.funnels),
     tubes: tubeSnapshots(state.tubes),
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,
+    ventTotals: state.ventCounter.totals.slice(),
+    ventGrandTotal: state.ventCounter.grandTotal,
     hasSnapshot: state.hasSnapshot,
     tick: state.tick,
     objectives: state.objectives,

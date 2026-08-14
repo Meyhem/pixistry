@@ -14,7 +14,7 @@
 // Wire types live in protocol.ts and frame-building in frame.ts (both pure,
 // independently testable) -- this module is just the live grid/instance
 // state and the tick loop/message dispatch that mutate it.
-import { SimGrid } from './grid';
+import { SimGrid, SinkMaskValue } from './grid';
 import { forEachCellInRadius, withinRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import { buildFrame } from './frame';
@@ -115,8 +115,13 @@ let tubes: TubeInstance[] = [];
 let filterAllowSpecies = new Set<number>();
 
 // The Sink apparatus's global tally (see sink.ts) -- one counter shared by
-// every sink line drawn on the grid, not per-instance.
+// every sink line drawn on the grid, not per-instance. The Vent gets a
+// second counter of the same type rather than sharing this one: both ports
+// eat matter identically, but a scenario scores collected product and
+// dumped waste separately (see grid.ts's SinkMaskValue and objectives.ts's
+// 'ventLimit').
 const sinkCounter = new SinkCounter();
+const ventCounter = new SinkCounter();
 
 // Manual quicksave (see world-snapshot.ts) -- null until the first
 // 'snapshotWorld' message; 'restoreWorld' is a no-op until then (see the
@@ -189,18 +194,18 @@ function runOneTick(): void {
   // Last in the tick, after reactions: a sink is a collection port, so it
   // counts (and consumes) whatever's really present at the end of the tick
   // -- see sink.ts's stepSinks doc comment.
-  stepSinks(grid, sinkCounter);
+  stepSinks(grid, sinkCounter, ventCounter);
   recordSinkHistory(sinkCounter, tick);
 }
 
 function postFrame(): void {
-  const frame = buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
+  const frame = buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, ventCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
   if (activeScenario) {
     for (let i = 0; i < frame.tempK.length; i++) {
       const t = frame.tempK[i] as number;
       if (t > maxTempKObserved) maxTempKObserved = t;
     }
-    frame.objectives = evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved });
+    frame.objectives = evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, ventTotals: ventCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved });
   }
   post(frame);
 }
@@ -223,7 +228,7 @@ function runBurstChunk(): void {
     if (observed > maxTempKObserved) maxTempKObserved = observed;
   }
   const objectives = activeScenario
-    ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
+    ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, ventTotals: ventCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
     : [];
   post({ type: 'burstProgress', tick, ticksTotal: burst.ticksTotal, ticksRemaining: burst.ticksRemaining, objectives });
 
@@ -262,6 +267,12 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       });
       break;
     }
+    case 'paintCatalyst':
+      if (!isToolAllowed(activeRestrictions, 'catalyst')) break;
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        grid.catalystStrength[grid.index(px, py)] = msg.strength;
+      });
+      break;
     case 'paintStirrer':
       if (!isToolAllowed(activeRestrictions, 'stirrer')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
@@ -287,6 +298,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.filterMask[grid.index(px, py)] = 0;
         grid.vesselMask[grid.index(px, py)] = 0;
         grid.sinkMask[grid.index(px, py)] = 0;
+        grid.catalystStrength[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the
@@ -409,19 +421,21 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     }
     case 'paintSinkLine':
-      if (!isToolAllowed(activeRestrictions, 'sink')) break;
+      if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;
       for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
-        if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = 1;
+        if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = msg.port;
       }
       break;
     case 'resetSinkCounts':
       sinkCounter.reset();
+      ventCounter.reset();
       break;
     case 'resetWorld':
       grid.clearAll();
       funnels = [];
       tubes = [];
       sinkCounter.reset();
+      ventCounter.reset();
       filterAllowSpecies = new Set();
       grabState = null;
       stirState = null;
@@ -435,6 +449,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       funnels = [];
       tubes = [];
       sinkCounter.reset();
+      ventCounter.reset();
       filterAllowSpecies = new Set();
       grabState = null;
       stirState = null;
@@ -445,11 +460,11 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       applyScenarioSetup(grid, species, funnels, msg.scenario);
       break;
     case 'snapshotWorld':
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, ventCounter, tick);
       break;
     case 'restoreWorld': {
       if (!worldSnapshot) break;
-      const restored = restoreWorldSnapshot(grid, sinkCounter, worldSnapshot);
+      const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
       funnels = restored.funnels;
       tubes = restored.tubes;
       tick = restored.tick;
@@ -462,8 +477,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'runBurst': {
       if (burst) break;
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, ventCounter, tick);
       sinkCounter.reset();
+      ventCounter.reset();
       burst = { ticksTotal: msg.ticks, ticksRemaining: msg.ticks };
       runBurstChunk();
       break;
@@ -477,7 +493,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // explicit 'restoreWorld', rather than leaving a half-finished test's
       // world state live.
       if (worldSnapshot) {
-        const restored = restoreWorldSnapshot(grid, sinkCounter, worldSnapshot);
+        const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
         funnels = restored.funnels;
         tubes = restored.tubes;
         tick = restored.tick;
@@ -491,7 +507,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // a cancelled burst never gets that signal, since cancelling skips
       // runBurstChunk's normal completion path entirely.
       const objectives = activeScenario
-        ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
+        ? evaluateGoals(activeScenario.goals, { totals: sinkCounter.totals, ventTotals: ventCounter.totals, history: sinkCounter.history, tick, maxTempK: maxTempKObserved })
         : [];
       post({ type: 'burstProgress', tick, ticksTotal, ticksRemaining: 0, objectives });
       postFrame();

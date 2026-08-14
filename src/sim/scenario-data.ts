@@ -4,17 +4,18 @@
 // `setup` into real grid state and enforces `rules` in the worker;
 // objectives.ts turns `goals` into live progress, pure and gridless.
 import type { WallKind } from './walls';
+import { SinkMaskValue } from './grid';
 import { SpeciesId } from './species-data';
 import type { FlaskFacing } from './flask-shapes';
 import type { FunnelFacing } from './apparatus-shapes';
 
-/** Mirrors the toolbar's apparatus tool set (see src/ui/toolbar.ts's
+/** Mirrors the Tool Chest's apparatus tool set (see src/ui/tool-chest.ts's
  * ToolKind) but lives in src/sim, not src/ui: worker.ts (sim layer) is what
  * actually enforces `Restrictions.tools` against incoming messages, and sim
  * must not depend on ui (see ARCHITECTURE.md). 'paint' isn't a member here
  * since manual spawning is gated per-species by `paintSpecies`, not as a
  * single on/off tool. */
-export type ToolKind = 'erase' | 'grabber' | 'mixer' | 'radiator' | 'stirrer' | 'funnel' | 'tube' | 'filter' | 'sink' | 'flask';
+export type ToolKind = 'erase' | 'grabber' | 'mixer' | 'radiator' | 'stirrer' | 'funnel' | 'tube' | 'filter' | 'sink' | 'vent' | 'catalyst' | 'flask';
 
 /** What a scenario stamps onto a fresh bench before the player touches
  * anything -- built out of primitives that already exist (grid.set,
@@ -42,7 +43,24 @@ export type SetupCommand =
       readonly enabled: boolean;
     }
   | { readonly kind: 'radiator'; readonly x: number; readonly y: number; readonly radius: number; readonly targetTempC: number }
-  | { readonly kind: 'sink'; readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number; readonly width: number };
+  /** A pre-placed collection port. `port` defaults to a Sink; pass
+   * SinkMaskValue.Vent for a waste port (see grid.ts's SinkMaskValue). */
+  | {
+      readonly kind: 'sink';
+      readonly x0: number;
+      readonly y0: number;
+      readonly x1: number;
+      readonly y1: number;
+      readonly width: number;
+      readonly port?: SinkMaskValue;
+    }
+  /** A pre-painted catalyst pad (see grid.ts's catalystStrength) --
+   * `strength` is the whole-number reaction-rate multiplier, `radius` the
+   * painted brush area. Unlike 'radiator', whose radius doubles as each
+   * cell's own radiation reach, a catalyst cell only ever affects reactions
+   * happening on itself, so a large radius here is just a large pad, not a
+   * per-cell cost multiplier. */
+  | { readonly kind: 'catalyst'; readonly x: number; readonly y: number; readonly radius: number; readonly strength: number };
 
 /** What the player is allowed to do during a scenario -- enforced worker-
  * side (see scenario.ts's isPaintAllowed/isFunnelSpeciesAllowed/
@@ -63,6 +81,13 @@ export type Goal =
   | { readonly kind: 'rate'; readonly specId: number; readonly perSecond: number; readonly sustainSeconds: number }
   | { readonly kind: 'purity'; readonly specId: number; readonly minFraction: number }
   | { readonly kind: 'limit'; readonly specId: number; readonly max: number }
+  /** A ceiling on what the player's *Vents* have thrown away, as opposed to
+   * 'limit's ceiling on what their Sinks collected (see grid.ts's
+   * SinkMaskValue). A separate kind rather than a `source` flag on 'limit'
+   * so the two can't be confused at an authoring site: 'limit' means "don't
+   * let this end up in your product", 'ventLimit' means "don't dump this
+   * much of it into the room". */
+  | { readonly kind: 'ventLimit'; readonly specId: number; readonly max: number }
   | { readonly kind: 'maxTempK'; readonly limitK: number };
 
 export interface ScenarioPar {
@@ -482,14 +507,14 @@ export const SCENARIOS: readonly Scenario[] = [
     briefing: [
       'N2 + H2 -> NH3 only happens above 700 K, and even then it takes patience.',
       "There's a sealed, superheated chamber already packed with nitrogen and hydrogen.",
-      'Collect 100 pixels of NH3 -- this one takes a while, so lean on Run Test.',
+      'Collect 100 pixels of NH3 -- a Catalyst Pad will make this far less of a wait.',
     ],
     hints: [
       "You can't paint anything here -- the chamber is already loaded and already hot.",
       "NH3 forms throughout the packed gas, not just at the bottom -- one Sink line barely catches any of it.",
-      'Draw several Sink lines spread through the chamber, top to bottom, then lean on Run Test.',
+      'Paint Catalyst Pads over the chamber and draw several Sink lines spread top to bottom, then lean on Run Test.',
     ],
-    fact: "The real Haber process runs at even higher pressure and temperature -- it's how most of the world's nitrogen fertilizer is made.",
+    fact: "The real Haber process runs at even higher pressure and temperature over an iron catalyst -- it's how most of the world's nitrogen fertilizer is made.",
     // A single big 'radiator' command (matching the interactive tool's own
     // brush) stamps its `radius` onto BOTH the painted area AND each
     // resulting cell's own individual radiation reach (applyRadiator, see
@@ -509,7 +534,16 @@ export const SCENARIOS: readonly Scenario[] = [
       { kind: 'radiator', x: 50, y: 72, radius: 8, targetTempC: 450 },
       { kind: 'radiator', x: 50, y: 88, radius: 8, targetTempC: 450 },
     ],
-    rules: { paintSpecies: 'none', tools: ['erase', 'sink'], funnelSpecies: 'none' },
+    // The Catalyst Pad is granted but deliberately NOT pre-placed: this is
+    // the one scenario on the ladder whose point is catalysis, so painting
+    // the pad has to be the player's own move. Headless measurement over a
+    // fixed 3600-tick (60s) window with the same sink layout throughout:
+    // no pad 33 NH3, 2x pad 53, 5x pad 76, 10x pad 118. So the goal of 100
+    // stays reachable without a pad (par is 180s, three times that window)
+    // but is a slog -- exactly the "tedious -> satisfying" gap
+    // .grill/campaign-mode.md's §6 point 16 wanted the pad to close, rather
+    // than the pad being required to win at all.
+    rules: { paintSpecies: 'none', tools: ['erase', 'sink', 'catalyst'], funnelSpecies: 'none' },
     goals: [{ kind: 'collect', specId: S.NH3, amount: 100 }],
     par: { seconds: 180 },
   },
@@ -523,6 +557,21 @@ export const SCENARIOS: readonly Scenario[] = [
   // the same reason 'photo-paper's was: no Filter tool here either, and a
   // plain sink at the pool floor dilutes with unrelated leftover HNO3(aq)
   // the same way.
+  //
+  // Phase 8 built the Vent and re-examined that "vent <= 30 NO2" goal with
+  // it in hand -- and measurement says the ladder's constraint is not a real
+  // one *here*, so it deliberately still isn't wired. Driving this scenario
+  // headlessly (six rounds of painting Cu into the column, 600 ticks each,
+  // sink under the column) with and without a ceiling-wide Vent: 19
+  // CuNO32Aq collected and 0 NO2 vented without, 18 collected and 11 NO2
+  // vented with, and either way *zero* NO2 left anywhere on the grid at the
+  // end. The reason is chemistry already in the table: NO2 + H2O ->
+  // HNO3(aq) + NO (reactions.ts) re-absorbs the fumes into the very water
+  // the etch reaction produces alongside them, so NO2 can never pile up in
+  // this open tank. A 'ventLimit' of 30 would therefore be unfailable, and
+  // venting buys the player nothing -- a decorative constraint, which is
+  // exactly what §9's decision 9 says not to ship. See the Phase 8
+  // build-order note for where the Vent does earn its place.
   //
   // Playtesting found something more fundamental, though: react.ts's
   // tryReact only places a reaction's *n*th product past the 2 reactant

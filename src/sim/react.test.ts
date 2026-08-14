@@ -134,6 +134,67 @@ describe('stepReactions', () => {
 // points that same table deliberately encodes as "no rule". Table-wide
 // invariants (every id valid, no duplicate pairs, solubility coverage) live
 // in reactions.test.ts instead of being re-checked per case here.
+describe('stepReactions: catalyst pad', () => {
+  // NaCl + H2O -> NaCl(aq) is probability 0.4 with no minTempK, so an rng
+  // pinned at 0.6 sits deliberately between the bare rule (0.4, won't fire)
+  // and a 2x-catalysed one (0.8, fires) -- the gap is the whole point of
+  // these two tests.
+  const between = () => 0.6;
+
+  function nacLInWater(): { grid: SimGrid; species: SpeciesTable } {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.NaCl);
+    paint(grid, species, 1, 0, SpeciesId.H2O);
+    return { grid, species };
+  }
+
+  it('does not fire at a probability the bare rule would fail', () => {
+    const { grid, species } = nacLInWater();
+    stepReactions(grid, species, between);
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.NaCl);
+  });
+
+  it('fires the same roll once a pad multiplies the rule probability past it', () => {
+    const { grid, species } = nacLInWater();
+    grid.catalystStrength[grid.index(0, 0)] = 2;
+    stepReactions(grid, species, between);
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.NaClAq);
+  });
+
+  it('a pad under either reacting cell is enough, not just the first', () => {
+    const { grid, species } = nacLInWater();
+    grid.catalystStrength[grid.index(1, 0)] = 2;
+    stepReactions(grid, species, between);
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.NaClAq);
+  });
+
+  it('never bypasses a rule\'s ignition threshold -- catalysis speeds a reaction up, it does not lower minTempK', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    // N2 + H2 -> NH3 needs 700 K; both cells are painted at ambient.
+    paint(grid, species, 0, 0, SpeciesId.N2);
+    paint(grid, species, 1, 0, SpeciesId.H2);
+    grid.catalystStrength[grid.index(0, 0)] = 255;
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.N2);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.H2);
+  });
+
+  it('clamps the multiplied probability at 1 rather than letting it run past certainty', () => {
+    const { grid, species } = nacLInWater();
+    grid.catalystStrength[grid.index(0, 0)] = 200;
+    // rng at 0.999 is under a clamped 1.0 but would also be under an
+    // unclamped 0.4*200=80 -- what this really pins is that neverFire (1.0)
+    // still cannot fire, i.e. the clamp is inclusive-exclusive the same way
+    // the uncatalysed path is.
+    stepReactions(grid, species, neverFire);
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.NaCl);
+  });
+});
+
 describe('stepReactions: halogen-metal / precipitation / acid-base / hydrolysis / dissolution expansion', () => {
   it('halogen-metal: Ba + Cl2 -> BaCl2', () => {
     const species = new SpeciesTable();

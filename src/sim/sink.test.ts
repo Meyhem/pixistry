@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { EMPTY, PhaseCode, SimGrid, SinkMaskValue } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { SpeciesId } from './species-data';
@@ -72,7 +72,7 @@ describe('stepSinks', () => {
     grid.sinkMask[grid.index(1, 0)] = 1;
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
 
     expect(grid.specId[grid.index(1, 0)]).toBe(EMPTY);
     expect(counter.totals[SpeciesId.NaCl]).toBe(1);
@@ -85,7 +85,7 @@ describe('stepSinks', () => {
     paint(grid, species, 0, 0, SpeciesId.Fe);
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
 
     expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.Fe);
     expect(counter.grandTotal).toBe(0);
@@ -96,7 +96,7 @@ describe('stepSinks', () => {
     grid.sinkMask[grid.index(0, 0)] = 1;
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
 
     expect(counter.grandTotal).toBe(0);
   });
@@ -108,7 +108,7 @@ describe('stepSinks', () => {
     grid.sinkMask[grid.index(0, 0)] = 1;
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
 
     expect(grid.specId[grid.index(0, 0)]).toBe(wall.specId);
     expect(counter.grandTotal).toBe(0);
@@ -128,7 +128,7 @@ describe('stepSinks', () => {
     grid.sinkMask[grid.index(2, 0)] = 1;
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
 
     expect(counter.totals[SpeciesId.NaCl]).toBe(2);
     expect(counter.totals[SpeciesId.Fe]).toBe(1);
@@ -142,12 +142,47 @@ describe('stepSinks', () => {
     grid.sinkMask[grid.index(0, 0)] = 1;
 
     const counter = new SinkCounter();
-    stepSinks(grid, counter);
+    stepSinks(grid, counter, new SinkCounter());
     expect(counter.grandTotal).toBe(1);
 
     counter.reset();
     expect(counter.grandTotal).toBe(0);
     expect(counter.totals[SpeciesId.NaCl]).toBe(0);
+  });
+});
+
+describe('stepSinks: Vent ports', () => {
+  it('tallies a Vent cell into the vent counter, not the sink counter', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 1);
+    paint(grid, species, 1, 0, SpeciesId.NaCl);
+    grid.sinkMask[grid.index(1, 0)] = SinkMaskValue.Vent;
+
+    const sinkCounter = new SinkCounter();
+    const ventCounter = new SinkCounter();
+    stepSinks(grid, sinkCounter, ventCounter);
+
+    // Consumption itself is identical -- only the tally it lands in differs.
+    expect(grid.specId[grid.index(1, 0)]).toBe(EMPTY);
+    expect(sinkCounter.grandTotal).toBe(0);
+    expect(ventCounter.totals[SpeciesId.NaCl]).toBe(1);
+    expect(ventCounter.grandTotal).toBe(1);
+  });
+
+  it('keeps sink and vent tallies separate when both are drawn on one grid', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 1);
+    paint(grid, species, 0, 0, SpeciesId.NaCl);
+    paint(grid, species, 2, 0, SpeciesId.NaCl);
+    grid.sinkMask[grid.index(0, 0)] = SinkMaskValue.Sink;
+    grid.sinkMask[grid.index(2, 0)] = SinkMaskValue.Vent;
+
+    const sinkCounter = new SinkCounter();
+    const ventCounter = new SinkCounter();
+    stepSinks(grid, sinkCounter, ventCounter);
+
+    expect(sinkCounter.totals[SpeciesId.NaCl]).toBe(1);
+    expect(ventCounter.totals[SpeciesId.NaCl]).toBe(1);
   });
 });
 

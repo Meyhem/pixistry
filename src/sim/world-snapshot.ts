@@ -26,11 +26,14 @@ export interface WorldSnapshot {
   readonly filterMask: Uint8Array;
   readonly vesselMask: Uint8Array;
   readonly sinkMask: Uint8Array;
+  readonly catalystStrength: Uint8Array;
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
   readonly sinkTotals: Uint32Array;
   readonly sinkGrandTotal: number;
   readonly sinkHistory: SinkCounter['history'];
+  readonly ventTotals: Uint32Array;
+  readonly ventGrandTotal: number;
   readonly tick: number;
 }
 
@@ -46,6 +49,7 @@ export function captureWorldSnapshot(
   funnels: readonly FunnelInstance[],
   tubes: readonly TubeInstance[],
   sinkCounter: SinkCounter,
+  ventCounter: SinkCounter,
   tick: number,
 ): WorldSnapshot {
   return {
@@ -59,11 +63,17 @@ export function captureWorldSnapshot(
     filterMask: grid.filterMask.slice(),
     vesselMask: grid.vesselMask.slice(),
     sinkMask: grid.sinkMask.slice(),
+    catalystStrength: grid.catalystStrength.slice(),
     funnels: structuredClone(funnels as FunnelInstance[]),
     tubes: structuredClone(tubes as TubeInstance[]),
     sinkTotals: sinkCounter.totals.slice(),
     sinkGrandTotal: sinkCounter.grandTotal,
     sinkHistory: structuredClone(sinkCounter.history),
+    // No vent history: only 'rate' goals read a history, and those score
+    // collected product, never vented waste (see objectives.ts), so
+    // recordSinkHistory is never called on the vent counter.
+    ventTotals: ventCounter.totals.slice(),
+    ventGrandTotal: ventCounter.grandTotal,
     tick,
   };
 }
@@ -79,7 +89,7 @@ export interface RestoredWorld {
  * tick for the caller to reassign -- worker.ts holds those as plain `let`
  * bindings rather than SimGrid fields, so they can't be restored in place
  * here the way the grid's own arrays are. */
-export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, snapshot: WorldSnapshot): RestoredWorld {
+export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ventCounter: SinkCounter, snapshot: WorldSnapshot): RestoredWorld {
   grid.specId.set(snapshot.specId);
   grid.u.set(snapshot.u);
   grid.phase.set(snapshot.phase);
@@ -90,9 +100,12 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, sn
   grid.filterMask.set(snapshot.filterMask);
   grid.vesselMask.set(snapshot.vesselMask);
   grid.sinkMask.set(snapshot.sinkMask);
+  grid.catalystStrength.set(snapshot.catalystStrength);
   sinkCounter.totals.set(snapshot.sinkTotals);
   sinkCounter.grandTotal = snapshot.sinkGrandTotal;
   sinkCounter.history = structuredClone(snapshot.sinkHistory);
+  ventCounter.totals.set(snapshot.ventTotals);
+  ventCounter.grandTotal = snapshot.ventGrandTotal;
   return {
     funnels: structuredClone(snapshot.funnels as FunnelInstance[]),
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),

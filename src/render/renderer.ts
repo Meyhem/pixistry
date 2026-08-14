@@ -11,7 +11,7 @@
 // so each grid cell ends up as a crisp SUPERSAMPLE x SUPERSAMPLE block of
 // screen pixels with the border as its outer ring and the pure species
 // color in the middle.
-import { EMPTY, PhaseCode, TubeMaskValue } from '../sim/grid';
+import { EMPTY, PhaseCode, SinkMaskValue, TubeMaskValue } from '../sim/grid';
 import { AMBIENT_TEMPERATURE_K } from '../sim/heat';
 
 export const SUPERSAMPLE = 3;
@@ -45,11 +45,18 @@ export interface FrameData {
    * matter and has no color of its own, so without this a drawn filter line
    * would be invisible once painted. */
   filterMask: Uint8Array;
-  /** Sink apparatus overlay (see grid.ts's sinkMask) -- nonzero where a sink
-   * line has been drawn. Like the filter mask, this isn't matter and has no
-   * color of its own, so without this a drawn sink line would be invisible
-   * once painted. */
+  /** Sink/Vent apparatus overlay (see grid.ts's sinkMask) -- SinkMaskValue,
+   * nonzero where a port line has been drawn, and which value decides the
+   * tint. Like the filter mask, this isn't matter and has no color of its
+   * own, so without this a drawn port line would be invisible once
+   * painted. */
   sinkMask: Uint8Array;
+  /** Catalyst-pad overlay (see grid.ts's catalystStrength) -- nonzero where
+   * a pad is painted. Like the filter/sink masks this isn't matter and has
+   * no color of its own; the tint is deliberately weak, since a pad is
+   * usually painted *under* a working reaction and shouldn't drown out what
+   * it's helping. */
+  catalystStrength: Uint8Array;
 }
 
 export interface Renderer {
@@ -178,6 +185,14 @@ const FILTER_TINT_STRENGTH = 0.3;
 
 const SINK_TINT_RGB: [number, number, number] = [224, 72, 158];
 const SINK_TINT_STRENGTH = 0.35;
+// A Vent is the same drawn primitive as a Sink (see grid.ts's SinkMaskValue)
+// and shares its mask, so the tint is the only thing distinguishing the two
+// on screen -- a cold grey-blue against the sink's hot pink.
+const VENT_TINT_RGB: [number, number, number] = [111, 143, 168];
+const VENT_TINT_STRENGTH = 0.35;
+
+const CATALYST_TINT_RGB: [number, number, number] = [214, 176, 74];
+const CATALYST_TINT_STRENGTH = 0.22;
 
 /** Lerps rgb toward `hue` by `strength` (0..1), alpha untouched. */
 function tintTowards(rgba: [number, number, number, number], hue: readonly [number, number, number], strength: number): [number, number, number, number] {
@@ -298,6 +313,7 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
       filterMask,
       funnelFillSpecId,
       sinkMask,
+      catalystStrength,
     }: FrameData): void {
       accumulateGlow(radiatorRadius, radiatorTargetK);
 
@@ -335,7 +351,10 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           if (tube === TubeMaskValue.Lumen) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
           else if (tube === TubeMaskValue.Cone) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_CONE_TINT_STRENGTH);
           if ((filterMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, FILTER_TINT_RGB, FILTER_TINT_STRENGTH);
-          if ((sinkMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, SINK_TINT_RGB, SINK_TINT_STRENGTH);
+          if ((catalystStrength[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, CATALYST_TINT_RGB, CATALYST_TINT_STRENGTH);
+          const port = sinkMask[i] as SinkMaskValue;
+          if (port === SinkMaskValue.Sink) interiorRgba = tintTowards(interiorRgba, SINK_TINT_RGB, SINK_TINT_STRENGTH);
+          else if (port === SinkMaskValue.Vent) interiorRgba = tintTowards(interiorRgba, VENT_TINT_RGB, VENT_TINT_STRENGTH);
 
           let ringRgba = interiorRgba;
           if (border) ringRgba = tintTowards(interiorRgba, border.hue, border.strength);

@@ -101,7 +101,17 @@ function tryReact(
   }
   if (slots.length < products.length) return false;
 
-  if (rng() >= rule.probability) return false;
+  // Catalyst pad (see grid.ts's catalystStrength): a pad under either
+  // reacting cell multiplies this rule's per-tick firing chance, clamped to
+  // 1 so a strong pad means "fires every tick it can", never more. The
+  // stronger of the two cells wins rather than their product, so overlapping
+  // pads can't compound into something the author didn't paint. Deliberately
+  // applied *after* the minTempK check above: a catalyst lowers the
+  // activation barrier's cost in time, not the ignition threshold itself --
+  // it can't make a reaction happen at a temperature the rule forbids.
+  const catalyst = Math.max(grid.catalystStrength[i] as number, grid.catalystStrength[j] as number);
+  const probability = catalyst > 0 ? Math.min(1, rule.probability * catalyst) : rule.probability;
+  if (rng() >= probability) return false;
 
   // Reaction enthalpy is scaled off reactant A's own nominal parcel (see
   // heat.ts: a cell represents massA grams, i.e. massA/molarMassA "moles"

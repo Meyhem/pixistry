@@ -14,8 +14,13 @@ export interface GoalHistoryEntry {
 }
 
 export interface GoalSnapshot {
-  /** Indexed by specId, same array SinkCounter.totals uses. */
+  /** Indexed by specId, same array SinkCounter.totals uses. What the
+   * player's *Sinks* have collected. */
   readonly totals: Uint32Array;
+  /** What the player's *Vents* have thrown away, same shape as `totals` --
+   * a separate tally because a vent is a waste port, not a collection port
+   * (see grid.ts's SinkMaskValue), and only 'ventLimit' goals score it. */
+  readonly ventTotals: Uint32Array;
   /** Per-second snapshots of `totals`, oldest first -- what 'rate' goals
    * measure a sustained throughput against. Worker.ts doesn't populate a
    * real rolling window yet (no current scenario has a 'rate' goal -- see
@@ -45,6 +50,7 @@ export type GoalProgress =
     }
   | { readonly kind: 'purity'; readonly specId: number; readonly minFraction: number; readonly currentFraction: number; readonly complete: boolean }
   | { readonly kind: 'limit'; readonly specId: number; readonly max: number; readonly current: number; readonly failed: boolean }
+  | { readonly kind: 'ventLimit'; readonly specId: number; readonly max: number; readonly current: number; readonly failed: boolean }
   | { readonly kind: 'maxTempK'; readonly limitK: number; readonly currentMaxK: number; readonly failed: boolean };
 
 const TICKS_PER_SECOND = 60;
@@ -111,6 +117,10 @@ function evaluateOne(goal: Goal, snapshot: GoalSnapshot): GoalProgress {
     case 'limit': {
       const current = totalOf(snapshot.totals, goal.specId);
       return { kind: 'limit', specId: goal.specId, max: goal.max, current, failed: current > goal.max };
+    }
+    case 'ventLimit': {
+      const current = totalOf(snapshot.ventTotals, goal.specId);
+      return { kind: 'ventLimit', specId: goal.specId, max: goal.max, current, failed: current > goal.max };
     }
     case 'maxTempK':
       return { kind: 'maxTempK', limitK: goal.limitK, currentMaxK: snapshot.maxTempK, failed: snapshot.maxTempK > goal.limitK };

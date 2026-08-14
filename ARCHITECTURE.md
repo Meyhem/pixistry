@@ -169,10 +169,27 @@ probability gating, energy bookkeeping).
 - **`ui/app.ts`** (M4) — the full v1 tool set as plain DOM (no framework, per the design doc): paint
   (per-species), erase, wall materials (painted like any other wall, no special-case tool logic needed
   since `applyTool`'s `'wall'` case already just sends a `paint` message), a unified radiator tool, and
-  mixer, plus pause/single-step/speed controls. Tool-specific settings live in a right-hand side panel that
-  rebuilds to match the selected tool: every tool gets a brush-width slider (the same `radius` used for
-  paint/erase/stir/grab), and the radiator tool additionally shows radiation-radius and target-temperature
-  sliders, sent to the worker via a `paintRadiator` message rather than the plain `paint` message — this
+  mixer, plus pause/single-step/speed controls.
+
+  **Layout is "full-bleed canvas + floating HUD + modals".** The sim canvas fills the entire mount, and
+  the only permanent chrome is two translucent strips (`ui/hud.ts`) hovering over its top and bottom
+  edges — active-tool chip, transport controls and a `⋯` bench menu up top; brush width/temperature and
+  the temperature legend below. The strips are click-through except for the control clusters themselves,
+  so the gap between them is still live canvas. Everything else is a modal over that canvas: the Tool
+  Chest (`ui/tool-chest.ts`, one searchable list of every species/apparatus/tool, and the canonical home
+  for the UI-side `ToolKind` union), the tool-settings modal (`ui/side-panel.ts`'s builder rendered into
+  an overlay shell instead of a docked column), the periodic table, the bench menu, and comfort settings.
+  Keyboard: `T` chest, `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the
+  topmost modal. This replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent
+  260px side-panel column, which between them left the canvas roughly a sixth of the window — and one
+  bug: `mountApp` reused `#app` without clearing the `menu-screen` class the title screen sets on it, so
+  `align-items: center` shrink-wrapped the whole bench to its content width.
+
+  Tool-specific settings rebuild to match the selected tool: every tool gets a brush-width slider (the
+  same `radius` used for paint/erase/stir/grab) — permanently in the HUD, so the tool-settings modal
+  suppresses its own copy — and the radiator tool additionally shows radiation-radius and
+  target-temperature sliders, sent to the worker via a `paintRadiator` message rather than the plain
+  `paint` message — this
   replaced an earlier fixed toolbar radius slider plus a separate burner/coolant tool pair that injected
   heat at the cursor only while held down, and (later) a heater-glass/cooler-glass wall-material design;
   baking the target/radius into a per-cell overlay (`grid.radiatorRadius`/`radiatorTargetK`) captured once

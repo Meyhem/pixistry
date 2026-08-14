@@ -5,7 +5,7 @@
 // engine work" philosophy scenario-data.ts's doc comment describes for
 // authoring a level.
 import { AMBIENT_TEMPERATURE_K, celsiusToKelvin, energyForTemperature, massOf } from './heat';
-import { type SimGrid } from './grid';
+import { SinkMaskValue, type SimGrid } from './grid';
 import { forEachCellInRadius } from './geometry';
 import { stampGlass } from './apparatus';
 import { flaskShapeFor } from './flask-shapes';
@@ -130,9 +130,20 @@ function applyRadiator(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'radiat
  * destination already marked, since the player has no way to place one
  * themselves. Reuses the same sinkLineCells Bresenham applyWallLine does. */
 function applySink(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'sink' }>): void {
+  const port = cmd.port ?? SinkMaskValue.Sink;
   for (const { x, y } of sinkLineCells(cmd.x0, cmd.y0, cmd.x1, cmd.y1, cmd.width)) {
-    if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = 1;
+    if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = port;
   }
+}
+
+/** A pre-painted catalyst pad, same as the interactive Catalyst tool's
+ * 'paintCatalyst' handler (worker.ts) -- a plain brush stamp into
+ * grid.catalystStrength, with none of the radiator's per-cell radiation
+ * reach (see the 'catalyst' SetupCommand's doc comment). */
+function applyCatalyst(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'catalyst' }>): void {
+  forEachCellInRadius(grid, cmd.x, cmd.y, cmd.radius, (px, py) => {
+    grid.catalystStrength[grid.index(px, py)] = cmd.strength;
+  });
 }
 
 /** Stamps every one of a scenario's setup commands onto a freshly-cleared
@@ -168,6 +179,9 @@ export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, funnels
         break;
       case 'sink':
         applySink(grid, cmd);
+        break;
+      case 'catalyst':
+        applyCatalyst(grid, cmd);
         break;
     }
   }
