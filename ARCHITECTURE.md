@@ -171,23 +171,28 @@ probability gating, energy bookkeeping).
   since `applyTool`'s `'wall'` case already just sends a `paint` message), a unified radiator tool, and
   mixer, plus pause/single-step/speed controls.
 
-  **Layout is "full-bleed canvas + floating HUD + modals".** The sim canvas fills the entire mount, and
-  the only permanent chrome is two translucent strips (`ui/hud.ts`) hovering over its top and bottom
-  edges — five Tool Chest category buttons, transport controls and a `⋯` bench menu up top; brush
+  **Layout is "full-bleed canvas + left tool rail + floating HUD + modals".** The sim canvas fills the
+  mount minus the rail's strip on the left (`--rail-inset`; `fitCanvasWrap` measures `canvas-wrap`, not
+  `bench`, so no bench pixel ever sits under the rail). The permanent chrome is the tool rail
+  (`ui/tool-rail.ts`) down the left edge and two translucent strips (`ui/hud.ts`) hovering over the top and
+  bottom edges — an active-tool readout, transport controls and a `⋯` bench menu up top; brush
   width/temperature and the temperature legend below. The strips are click-through except for the control
-  clusters themselves, so the gap between them is still live canvas. Everything else is a modal over that
-  canvas: the Tool Chest (`ui/tool-chest.ts`, one searchable modal per `ChestCategory` — Elements &
-  Compounds / Glassware / Thermal & Mixing / Flow Control / Tools — and the canonical home for the UI-side
-  `ToolKind` union), the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell
-  instead of a docked column), the periodic table (reachable from the foot of the species category), the
-  bench menu, and comfort settings. The category button owning the active tool wears that tool's swatch
-  and label, so the HUD still says what's selected without a separate chip; `chestCategoryOfTool`
-  (`ui/app.ts`) is the mapping, and it has to stay in step with `categoryEntries` in `ui/tool-chest.ts`.
-  Keyboard: `1`–`5` open the five categories (`T` is kept as an alias for the first), `E` tool settings,
-  `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent
-  260px side-panel column, which between them left the canvas roughly a sixth of the window — and one
-  bug: `mountApp` reused `#app` without clearing the `menu-screen` class the title screen sets on it, so
-  `align-items: center` shrink-wrapped the whole bench to its content width.
+  clusters themselves, so the gap between them is still live canvas.
+
+  The rail is one icon slot per tool (`ui/tool-icons.ts`, inline 24x24 stroked SVG drawn from
+  `currentColor`), grouped PAINT / GLASS / HEAT / FLOW / TOOLS, with the active slot wearing its tool's
+  own swatch and each slot naming itself in a hover flyout. It's also the canonical home for the UI-side
+  `ToolKind` union. Under 860px of window height it drops the group captions and pairs slots two-wide,
+  since 16 slots in one column need ~560px. Species are the one thing that can't have a slot — there are
+  149 — so the top slot opens the Tool Chest (`ui/tool-chest.ts`), now purely the searchable species
+  picker, with the periodic table hanging off its footer. Everything else is still a modal over the
+  canvas: the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell instead of
+  a docked column), the periodic table, the bench menu, and comfort settings. Keyboard: `T` species chest,
+  `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This
+  replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent 260px side-panel column,
+  which between them left the canvas roughly a sixth of the window — and one bug: `mountApp` reused `#app`
+  without clearing the `menu-screen` class the title screen sets on it, so `align-items: center`
+  shrink-wrapped the whole bench to its content width.
 
   Tool-specific settings rebuild to match the selected tool: every tool gets a brush-width slider (the
   same `radius` used for paint/erase/stir/grab) — permanently in the HUD, so the tool-settings modal

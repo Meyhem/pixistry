@@ -9,7 +9,7 @@ import { SpeciesId } from './species-data';
 import type { FlaskFacing, FlaskKind } from './flask-shapes';
 import type { FunnelFacing } from './apparatus-shapes';
 
-/** Mirrors the Tool Chest's apparatus tool set (see src/ui/tool-chest.ts's
+/** Mirrors the tool rail's apparatus tool set (see src/ui/tool-rail.ts's
  * ToolKind) but lives in src/sim, not src/ui: worker.ts (sim layer) is what
  * actually enforces `Restrictions.tools` against incoming messages, and sim
  * must not depend on ui (see ARCHITECTURE.md). 'paint' isn't a member here

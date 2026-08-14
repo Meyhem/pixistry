@@ -51,6 +51,18 @@ body {
   inset: 0;
 }
 
+/* Width of the strip the tool rail reserves on the left: its slots plus the
+   12px margin either side (wider in the two-column compact layout below). */
+:root {
+  --rail-inset: 72px;
+}
+
+@media (max-height: 860px) {
+  :root {
+    --rail-inset: 104px;
+  }
+}
+
 /* The floating HUD strips. The strip itself spans the full width but is
    click-through (the clusters inside it re-enable pointer events), so the
    gap between the left and right clusters is still live canvas -- painting
@@ -100,74 +112,202 @@ body {
   padding: 0 4px;
 }
 
-/* The five Tool Chest shelves, one button each. The button owning the
-   active tool doubles as the old active-tool chip: it wears the tool's
-   swatch and names it, so what's selected and where to change it are still
-   the same control. */
-.hud-shelf {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.hud-cat-btn {
+/* A readout of the active tool, not a button -- the rail owns picking. */
+.hud-active-tool {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: 30px;
-  padding: 0 9px;
+  padding: 0 10px;
   border-radius: 9px;
   border: 1px solid var(--panel-border);
   background: #1c1f1d;
-  color: var(--text-muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.hud-cat-btn:hover {
-  border-color: var(--accent);
   color: var(--text);
 }
 
-.hud-cat-btn.active {
-  /* Tinted with the active tool's own swatch rather than the accent, so the
-     shelf reads at a glance even when the label is truncated. */
-  border-color: var(--swatch, var(--accent));
-  background: #232623;
-  background: color-mix(in srgb, var(--swatch, #1c1f1d) 18%, #1c1f1d);
-  color: var(--text);
-}
-
-.hud-cat-name {
-  font-weight: 600;
-}
-
-.hud-cat-btn.active .hud-cat-name {
-  font-family: var(--mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.hud-cat-swatch {
-  width: 12px;
-  height: 12px;
+.hud-active-swatch {
+  width: 14px;
+  height: 14px;
   border-radius: 4px;
   border: 1px solid rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
 }
 
-.hud-cat-tool {
+.hud-active-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+
+.hud-active-label {
   font-size: 12px;
   font-weight: 600;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.hud-active-category {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* --- the tool rail (tool-rail.ts) ---------------------------------------
+   A vertical strip on the left edge with one icon slot per tool, floating
+   over the bench between the two HUD strips. Like them it's click-through
+   outside its own groups, so the gap above/below is still live canvas. */
+.tool-rail {
+  position: absolute;
+  left: 12px;
+  top: 58px;
+  bottom: 58px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.tool-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.rail-group {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 5px 6px;
+  border-radius: 12px;
+  background: rgba(14, 16, 15, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.rail-caption {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  margin-bottom: 1px;
+}
+
+.rail-slot {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.rail-slot:hover:not(:disabled) {
+  background: #1c1f1d;
+  border-color: var(--swatch, var(--accent));
+  color: var(--text);
+}
+
+/* The active slot is the rail's "what's selected" readout: it carries the
+   tool's own swatch, the same color the HUD readout and the tool-settings
+   modal use for it. */
+.rail-slot.active {
+  color: var(--swatch, var(--text));
+  border-color: var(--swatch, var(--accent));
+  background: color-mix(in srgb, var(--swatch, #1c1f1d) 22%, #14161500);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.rail-slot.locked {
+  color: var(--text-faint);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rail-slot-lock {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* The slot's name, revealed on hover as a flyout to the right of the rail
+   rather than a native tooltip (whose ~500ms delay is far too slow for a
+   strip you're meant to scan). */
+.rail-slot-name {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgba(14, 16, 15, 0.96);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+  z-index: 2;
+}
+
+.rail-slot:hover .rail-slot-name,
+.rail-slot:focus-visible .rail-slot-name {
+  opacity: 1;
+}
+
+.comfort-reduce-motion .rail-slot-name {
+  transition: none;
+}
+
+.tool-icon {
+  display: block;
+}
+
+/* Short windows: the rail's 16 slots need ~560px in one column, which a
+   laptop window in landscape doesn't have between the two HUD strips. Drop
+   the group captions (every slot still names itself on hover) and pair the
+   slots up two-wide, which halves the height at the cost of ~40px of
+   width. */
+@media (max-height: 860px) {
+  .tool-rail {
+    top: 56px;
+    bottom: 56px;
+    gap: 6px;
+  }
+
+  .rail-caption {
+    display: none;
+  }
+
+  .rail-group {
+    display: grid;
+    grid-template-columns: repeat(2, 32px);
+    gap: 3px;
+    padding: 5px;
+  }
+
+  .rail-slot {
+    width: 32px;
+    height: 32px;
+  }
+
+  .tool-icon {
+    width: 20px;
+    height: 20px;
+  }
 }
 
 .hud-key {
@@ -408,7 +548,11 @@ body {
    comment) rather than size the box itself against a shrinking column. */
 .canvas-wrap {
   position: absolute;
-  inset: 0;
+  /* Inset past the tool rail: unlike the two HUD strips (which float over
+     letterboxing at the top and bottom), the rail is tall enough that
+     letting the canvas run under it would put live bench pixels behind a
+     control you can't paint through. */
+  inset: 0 0 0 var(--rail-inset);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -537,8 +681,8 @@ body {
 }
 
 .side-panel-swatch {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 9px;
   flex-shrink: 0;
 }

@@ -5,26 +5,24 @@
 // bottom strip for the two controls that genuinely get adjusted mid-experiment
 // (brush width and brush temperature) plus the temperature legend.
 //
-// Everything else -- picking a tool (tool-chest.ts), per-tool configuration
+// Everything else -- picking a tool (tool-rail.ts's left rail, and
+// tool-chest.ts for species), per-tool configuration
 // (side-panel.ts rendered into a modal), the periodic table, comfort settings,
 // save/restore/clear -- lives behind a modal, so no pixel of bench is spent on
 // a control the player isn't using right now.
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 import { formatCelsius } from './format';
-import { CHEST_CATEGORIES, type ChestCategory } from './tool-chest';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
 export interface HudCallbacks {
   /** Active tool -- label/swatch come straight from side-panel.ts's ToolMeta,
-   * so the HUD and the tool-settings modal always agree. Shown inside
-   * whichever category button owns the active tool. */
+   * so the readout, the rail's highlighted slot and the tool-settings modal
+   * all agree. */
   toolLabel: string;
   toolColor: string;
-  /** Which of the five category buttons owns the active tool, if any. */
-  activeCategory: ChestCategory | null;
-  onOpenChest(category: ChestCategory): void;
+  toolCategory: string;
   /** Whether the active tool has any configuration beyond the two brush
    * sliders below; the ⚙ button is hidden entirely when it doesn't, rather
    * than opening an empty modal. */
@@ -113,40 +111,24 @@ export function buildHud(top: HTMLElement, bottom: HTMLElement, cb: HudCallbacks
     left.appendChild(badge);
   }
 
-  // One button per chest category. The button owning the active tool doubles
-  // as the old active-tool chip: it wears the tool's swatch and names it, so
-  // "what's selected" and "change it" are still the same control -- just
-  // narrowed to the shelf the current tool came off.
-  const shelf = el('div', 'hud-shelf');
-  for (const category of CHEST_CATEGORIES) {
-    const active = cb.activeCategory === category.id;
-    const button = el('button', 'hud-cat-btn');
-    button.title = `${category.label} (${category.key})`;
-
-    const name = el('span', 'hud-cat-name');
-    name.textContent = category.short;
-    button.appendChild(name);
-
-    if (active) {
-      const color = cb.toolColor || '#3a3d3a';
-      button.classList.add('active');
-      button.style.setProperty('--swatch', color);
-      const swatch = el('span', 'hud-cat-swatch');
-      swatch.style.background = color;
-      const toolLabel = el('span', 'hud-cat-tool');
-      toolLabel.textContent = cb.toolLabel;
-      button.appendChild(swatch);
-      button.appendChild(toolLabel);
-    } else {
-      const key = el('span', 'hud-key');
-      key.textContent = category.key;
-      button.appendChild(key);
-    }
-
-    button.onclick = () => cb.onOpenChest(category.id);
-    shelf.appendChild(button);
+  // A readout, not a button: picking a tool is the rail's job now (see
+  // tool-rail.ts, which highlights the active slot). This says *what* is
+  // selected in words, which fifteen icons on their own can't.
+  const chip = el('div', 'hud-active-tool');
+  const swatch = el('span', 'hud-active-swatch');
+  swatch.style.background = cb.toolColor || '#3a3d3a';
+  const chipText = el('span', 'hud-active-text');
+  const chipLabel = el('span', 'hud-active-label');
+  chipLabel.textContent = cb.toolLabel;
+  chipText.appendChild(chipLabel);
+  if (cb.toolCategory) {
+    const chipCategory = el('span', 'hud-active-category');
+    chipCategory.textContent = cb.toolCategory;
+    chipText.appendChild(chipCategory);
   }
-  left.appendChild(shelf);
+  chip.appendChild(swatch);
+  chip.appendChild(chipText);
+  left.appendChild(chip);
   top.appendChild(left);
 
   const right = el('div', 'hud-cluster');

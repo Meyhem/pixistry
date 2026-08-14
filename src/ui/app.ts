@@ -32,15 +32,17 @@ import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '.
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
+import { buildToolChest, type ToolChestCallbacks } from './tool-chest';
 import {
-  buildToolChest,
-  CHEST_CATEGORIES,
+  buildToolRail,
+  ERASE_COLOR,
+  GRABBER_COLOR,
+  MIXER_COLOR,
   SELECT_APPARATUS_COLOR,
   SELECT_APPARATUS_LABEL,
-  type ChestCategory,
-  type ToolChestCallbacks,
   type ToolKind as UiToolKind,
-} from './tool-chest';
+  type ToolRailCallbacks,
+} from './tool-rail';
 import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
@@ -115,35 +117,6 @@ function isGlassPolygonTool(t: Tool | null): boolean {
   return t?.kind === 'wall' && t.specId === GLASS_WALL_SPEC_ID;
 }
 
-/** Which of the HUD's five category buttons a tool came off (see
- * tool-chest.ts's CHEST_CATEGORIES) -- the button owning the active tool
- * shows it, so the player can still see what's selected without a separate
- * chip. Mirrors tool-chest.ts's categoryEntries; keep the two in step when
- * adding a tool. */
-function chestCategoryOfTool(t: Tool | null): ChestCategory | null {
-  if (!t) return null;
-  switch (t.kind) {
-    case 'paint':
-      return 'species';
-    case 'wall':
-      // The two wall materials land in different categories: glass is a
-      // vessel you draw, insulator is a thermal barrier.
-      return isGlassPolygonTool(t) ? 'glassware' : 'thermal';
-    case 'flask':
-      return 'glassware';
-    case 'radiator':
-    case 'stirrer':
-      return 'thermal';
-    case 'funnel':
-    case 'tube':
-    case 'filter':
-    case 'sink':
-      return 'flow';
-    default:
-      return 'tools';
-  }
-}
-
 /** Tools drawn as a single straight drag from anchor to release point (see
  * lineDrawStart), rather than a repeated per-move brush paint. */
 function isLineDragTool(t: Tool | null): boolean {
@@ -206,9 +179,9 @@ const TOOL_META_DEFAULTS: ToolMeta = {
 /** The three tools with no per-instance config of their own -- just a
  * label/swatch, everything else the same as TOOL_META_DEFAULTS. */
 const SIMPLE_TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; color: string }> = {
-  erase: { label: 'Erase', color: '#8a8a8a' },
-  mixer: { label: 'Mix', color: '#c9a8ff' },
-  grabber: { label: 'Grab', color: '#f2d94e' },
+  erase: { label: 'Erase', color: ERASE_COLOR },
+  mixer: { label: 'Mix', color: MIXER_COLOR },
+  grabber: { label: 'Grab', color: GRABBER_COLOR },
 };
 
 /** The flask tool's display name -- the vessel shape plus, when it's on,
@@ -395,17 +368,25 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   hudBottom.className = 'hud hud-bottom';
   root.appendChild(hudBottom);
 
-  // canvasWrap is pinned to the whole bench in CSS now (nothing docked left
-  // to subtract), so this only has to size the canvas *inside* it: the
+  // The tool rail (tool-rail.ts) -- same "floats over the bench, sibling of
+  // it" arrangement as the two HUD strips, pinned to the left edge between
+  // them.
+  const toolRail = document.createElement('div');
+  toolRail.className = 'tool-rail';
+  root.appendChild(toolRail);
+
+  // canvasWrap fills the bench minus the tool rail's strip on the left (see
+  // --rail-inset), so this only has to size the canvas *inside* it: the
   // largest box preserving the grid's aspect ratio that still fits, centered,
   // with any letterboxing landing in the wrap's margins -- which is exactly
   // where the HUD strips float, so the chrome mostly covers dead space rather
-  // than bench. Plain CSS aspect-ratio auto-sizing doesn't reliably shrink a
-  // block to fit *both* axes at once (it'll happily overflow one dimension
-  // while respecting the other), so this stays in JS.
+  // than bench. Measuring canvasWrap rather than bench is what keeps the
+  // canvas out from under the rail. Plain CSS aspect-ratio auto-sizing
+  // doesn't reliably shrink a block to fit *both* axes at once (it'll happily
+  // overflow one dimension while respecting the other), so this stays in JS.
   const fitCanvasWrap = (): void => {
-    const availW = Math.floor(bench.clientWidth);
-    const availH = Math.floor(bench.clientHeight);
+    const availW = Math.floor(canvasWrap.clientWidth);
+    const availH = Math.floor(canvasWrap.clientHeight);
     if (availW <= 0 || availH <= 0) return;
     const ratio = gridWidth > 0 && gridHeight > 0 ? gridWidth / gridHeight : 1.6;
     const width = Math.floor(Math.min(availW, availH * ratio));
@@ -550,10 +531,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // The three modal surfaces that replaced the docked toolbar/side panel.
   // Their open state lives here (not in the DOM) for the same reason every
   // other bit of UI state does: render() rebuilds these wholesale.
-  // Which category the chest is showing, or null when it's closed -- the
-  // chest is five modals' worth of content behind five HUD buttons, so "is it
-  // open" and "showing what" are the same piece of state.
-  let chestCategory: ChestCategory | null = null;
+  let chestOpen = false;
   let chestQuery = '';
   let toolSettingsOpen = false;
   let benchMenuOpen = false;
@@ -983,6 +961,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
   function render(): void {
     renderHud();
+    renderToolRail();
     renderToolChest();
     renderBenchMenu();
     renderSidePanel();
@@ -1040,8 +1019,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const hudCallbacks: HudCallbacks = {
       toolLabel: meta.label,
       toolColor: meta.color,
-      activeCategory: chestCategoryOfTool(tool),
-      onOpenChest: openChest,
+      toolCategory: meta.category,
       hasToolSettings: hasToolSettings(meta),
       onOpenToolSettings: () => {
         toolSettingsOpen = true;
@@ -1085,39 +1063,31 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     buildHud(hudTop, hudBottom, hudCallbacks);
   }
 
-  /** Opening a *different* shelf starts from a clean search box: a query
-   * typed to find "Vent" would otherwise hide everything in Glassware. */
-  function openChest(category: ChestCategory): void {
-    if (category !== chestCategory) chestQuery = '';
-    chestCategory = category;
+  function openChest(): void {
+    chestOpen = true;
     render();
   }
 
   function renderToolChest(): void {
-    if (chestCategory === null) {
+    if (!chestOpen) {
       chestOverlay.style.display = 'none';
       chestOverlay.innerHTML = '';
       return;
     }
     chestOverlay.style.display = 'flex';
     const chestCallbacks: ToolChestCallbacks = {
-      category: chestCategory,
       isPaintActive: (specId) => tool?.kind === 'paint' && tool.specId === specId,
-      isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
-      isToolActive: isToolKindActive,
       isPinned: (label) => pinnedLabels.includes(label),
       onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
-      onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
-      onSelectTool: selectToolKind,
       onTogglePin: togglePin,
       onOpenPeriodicTable: () => {
         ptTarget = 'paint';
         ptOpen = true;
-        chestCategory = null;
+        chestOpen = false;
         render();
       },
       onClose: () => {
-        chestCategory = null;
+        chestOpen = false;
         render();
       },
       pinnable: !restrictions,
@@ -1132,13 +1102,36 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (restrictions) {
       const activeRestrictions = restrictions;
       chestCallbacks.isPaintLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
-      chestCallbacks.isWallLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
-      chestCallbacks.isToolLocked = (kind) => {
+    }
+    buildToolChest(chestOverlay, palette, effectivePinnedLabels(), chestCallbacks);
+  }
+
+  /** The left rail: every apparatus and tool as its own icon slot, plus the
+   * species slot that opens the chest above. Rebuilt on every render() like
+   * the HUD -- the active slot has to follow whatever setTool did. */
+  function renderToolRail(): void {
+    const activeSpecies = tool?.kind === 'paint' ? speciesLookup.paletteEntryOf(tool.specId) : null;
+    const railCallbacks: ToolRailCallbacks = {
+      isToolActive: isToolKindActive,
+      isWallActive: (specId) => tool?.kind === 'wall' && tool.specId === specId,
+      onSelectTool: selectToolKind,
+      onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
+      speciesActive: !!activeSpecies,
+      speciesLabel: activeSpecies?.label ?? 'Elements & Compounds',
+      // Unpainted, the slot wears the app's own accent rather than a
+      // stale species color: nothing is selected to be colored *by*.
+      speciesColor: activeSpecies?.color ?? '#6fd3a8',
+      onOpenSpecies: openChest,
+    };
+    if (restrictions) {
+      const activeRestrictions = restrictions;
+      railCallbacks.isWallLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
+      railCallbacks.isToolLocked = (kind) => {
         const simKind = toSimToolKind(kind);
         return simKind === null ? false : !isToolAllowed(activeRestrictions, simKind);
       };
     }
-    buildToolChest(chestOverlay, palette, wallList(), effectivePinnedLabels(), chestCallbacks);
+    buildToolRail(toolRail, wallList(), railCallbacks);
   }
 
   function renderBenchMenu(): void {
@@ -1880,7 +1873,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * through to the tube-draw cancel below, and the single-letter shortcuts
    * are suppressed while one is open (they'd otherwise fire underneath it). */
   function anyModalOpen(): boolean {
-    return chestCategory !== null || toolSettingsOpen || benchMenuOpen || ptOpen || settingsOverlay.style.display !== 'none';
+    return chestOpen || toolSettingsOpen || benchMenuOpen || ptOpen || settingsOverlay.style.display !== 'none';
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -1891,14 +1884,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
 
     if (event.key === 'Escape') {
-      if (benchMenuOpen || toolSettingsOpen || chestCategory !== null || ptOpen) {
+      if (benchMenuOpen || toolSettingsOpen || chestOpen || ptOpen) {
         // Innermost-first: the periodic table can be opened *from* the chest.
         if (ptOpen) {
           ptOpen = false;
           ptSelectedSymbol = null;
         } else if (benchMenuOpen) benchMenuOpen = false;
         else if (toolSettingsOpen) toolSettingsOpen = false;
-        else chestCategory = null;
+        else chestOpen = false;
         render();
         return;
       }
@@ -1915,15 +1908,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // Now that picking a tool means opening a modal, the things you do most
     // often between picks get keys of their own -- otherwise the redesign
     // would trade screen space for clicks.
-    const shelf = CHEST_CATEGORIES.find((c) => c.key === event.key);
-    if (shelf) {
+    if (event.key === 't' || event.key === 'T') {
       event.preventDefault();
-      openChest(shelf.id);
-    } else if (event.key === 't' || event.key === 'T') {
-      // T kept as-is from when there was one chest button: it opens the
-      // first shelf, the one players reach for most.
-      event.preventDefault();
-      openChest('species');
+      openChest();
     } else if (event.key === 'e' || event.key === 'E') {
       if (!hasToolSettings(describeToolMeta(tool))) return;
       event.preventDefault();
