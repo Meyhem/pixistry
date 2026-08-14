@@ -4,18 +4,35 @@
 // and the paintable species it participates in (pure element, plus any
 // paintable compounds from periodic-data.ts's COMPOUNDS_FOR_ELEMENT), each
 // pickable and pinnable from right there.
+//
+// The picker (grid + detail pane) is exported separately from the modal shell:
+// the Tool Chest renders it as its own body, since the periodic table *is* the
+// species picker now rather than a reference chart linked from the bottom of a
+// flat 149-entry list.
 import type { PaletteEntry } from '../sim/species';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { formatCelsius } from './format';
 import { CATEGORY_HUE, CATEGORY_LABEL, COMPOUNDS_FOR_ELEMENT, ELEMENTS, PURE_FOR_ELEMENT } from './periodic-data';
 import { el, propRow } from './dom';
 
-export interface PeriodicTableCallbacks {
+export interface PeriodicTablePickerCallbacks {
   selectedSymbol: string | null;
   isPinned(label: string): boolean;
   onSelectElement(symbol: string): void;
   onSelectSpecies(specId: number): void;
   onTogglePin(label: string): void;
+  /** Whether the pin (📌) button appears on the detail pane's species rows
+   * -- false in campaign mode, where the toolbar's species list is the
+   * scenario's fixed reagent set rather than the player's own pins. */
+  pinnable?: boolean;
+  /** Campaign restrictions (absent in sandbox, which locks nothing): a
+   * locked species renders greyed with a padlock and an element whose whole
+   * species list is locked isn't clickable at all, rather than opening onto
+   * a detail pane where nothing can be picked. */
+  isPaintLocked?(specId: number): boolean;
+}
+
+export interface PeriodicTableCallbacks extends PeriodicTablePickerCallbacks {
   onClose(): void;
 }
 
@@ -46,14 +63,28 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
 
   const body = el('div', 'pt-modal-body');
   modal.appendChild(body);
+  buildPeriodicTablePicker(body, palette, cb);
+}
+
+/** The picker itself -- the element grid plus the selected element's detail
+ * pane -- rendered into whatever container it's handed, with no modal shell
+ * of its own. Two callers: the standalone modal above (the species picker for
+ * a funnel's payload, a tube/filter allow-list) and the Tool Chest, which
+ * uses it as its whole body (see tool-chest.ts). */
+export function buildPeriodicTablePicker(body: HTMLElement, palette: readonly PaletteEntry[], cb: PeriodicTablePickerCallbacks): void {
+  body.innerHTML = '';
 
   const grid = el('div', 'pt-grid');
   const byLabel = new Map(palette.map((entry) => [entry.label, entry]));
 
   for (const element of ELEMENTS) {
-    const supported = element.symbol in PURE_FOR_ELEMENT;
     const hue = CATEGORY_HUE[element.category];
     const isSelected = element.symbol === cb.selectedSymbol;
+    // An element with nothing pickable left under a campaign's restrictions
+    // is treated exactly like an unsimulated one: dimmed and unclickable,
+    // rather than clickable onto an all-padlocks detail pane.
+    const locked = cb.isPaintLocked ? speciesFor(element.symbol, byLabel).every((entry) => cb.isPaintLocked?.(entry.specId)) : false;
+    const supported = element.symbol in PURE_FOR_ELEMENT && !locked;
 
     const cell = el('button', 'pt-cell');
     cell.style.gridColumn = String(element.group);
@@ -61,7 +92,8 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
     cell.style.setProperty('--hue', String(hue));
     cell.classList.toggle('supported', supported);
     cell.classList.toggle('selected', isSelected);
-    cell.title = `${element.name} (${CATEGORY_LABEL[element.category]})${supported ? '' : ' — not simulated'}`;
+    const note = locked ? ' — not available in this experiment' : supported ? '' : ' — not simulated';
+    cell.title = `${element.name} (${CATEGORY_LABEL[element.category]})${note}`;
     cell.disabled = !supported;
     if (supported) cell.onclick = () => cb.onSelectElement(element.symbol);
 
@@ -119,22 +151,28 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
   detail.appendChild(pickableTitle);
 
   const speciesList = el('div', 'pt-species-list');
-  const compoundLabels = COMPOUNDS_FOR_ELEMENT[selectedElement.symbol] ?? [];
-  const speciesLabels = pureLabel ? [pureLabel, ...compoundLabels] : compoundLabels;
-  for (const label of speciesLabels) {
-    const entry = byLabel.get(label);
-    if (!entry) continue;
-    const isCompound = label !== pureLabel;
+  for (const entry of speciesFor(selectedElement.symbol, byLabel)) {
+    const isCompound = entry.label !== pureLabel;
+    const locked = !!cb.isPaintLocked?.(entry.specId);
     const row = el('div', 'pt-species-row');
 
     const pickButton = el('button', 'pt-species-btn');
     pickButton.style.setProperty('--swatch', entry.color);
     pickButton.style.color = contrastTextColor(entry.color);
     pickButton.style.textShadow = contrastTextShadow(entry.color);
-    pickButton.textContent = `${entry.label} — ${isCompound ? 'compound' : 'pure element'}`;
+    pickButton.textContent = `${locked ? '🔒 ' : ''}${entry.label} — ${isCompound ? 'compound' : 'pure element'}`;
+    pickButton.disabled = locked;
+    if (locked) {
+      pickButton.classList.add('locked');
+      pickButton.title = 'Not available in this experiment';
+    }
     pickButton.onclick = () => cb.onSelectSpecies(entry.specId);
     row.appendChild(pickButton);
 
+    if (cb.pinnable === false) {
+      speciesList.appendChild(row);
+      continue;
+    }
     const pinned = cb.isPinned(entry.label);
     const pinButton = el('button', 'pin-btn');
     pinButton.classList.toggle('pinned', pinned);
@@ -146,4 +184,18 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
     speciesList.appendChild(row);
   }
   detail.appendChild(speciesList);
+}
+
+/** Every paintable species an element participates in -- its pure form first,
+ * then its compounds -- resolved against the live palette by label (entries
+ * periodic-data.ts names but the palette doesn't carry are skipped). Shared by
+ * the detail pane and the grid's "is anything here still unlocked?" check so
+ * the two can't disagree about what an element offers. */
+function speciesFor(symbol: string, byLabel: Map<string, PaletteEntry>): PaletteEntry[] {
+  const pureLabel = PURE_FOR_ELEMENT[symbol];
+  const labels = [...(pureLabel ? [pureLabel] : []), ...(COMPOUNDS_FOR_ELEMENT[symbol] ?? [])];
+  return labels.flatMap((label) => {
+    const entry = byLabel.get(label);
+    return entry ? [entry] : [];
+  });
 }

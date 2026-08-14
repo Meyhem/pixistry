@@ -487,36 +487,6 @@ body {
   opacity: 1;
 }
 
-.pt-open-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 28px;
-  padding: 0 14px;
-  border-radius: 8px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-  background: transparent;
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.pt-dots {
-  display: grid;
-  grid-template-columns: repeat(3, 3px);
-  grid-template-rows: repeat(3, 3px);
-  gap: 2px;
-}
-
-.pt-dot {
-  width: 3px;
-  height: 3px;
-  background: currentColor;
-  display: block;
-}
-
 .pause-btn,
 .step-btn {
   height: 28px;
@@ -1636,12 +1606,6 @@ input[type='range'] {
 /* Campaign mode: locked toolbar entries ------------------------------------ */
 
 .palette-btn.locked,
-.pt-open-btn.locked {
-  opacity: 0.45;
-  filter: grayscale(0.6);
-  cursor: not-allowed;
-}
-
 .dropdown-select option:disabled {
   color: var(--text-faint);
 }
@@ -1928,7 +1892,9 @@ input[type='range'] {
 /* --- Tool Chest modal (tool-chest.ts) ------------------------------------ */
 
 .chest-modal {
-  width: min(820px, 96vw);
+  /* Matches .pt-modal: the body *is* the periodic table (18 columns plus the
+     detail pane), so the chest needs the same room the standalone modal has. */
+  width: min(1000px, 96vw);
 }
 
 .chest-search {
@@ -1978,11 +1944,6 @@ input[type='range'] {
   font-size: 13px;
   color: var(--text-muted);
   padding: 8px 2px;
-}
-
-.chest-footer {
-  border-top: 1px solid var(--panel-border);
-  padding-top: 14px;
 }
 
 /* --- Tool settings modal (side-panel.ts in a modal shell) ---------------- */

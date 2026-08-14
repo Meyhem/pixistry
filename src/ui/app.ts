@@ -438,6 +438,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   root.appendChild(chestOverlay);
   closeOnBackdropClick(chestOverlay, () => {
     chestOpen = false;
+    ptSelectedSymbol = null;
     render();
   });
 
@@ -1126,14 +1127,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       isPinned: (label) => pinnedLabels.includes(label),
       onSelectPaint: (specId) => setTool({ kind: 'paint', specId }),
       onTogglePin: togglePin,
-      onOpenPeriodicTable: () => {
-        ptTarget = 'paint';
-        ptOpen = true;
-        chestOpen = false;
+      // The chest's periodic-table body shares ptSelectedSymbol with the
+      // standalone modal -- the two are never open at once (the chest is the
+      // paint picker, the modal is the funnel/tube/filter one), and both
+      // clear it on close.
+      selectedSymbol: ptSelectedSymbol,
+      onSelectElement: (symbol) => {
+        ptSelectedSymbol = symbol;
         render();
       },
       onClose: () => {
         chestOpen = false;
+        ptSelectedSymbol = null;
         render();
       },
       pinnable: !restrictions,
@@ -1143,7 +1148,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetQuery: (value) => {
         chestQuery = value;
       },
-      periodicTableLocked: !!restrictions && restrictions.paintSpecies !== 'all',
     };
     if (restrictions) {
       const activeRestrictions = restrictions;
@@ -1480,12 +1484,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           render();
         },
         onTogglePin: togglePin,
+        pinnable: !restrictions,
         onClose: () => {
           ptOpen = false;
           ptSelectedSymbol = null;
           render();
         },
       };
+      if (restrictions) {
+        const activeRestrictions = restrictions;
+        ptCallbacks.isPaintLocked = (specId) => !isPaintAllowed(activeRestrictions, specId);
+      }
       buildPeriodicTable(ptOverlay, palette, ptCallbacks);
     } else {
       ptOverlay.style.display = 'none';
@@ -1826,6 +1835,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   canvas.addEventListener('pointerdown', (event) => {
+    // Left button only. A right-click on a polygon draw means "finish here"
+    // (see the contextmenu handler below), and the browser fires pointerdown
+    // before contextmenu -- without this guard the right-click first committed
+    // the corner under the cursor and *then* finished, so the segment the user
+    // was aiming away from got placed anyway.
+    if (event.button !== 0) return;
     isPointerDown = true;
     const { x, y } = gridCoordsFromEvent(event);
     if (tool?.kind === 'grabber') {
@@ -1906,8 +1921,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     },
     { passive: false },
   );
-  // Right-click finishes the in-progress tube draw (commits every already-
-  // clicked segment) rather than opening the browser context menu.
+  // Right-click finishes the in-progress tube draw -- it commits every
+  // already-clicked segment and drops the rubber-band segment still tracking
+  // the cursor (which was never a click, so it was never a corner) -- rather
+  // than opening the browser context menu.
   canvas.addEventListener('contextmenu', (event) => {
     if (!isPolygonTool(tool)) return;
     event.preventDefault();
@@ -1929,13 +1946,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     if (event.key === 'Escape') {
       if (benchMenuOpen || toolSettingsOpen || chestOpen || ptOpen) {
-        // Innermost-first: the periodic table can be opened *from* the chest.
+        // Innermost-first: the standalone periodic table (the funnel/tube/
+        // filter species picker) opens over the side panel.
         if (ptOpen) {
           ptOpen = false;
           ptSelectedSymbol = null;
         } else if (benchMenuOpen) benchMenuOpen = false;
         else if (toolSettingsOpen) toolSettingsOpen = false;
-        else chestOpen = false;
+        else {
+          chestOpen = false;
+          ptSelectedSymbol = null;
+        }
         render();
         return;
       }

@@ -324,7 +324,7 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   container.appendChild(
     hintBox(
       meta.tubePanel === 'config'
-        ? 'Click to place each knee, right-click to finish (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
+        ? 'Click to place each knee, right-click to finish at the last knee placed (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
         : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. These settings only affect this tube's future suction, not cargo already inside.",
       'HOW IT WORKS',
     ),
@@ -421,7 +421,7 @@ function addGlassPanel(container: HTMLElement, meta: ToolMeta): void {
   addDivider(container);
   container.appendChild(
     hintBox(
-      'Click to place each corner, right-click to finish, Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.',
+      'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.',
       'HOW IT WORKS',
     ),
   );

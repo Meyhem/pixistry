@@ -186,9 +186,12 @@ probability gating, energy bookkeeping).
   union. Under 860px of window height it drops the group captions and pairs slots two-wide, since 16 slots
   in one column need ~560px. Species are the one thing that can't have a slot *each* — there are 149 — so
   the Paint slot (second in the TOOLS group, between Select and Erase, since it's the tool used most
-  rather than a category of its own) opens the Tool Chest (`ui/tool-chest.ts`), now purely the searchable
-  species picker with the periodic table hanging off its footer, and renames itself to whichever species
-  is loaded. Everything else is still a modal over the
+  rather than a category of its own) opens the Tool Chest (`ui/tool-chest.ts`), now purely the species
+  picker, and renames itself to whichever species is loaded. The chest's body *is* the periodic table
+  (`ui/periodic-table.ts` exports the picker — grid plus detail pane — separately from its modal shell for
+  exactly this): pick an element, then one of the species it forms. The flat alphabetical species grid it
+  replaced survives only as the search-results view, since a formula query like `CuSO4(aq)` has no element
+  to hang off. Everything else is still a modal over the
   canvas: the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell instead of
   a docked column), the periodic table, the bench menu, and comfort settings. Keyboard: `T` species chest,
   `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This

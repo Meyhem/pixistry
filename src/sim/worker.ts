@@ -53,7 +53,7 @@ import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import { moveFlaskInstance, placeFlaskInstance, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
 import { stampGlass } from './apparatus';
-import { GLASS_WALL_SPEC_ID } from './walls';
+import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 import type { Point } from './tube-shapes';
 
 const WIDTH = 160;
@@ -268,7 +268,18 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       const thermal = species.thermalOf(msg.specId);
       const tempK = Math.min(MAX_TEMP_K, Math.max(0, celsiusToKelvin(msg.tempC)));
       const { u, phase } = energyForTemperature(thermal, mass, tempK);
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => grid.set(px, py, msg.specId, phase, u));
+      // Matter never overwrites a wall cell: painting a species across a
+      // flask, funnel or hand-drawn glass wall used to punch holes straight
+      // through it (the brush is a filled circle, so a single click on a
+      // vessel wall deleted a chunk of it). Walls are only removable with the
+      // eraser now. A wall *tool* still paints over walls -- that's how you
+      // swap glass for insulator -- hence the incoming-specId check rather
+      // than a blanket skip.
+      const paintingWall = isWallSpecId(msg.specId);
+      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
+        if (!paintingWall && isWallSpecId(grid.specId[grid.index(px, py)] as number)) return;
+        grid.set(px, py, msg.specId, phase, u);
+      });
       break;
     }
     case 'paintRadiator': {
