@@ -6,7 +6,7 @@
 import type { WallKind } from './walls';
 import { SinkMaskValue } from './grid';
 import { SpeciesId } from './species-data';
-import type { FlaskFacing } from './flask-shapes';
+import type { FlaskFacing, FlaskKind } from './flask-shapes';
 import type { FunnelFacing } from './apparatus-shapes';
 
 /** Mirrors the Tool Chest's apparatus tool set (see src/ui/tool-chest.ts's
@@ -31,7 +31,17 @@ export type SetupCommand =
   | { readonly kind: 'rect'; readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly specId: number; readonly tempC?: number }
   | { readonly kind: 'wallRect'; readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly wall: WallKind }
   | { readonly kind: 'wallLine'; readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number; readonly width: number; readonly wall: WallKind }
-  | { readonly kind: 'flask'; readonly x: number; readonly y: number; readonly facing: FlaskFacing; readonly sizeScale: number; readonly stirred: boolean }
+  | {
+      readonly kind: 'flask';
+      readonly x: number;
+      readonly y: number;
+      readonly facing: FlaskFacing;
+      readonly sizeScale: number;
+      readonly stirred: boolean;
+      /** Which piece of glassware -- defaults to the Erlenmeyer, which is
+       * what every scenario authored before the beaker existed means. */
+      readonly glassware?: FlaskKind;
+    }
   | {
       readonly kind: 'funnel';
       readonly x: number;

@@ -70,7 +70,7 @@ export class SimGrid {
   readonly tubeMask: Uint8Array;
   /** Filter apparatus overlay -- same "fixed background field, not matter"
    * convention as stirrerMask/tubeMask above: painted by the filter tool's
-   * brush (see worker.ts's 'paintFilter' handler) into a per-cell flag
+   * one-cell-wide line drag (see worker.ts's 'paintFilterLine' handler) into a per-cell flag
    * (nonzero = a filter membrane occupies this cell), left untouched by
    * set/clear/swap, and read every tick by movement.ts to gate entry: a
    * filtered cell is a valid destination only for species in the current

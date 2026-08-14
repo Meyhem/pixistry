@@ -31,7 +31,7 @@ export type ToolKind =
   | 'sink'
   | 'vent'
   | 'flask-erlenmeyer'
-  | 'flask-erlenmeyer-stirred'
+  | 'flask-beaker'
   | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
@@ -214,10 +214,13 @@ export function buildToolChest(
     const insulatorWall = walls.find((w) => w.kind === 'insulator');
 
     const glassware: ChestEntry[] = [
+      // One entry per vessel shape -- whether it comes with a stirrer is a
+      // setting inside the tool's own settings panel (see side-panel.ts's
+      // flask panel), not a separate chest entry per combination.
       toolEntry('Erlenmeyer', FUNNEL_COLOR, 'flask-erlenmeyer', cb),
-      toolEntry('Erlenmeyer (stirred)', FUNNEL_COLOR, 'flask-erlenmeyer-stirred', cb),
+      toolEntry('Beaker', FUNNEL_COLOR, 'flask-beaker', cb),
     ];
-    if (glassWall) glassware.push(wallEntry(`${glassWall.label} (free draw)`, glassWall, cb));
+    if (glassWall) glassware.push(wallEntry(`${glassWall.label} (polygon)`, glassWall, cb));
 
     const thermal: ChestEntry[] = [];
     if (insulatorWall) thermal.push(wallEntry(insulatorWall.label, insulatorWall, cb));

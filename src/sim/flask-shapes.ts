@@ -1,10 +1,15 @@
-// Hand-authored pixel shape for the premade Erlenmeyer-flask apparatus: a
-// conical body (straight sloped sides, flat closed base) narrowing up into a
-// straight glass neck with an open mouth at the top -- same "outline only,
-// not a filled triangle" convention as the funnel (apparatus-shapes.ts),
-// so the flask is a hollow vessel with real matter poured in through its
-// mouth. Unlike the funnel there's no spout: the base row is fully closed
-// (a real Erlenmeyer sits sealed on a benchtop), only the neck's top is open.
+// Hand-authored pixel shapes for the premade glassware apparatus -- two
+// kinds, both hollow open-topped vessels built from the same "outline only,
+// not a filled shape" convention as the funnel (apparatus-shapes.ts), so
+// real matter is poured in through the mouth:
+//
+//   'erlenmeyer' -- a conical body (straight sloped sides, flat closed base)
+//                   narrowing up into a straight glass neck.
+//   'beaker'     -- straight vertical walls on a flat closed base, mouth as
+//                   wide as the body.
+//
+// Unlike the funnel neither has a spout: the base row is fully closed (real
+// glassware sits sealed on a benchtop), only the top row is open.
 //
 // The canonical shape is authored once for facing "up" (mouth up, base
 // resting at the anchor) at sizeScale 1, then rotated for the other 7
@@ -12,6 +17,12 @@
 import type { Offset } from './apparatus-shapes';
 
 export type FlaskFacing = 'up' | 'up-right' | 'right' | 'down-right' | 'down' | 'down-left' | 'left' | 'up-left';
+
+/** Which piece of glassware the flask tool stamps. Both share the tool, the
+ * facing/size settings and the stirred toggle -- only the outline differs. */
+export type FlaskKind = 'erlenmeyer' | 'beaker';
+
+export const DEFAULT_FLASK_KIND: FlaskKind = 'erlenmeyer';
 
 export const FLASK_FACINGS: readonly FlaskFacing[] = ['up', 'up-right', 'right', 'down-right', 'down', 'down-left', 'left', 'up-left'];
 
@@ -23,6 +34,11 @@ const NECK_HALF_WIDTH = 3; // half-width of the straight neck -> 7px across at s
 const BASE_HALF_WIDTH = 12; // half-width of the flat base -> 25px across at scale 1
 const CONE_ROWS = 16; // rows the conical body tapers over, from base up to the neck
 const NECK_ROWS = 10; // straight neck rows above the cone
+// A beaker is a plain straight-sided cylinder: narrower than the Erlenmeyer's
+// base but taller than its cone, so the two read as clearly different vessels
+// at the same size scale.
+const BEAKER_HALF_WIDTH = 10; // -> 21px across at scale 1
+const BEAKER_ROWS = 22; // straight wall rows above the closed base
 
 interface ScaledProfile {
   readonly neckHalfWidth: number;
@@ -58,6 +74,40 @@ function buildCanonicalCells(p: ScaledProfile): Offset[] {
     cells.push({ dx: halfWidth, dy });
   }
   for (let dx = -p.baseHalfWidth; dx <= p.baseHalfWidth; dx++) cells.push({ dx, dy: 0 });
+  return cells;
+}
+
+interface BeakerProfile {
+  readonly halfWidth: number;
+  readonly rows: number;
+}
+
+function scaledBeakerProfile(sizeScale: number): BeakerProfile {
+  return {
+    halfWidth: Math.max(2, Math.round(BEAKER_HALF_WIDTH * sizeScale)),
+    rows: Math.max(2, Math.round(BEAKER_ROWS * sizeScale)),
+  };
+}
+
+/** Canonical "facing up" beaker outline: two straight vertical wall runs on
+ * a closed flat base row at the anchor (dy = 0), open across the top. */
+function buildCanonicalBeakerCells(p: BeakerProfile): Offset[] {
+  const cells: Offset[] = [];
+  for (let row = 1; row <= p.rows; row++) {
+    cells.push({ dx: -p.halfWidth, dy: -row });
+    cells.push({ dx: p.halfWidth, dy: -row });
+  }
+  for (let dx = -p.halfWidth; dx <= p.halfWidth; dx++) cells.push({ dx, dy: 0 });
+  return cells;
+}
+
+/** The beaker's open interior, same "strictly between the wall edges" rule
+ * as buildCanonicalReservoirCells. */
+function buildCanonicalBeakerReservoirCells(p: BeakerProfile): Offset[] {
+  const cells: Offset[] = [];
+  for (let row = 1; row <= p.rows; row++) {
+    for (let dx = -(p.halfWidth - 1); dx <= p.halfWidth - 1; dx++) cells.push({ dx, dy: -row });
+  }
   return cells;
 }
 
@@ -110,11 +160,21 @@ export interface FlaskShape {
   readonly reservoirCells: readonly Offset[];
 }
 
-export function flaskShapeFor(facing: FlaskFacing, sizeScale: number): FlaskShape {
-  const p = scaledProfile(sizeScale);
-  const cells = buildCanonicalCells(p).map((o) => rotateFlaskOffset(o, facing));
-  const reservoirCells = buildCanonicalReservoirCells(p).map((o) => rotateFlaskOffset(o, facing));
-  return { cells, reservoirCells };
+export function flaskShapeFor(facing: FlaskFacing, sizeScale: number, kind: FlaskKind = DEFAULT_FLASK_KIND): FlaskShape {
+  const canonical =
+    kind === 'beaker'
+      ? (() => {
+          const p = scaledBeakerProfile(sizeScale);
+          return { cells: buildCanonicalBeakerCells(p), reservoirCells: buildCanonicalBeakerReservoirCells(p) };
+        })()
+      : (() => {
+          const p = scaledProfile(sizeScale);
+          return { cells: buildCanonicalCells(p), reservoirCells: buildCanonicalReservoirCells(p) };
+        })();
+  return {
+    cells: canonical.cells.map((o) => rotateFlaskOffset(o, facing)),
+    reservoirCells: canonical.reservoirCells.map((o) => rotateFlaskOffset(o, facing)),
+  };
 }
 
 /** Bounding box of cells+reservoirCells together, in offsets from the

@@ -4,7 +4,7 @@
 // types from a plain data module instead of reaching into the worker's own
 // entry point -- worker.ts re-exports nothing.
 import type { FunnelFacing } from './apparatus-shapes';
-import type { FlaskFacing } from './flask-shapes';
+import type { FlaskFacing, FlaskKind } from './flask-shapes';
 import type { SinkMaskValue } from './grid';
 import type { GoalProgress } from './objectives';
 import type { Scenario } from './scenario-data';
@@ -95,7 +95,10 @@ export type MainToWorkerMessage =
    * the whole-number reaction-rate multiplier; 0 is a no-op rather than an
    * eraser (use 'erase' to remove a pad). */
   | { type: 'paintCatalyst'; x: number; y: number; radius: number; strength: number }
-  | { type: 'paintFilter'; x: number; y: number; radius: number }
+  /** Draws a one-cell-wide filter line from (x0,y0) to (x1,y1) -- a filter
+   * is a precise membrane, not a brush splash, so it's a single straight
+   * drag with no width of its own (see .filterMask in grid.ts). */
+  | { type: 'paintFilterLine'; x0: number; y0: number; x1: number; y1: number }
   | { type: 'setFilterSpecies'; species: number[] }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
@@ -125,7 +128,12 @@ export type MainToWorkerMessage =
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
   | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
-  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean }
+  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
+  /** Stamps a one-cell-wide glass polyline through `points` (each pair of
+   * consecutive points joined by a Bresenham line) -- the Glass tool draws
+   * vessel walls as a clicked polygon chain, the same interaction as the
+   * conveyor tube, rather than as a free-draw brush. */
+  | { type: 'placeGlassPolyline'; points: Point[] }
   /** Draws a collection port line -- a Sink or a Vent, which differ only in
    * which tally they feed (see grid.ts's SinkMaskValue). One message for
    * both, since the drawn geometry is identical. */

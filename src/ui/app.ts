@@ -21,7 +21,7 @@ import { SCENARIOS, type Restrictions, type Scenario, type ToolKind as SimToolKi
 import type { PaletteEntry } from '../sim/species';
 import { EMPTY, PhaseCode, SinkMaskValue } from '../sim/grid';
 import { BORDER_RANGE_K } from '../render/renderer';
-import { getWall, isWallSpecId, wallList } from '../sim/walls';
+import { getWall, GLASS_WALL_SPEC_ID, isWallSpecId, wallList } from '../sim/walls';
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
@@ -29,7 +29,7 @@ import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
-import { DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing } from '../sim/flask-shapes';
+import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import {
   buildToolChest,
@@ -90,17 +90,38 @@ type Tool =
   // pointerup -- is identical, and only the committed mask value, the
   // swatch, and the tally panel's heading differ.
   | { kind: 'sink'; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
-  | { kind: 'flask'; stirred: boolean }
+  | { kind: 'flask'; flask: FlaskKind }
   | { kind: 'select-apparatus' };
 
-/** Wall-drawing tools (Glass/Insulator, and Filter -- also drawn as a
- * precise line) want the brush-width slider's minimum (1) to paint exactly
- * one pixel, for drawing precise vessel walls -- forEachCellInRadius's
- * radius is one less than the displayed width for these tools only.
- * Species/erase/radiator/stirrer keep radius === width unchanged, since a
- * wider default splash is what those actually want. */
+/** Wall-drawing tools (Insulator, and the Sink/Vent line) want the brush-
+ * width slider's minimum (1) to paint exactly one pixel, for drawing precise
+ * vessel walls -- forEachCellInRadius's radius is one less than the displayed
+ * width for these tools only. Species/erase/radiator/stirrer keep
+ * radius === width unchanged, since a wider default splash is what those
+ * actually want. (Glass and Filter no longer appear here at all: both are
+ * drawn as fixed one-cell-wide lines now, with no width to scale.) */
 function wallBrushRadius(tool: Tool | null, width: number): number {
-  return tool?.kind === 'wall' || tool?.kind === 'filter' || tool?.kind === 'sink' ? Math.max(0, width - 1) : width;
+  return tool?.kind === 'wall' || tool?.kind === 'sink' ? Math.max(0, width - 1) : width;
+}
+
+/** Glass is the one wall material drawn as a clicked polygon chain rather
+ * than a free-draw brush (the same interaction as the conveyor tube), since
+ * what players actually want from it is precise, cleanly joined vessel
+ * walls. Insulator keeps the brush. */
+function isGlassPolygonTool(t: Tool | null): boolean {
+  return t?.kind === 'wall' && t.specId === GLASS_WALL_SPEC_ID;
+}
+
+/** Tools drawn as a single straight drag from anchor to release point (see
+ * lineDrawStart), rather than a repeated per-move brush paint. */
+function isLineDragTool(t: Tool | null): boolean {
+  return t?.kind === 'sink' || t?.kind === 'filter';
+}
+
+/** Tools drawn as a clicked point chain, committed on right-click and
+ * discarded on Escape (see polyDrawPoints). */
+function isPolygonTool(t: Tool | null): boolean {
+  return t?.kind === 'tube' || isGlassPolygonTool(t);
 }
 
 /** Maps the toolbar's own ToolKind (kept separate from scenario-data.ts's --
@@ -112,7 +133,7 @@ function wallBrushRadius(tool: Tool | null, width: number): number {
 function toSimToolKind(kind: UiToolKind): SimToolKind | null {
   switch (kind) {
     case 'flask-erlenmeyer':
-    case 'flask-erlenmeyer-stirred':
+    case 'flask-beaker':
       return 'flask';
     case 'select-apparatus':
       return null;
@@ -146,6 +167,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   tubePanel: 'none',
   filterPanel: 'none',
   flaskPanel: 'none',
+  glassPanel: 'none',
   sinkPanel: 'none',
 };
 
@@ -156,6 +178,14 @@ const SIMPLE_TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; c
   mixer: { label: 'Mix', color: '#c9a8ff' },
   grabber: { label: 'Grab', color: '#f2d94e' },
 };
+
+/** The flask tool's display name -- the vessel shape plus, when it's on,
+ * the stirred setting (one tool with a toggle, rather than the two separate
+ * "Erlenmeyer"/"Erlenmeyer (stirred)" tools this replaced). */
+function flaskLabel(kind: FlaskKind, stirred: boolean): string {
+  const base = kind === 'beaker' ? 'Beaker' : 'Erlenmeyer';
+  return stirred ? `${base} (stirred)` : base;
+}
 
 function loadPinnedLabels(): string[] {
   try {
@@ -381,6 +411,34 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   const sidePanel = document.createElement('div');
   sidePanel.className = 'side-panel side-panel-modal';
 
+  // The tool-settings modal *shell* is built once here for the same reason
+  // the panel body above is: renderSidePanel runs on every worker frame for
+  // some tools (select-apparatus, sink), and a shell rebuilt at 60Hz replaces
+  // the ✕ button between a real mouse's pointerdown and pointerup -- so the
+  // browser never fires a click and the modal simply could not be dismissed
+  // by clicking it (most visible with the Select tool, whose panel rebuilds
+  // every single frame). Only the title text and the overlay's display are
+  // touched per render now.
+  const toolSettingsModal = document.createElement('div');
+  toolSettingsModal.className = 'pt-modal tool-settings-modal';
+  const toolSettingsHeader = document.createElement('div');
+  toolSettingsHeader.className = 'pt-modal-header';
+  const toolSettingsTitle = document.createElement('div');
+  toolSettingsTitle.className = 'pt-modal-title';
+  toolSettingsHeader.appendChild(toolSettingsTitle);
+  const toolSettingsClose = document.createElement('button');
+  toolSettingsClose.className = 'pt-close-btn';
+  toolSettingsClose.textContent = '✕';
+  toolSettingsClose.title = 'Close (Esc)';
+  toolSettingsClose.onclick = () => {
+    toolSettingsOpen = false;
+    render();
+  };
+  toolSettingsHeader.appendChild(toolSettingsClose);
+  toolSettingsModal.appendChild(toolSettingsHeader);
+  toolSettingsModal.appendChild(sidePanel);
+  toolSettingsOverlay.appendChild(toolSettingsModal);
+
   const benchMenuOverlay = document.createElement('div');
   benchMenuOverlay.className = 'pt-overlay';
   benchMenuOverlay.style.display = 'none';
@@ -496,6 +554,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // 45-degree steps (8 facings), unlike the funnel's 4.
   let flaskFacing: FlaskFacing = 'up';
   let flaskSizeScale = DEFAULT_FLASK_SIZE_SCALE;
+  // Whether a placed flask comes with a stirrer over its interior. One
+  // setting shared by both glassware shapes (see side-panel.ts's flask
+  // panel), replacing the separate "Erlenmeyer (stirred)" chest entry.
+  let flaskStirred = false;
 
   // select-apparatus tool's selection/edit-draft/drag state for both
   // apparatus types -- see apparatus-selection.ts.
@@ -517,19 +579,21 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     send({ type: 'setFilterSpecies', species: [...filterSpecies] });
   }
 
-  // In-progress polygon draw (tool === 'tube'): points already committed by
-  // a click, plus a live rubber-band preview point tracking the cursor
-  // (snapped from the last committed point -- see updateTubeDrawPreview).
-  // Cleared back to [] on right-click/Escape (see finishOrCancelTubeDraw).
-  let tubeDrawPoints: Point[] = [];
-  let tubeDrawPreview: Point | null = null;
+  // In-progress polygon draw (see isPolygonTool -- the conveyor tube and the
+  // Glass tool share the interaction): points already committed by a click,
+  // plus a live rubber-band preview point tracking the cursor (snapped from
+  // the last committed point). Cleared back to [] on right-click/Escape (see
+  // finishPolyDraw/cancelPolyDraw).
+  let polyDrawPoints: Point[] = [];
+  let polyDrawPreview: Point | null = null;
 
-  // In-progress sink line draw (tool === 'sink'): set on pointerdown, held
-  // through the drag, and committed as one paintSinkLine message on
-  // pointerup -- see the window pointerup handler below. Unlike every brush
-  // tool, a sink is a single free-form drag from anchor to release point,
-  // not a repeated per-move paint.
-  let sinkDrawStart: Point | null = null;
+  // In-progress straight-line draw (see isLineDragTool -- the Sink/Vent and
+  // the Filter share it): set on pointerdown, held through the drag, and
+  // committed as one paintSinkLine/paintFilterLine message on pointerup (see
+  // the window pointerup handler below). Unlike every brush tool, these are a
+  // single free-form drag from anchor to release point, not a repeated
+  // per-move paint.
+  let lineDrawStart: Point | null = null;
 
   // Label/color/palette-entry lookup for the probe, funnel field display,
   // and debug hook (see species-lookup.ts).
@@ -569,6 +633,19 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
     if (t.kind === 'wall') {
       const wall = getWall(t.specId);
+      // Glass draws as a polygon chain stamped at ambient temperature (see
+      // isGlassPolygonTool and the worker's 'placeGlassPolyline'), so it has
+      // neither a brush width nor a brush temperature to offer.
+      if (isGlassPolygonTool(t)) {
+        return {
+          ...TOOL_META_DEFAULTS,
+          label: wall.label,
+          color: wall.color,
+          category: 'APPARATUS',
+          showBrushWidth: false,
+          glassPanel: 'config',
+        };
+      }
       return { ...TOOL_META_DEFAULTS, label: wall.label, color: wall.color, category: 'APPARATUS', showBrushTemp: true };
     }
     if (t.kind === 'radiator') {
@@ -598,7 +675,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return { ...TOOL_META_DEFAULTS, label: STIRRER_LABEL, color: STIRRER_COLOR, category: 'APPARATUS' };
     }
     if (t.kind === 'filter') {
-      return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', filterPanel: 'config' };
+      // Always a one-cell-wide line drag -- no brush width to show.
+      return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', showBrushWidth: false, filterPanel: 'config' };
     }
     if (t.kind === 'sink') {
       const isVent = t.port === SinkMaskValue.Vent;
@@ -613,7 +691,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (t.kind === 'flask') {
       return {
         ...TOOL_META_DEFAULTS,
-        label: t.stirred ? 'Erlenmeyer (stirred)' : 'Erlenmeyer',
+        label: flaskLabel(t.flask, flaskStirred),
         color: FUNNEL_COLOR,
         category: 'APPARATUS',
         showBrushWidth: false,
@@ -643,16 +721,16 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function setTool(next: Tool): void {
     // Switching away from the tube tool mid-draw discards whatever's been
     // clicked so far rather than leaving it to silently reappear (still
-    // held in tubeDrawPoints) if the player switches back later.
-    if (tool?.kind === 'tube' && next.kind !== 'tube' && tubeDrawPoints.length > 0) {
-      tubeDrawPoints = [];
-      tubeDrawPreview = null;
+    // held in polyDrawPoints) if the player switches back later.
+    if (isPolygonTool(tool) && polyDrawPoints.length > 0) {
+      polyDrawPoints = [];
+      polyDrawPreview = null;
     }
     // Same discard-on-switch convention as the tube draw above: an
     // in-progress sink drag shouldn't silently resume/commit if the player
     // switches tools mid-drag.
-    if (tool?.kind === 'sink' && (next.kind !== 'sink' || next.port !== tool.port)) {
-      sinkDrawStart = null;
+    if (isLineDragTool(tool)) {
+      lineDrawStart = null;
     }
     tool = next;
     render();
@@ -857,21 +935,22 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       meta.tubePanel !== 'none' ||
       meta.filterPanel !== 'none' ||
       meta.flaskPanel !== 'none' ||
+      meta.glassPanel !== 'none' ||
       meta.sinkPanel !== 'none'
     );
   }
 
   function isToolKindActive(kind: UiToolKind): boolean {
-    if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && !tool.stirred;
-    if (kind === 'flask-erlenmeyer-stirred') return tool?.kind === 'flask' && tool.stirred;
+    if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && tool.flask === 'erlenmeyer';
+    if (kind === 'flask-beaker') return tool?.kind === 'flask' && tool.flask === 'beaker';
     if (kind === 'sink') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Sink;
     if (kind === 'vent') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent;
     return tool?.kind === kind;
   }
 
   function selectToolKind(kind: UiToolKind): void {
-    if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', stirred: false });
-    else if (kind === 'flask-erlenmeyer-stirred') setTool({ kind: 'flask', stirred: true });
+    if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', flask: 'erlenmeyer' });
+    else if (kind === 'flask-beaker') setTool({ kind: 'flask', flask: 'beaker' });
     else if (kind === 'sink') setTool({ kind: 'sink', port: SinkMaskValue.Sink });
     else if (kind === 'vent') setTool({ kind: 'sink', port: SinkMaskValue.Vent });
     else setTool({ kind });
@@ -1213,6 +1292,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetFlaskSize: (value) => {
         flaskSizeScale = value;
       },
+      flaskStirred,
+      // Unlike the size slider, this is a discrete two-button toggle whose
+      // own active state has to be redrawn -- and the HUD's tool chip shows
+      // the stirred/plain label too, so this one does render().
+      onSetFlaskStirred: (value) => {
+        flaskStirred = value;
+        render();
+      },
       // A Vent's panel shows what it threw away, a Sink's what it collected
       // -- two tallies, one panel (see side-panel.ts's sinkPanel).
       sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
@@ -1272,9 +1359,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     updateApparatusOverlay(lastHoverX, lastHoverY);
   }
 
-  /** Wraps the (already-built) `sidePanel` body in a modal shell. The body is
-   * moved, not rebuilt, so an in-flight slider drag inside it survives an
-   * overlay re-render -- see sidePanel's declaration. */
+  /** Shows/hides the long-lived tool-settings modal (shell and body are both
+   * built once -- see toolSettingsModal's declaration for why neither may be
+   * rebuilt per render) and retitles it for the active tool. */
   function renderToolSettingsOverlay(meta: ToolMeta): void {
     // A tool with nothing left to configure once the HUD owns the brush
     // sliders has no modal to open; if it became the active tool while the
@@ -1282,34 +1369,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (!toolSettingsOpen || !hasToolSettings(meta)) {
       toolSettingsOpen = false;
       toolSettingsOverlay.style.display = 'none';
-      // Detaches `sidePanel` along with the shell; the node itself lives on
-      // in this closure and is re-appended (still fully built) on reopen.
-      toolSettingsOverlay.innerHTML = '';
       return;
     }
+    toolSettingsTitle.textContent = `${meta.label} settings`;
     toolSettingsOverlay.style.display = 'flex';
-    toolSettingsOverlay.innerHTML = '';
-
-    const modal = document.createElement('div');
-    modal.className = 'pt-modal tool-settings-modal';
-    const header = document.createElement('div');
-    header.className = 'pt-modal-header';
-    const title = document.createElement('div');
-    title.className = 'pt-modal-title';
-    title.textContent = `${meta.label} settings`;
-    header.appendChild(title);
-    const closeButton = document.createElement('button');
-    closeButton.className = 'pt-close-btn';
-    closeButton.textContent = '✕';
-    closeButton.title = 'Close (Esc)';
-    closeButton.onclick = () => {
-      toolSettingsOpen = false;
-      render();
-    };
-    header.appendChild(closeButton);
-    modal.appendChild(header);
-    modal.appendChild(sidePanel);
-    toolSettingsOverlay.appendChild(modal);
   }
 
   function gridCoordsFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -1340,6 +1403,27 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     brushOutline.style.top = `${canvas.offsetTop + centerPxY - diameterY / 2}px`;
     brushOutline.style.width = `${diameterX}px`;
     brushOutline.style.height = `${diameterY}px`;
+  }
+
+  /** Draws the Glass tool's in-progress polygon: the exact one-cell-wide
+   * cells the commit will stamp (the same Bresenham rasterization the worker
+   * runs, via sinkLineCells), plus a handle dot on every clicked corner. */
+  function drawGlassGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number): void {
+    ctx.fillStyle = 'rgba(169, 214, 232, 0.75)';
+    for (let i = 0; i + 1 < points.length; i++) {
+      const a = points[i] as Point;
+      const b = points[i + 1] as Point;
+      for (const cell of sinkLineCells(a.x, a.y, b.x, b.y, 0)) {
+        ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+      }
+    }
+    ctx.fillStyle = '#f2d94e';
+    const handleR = Math.max(3, Math.min(cellPxX, cellPxY) * 0.7);
+    for (const p of points) {
+      ctx.beginPath();
+      ctx.arc((p.x + 0.5) * cellPxX, (p.y + 0.5) * cellPxY, handleR, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   /** Draws a tube's lumen (translucent species-blue) and wall ring
@@ -1377,10 +1461,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function updateApparatusOverlay(x: number, y: number): void {
     const showFunnelGhost = tool?.kind === 'funnel';
     const showFlaskGhost = tool?.kind === 'flask';
-    const showTubeDraw = tool?.kind === 'tube' && tubeDrawPoints.length > 0;
-    const showSinkDraw = tool?.kind === 'sink' && sinkDrawStart !== null;
+    const showPolyDraw = isPolygonTool(tool) && polyDrawPoints.length > 0;
+    const showLineDraw = isLineDragTool(tool) && lineDrawStart !== null;
     const editingTube = tool?.kind === 'select-apparatus' ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
-    if ((!showFunnelGhost && !showFlaskGhost && !showTubeDraw && !showSinkDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
+    if ((!showFunnelGhost && !showFlaskGhost && !showPolyDraw && !showLineDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
     }
@@ -1414,7 +1498,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     if (showFlaskGhost) {
       previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
-      const shape = flaskShapeFor(flaskFacing, flaskSizeScale);
+      const shape = flaskShapeFor(flaskFacing, flaskSizeScale, tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND);
       for (const cell of shape.cells) {
         const px = x + cell.dx;
         const py = y + cell.dy;
@@ -1422,41 +1506,55 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       }
     }
 
-    if (showTubeDraw) {
-      const last = tubeDrawPoints[tubeDrawPoints.length - 1] as Point;
-      tubeDrawPreview = snapOctant(last, { x, y });
-      drawTubeGhost(previewCtx, [...tubeDrawPoints, tubeDrawPreview], cellPxX, cellPxY, true);
+    if (showPolyDraw) {
+      const last = polyDrawPoints[polyDrawPoints.length - 1] as Point;
+      polyDrawPreview = snapOctant(last, { x, y });
+      const chain = [...polyDrawPoints, polyDrawPreview];
+      if (tool?.kind === 'tube') {
+        drawTubeGhost(previewCtx, chain, cellPxX, cellPxY, true);
+      } else {
+        drawGlassGhost(previewCtx, chain, cellPxX, cellPxY);
+      }
     }
 
     if (editingTube) {
       drawTubeGhost(previewCtx, editingTube.points, cellPxX, cellPxY, false);
     }
 
-    if (showSinkDraw && sinkDrawStart) {
-      const width = wallBrushRadius(tool, brushWidth);
-      previewCtx.fillStyle = tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent ? 'rgba(111, 143, 168, 0.5)' : 'rgba(224, 72, 158, 0.5)';
-      for (const cell of sinkLineCells(sinkDrawStart.x, sinkDrawStart.y, x, y, width)) {
+    if (showLineDraw && lineDrawStart) {
+      const isFilter = tool?.kind === 'filter';
+      const width = isFilter ? 0 : wallBrushRadius(tool, brushWidth);
+      previewCtx.fillStyle = isFilter
+        ? 'rgba(140, 224, 150, 0.6)'
+        : tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent
+          ? 'rgba(111, 143, 168, 0.5)'
+          : 'rgba(224, 72, 158, 0.5)';
+      for (const cell of sinkLineCells(lineDrawStart.x, lineDrawStart.y, x, y, width)) {
         previewCtx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
       }
     }
   }
 
-  /** Commits the in-progress tube draw (right-click): places a new tube if
-   * at least one full segment was drawn, or silently discards a lone mouth
-   * click with nothing to commit yet. */
-  function finishTubeDraw(): void {
-    if (tubeDrawPoints.length >= 2) {
-      send({ type: 'placeTube', points: tubeDrawPoints, coneSize: tubeDraft.coneSize, filter: tubeDraft.filter ? [...tubeDraft.filter] : null });
+  /** Commits the in-progress polygon draw (right-click): places the tube or
+   * stamps the glass polyline if at least one full segment was drawn, or
+   * silently discards a lone first click with nothing to commit yet. */
+  function finishPolyDraw(): void {
+    if (polyDrawPoints.length >= 2) {
+      if (tool?.kind === 'tube') {
+        send({ type: 'placeTube', points: polyDrawPoints, coneSize: tubeDraft.coneSize, filter: tubeDraft.filter ? [...tubeDraft.filter] : null });
+      } else {
+        send({ type: 'placeGlassPolyline', points: polyDrawPoints });
+      }
     }
-    cancelTubeDraw();
+    cancelPolyDraw();
   }
 
-  /** Discards the in-progress tube draw entirely (Escape) -- unlike
+  /** Discards the in-progress polygon draw entirely (Escape) -- unlike
    * right-click, never places anything even if segments were already
    * committed. */
-  function cancelTubeDraw(): void {
-    tubeDrawPoints = [];
-    tubeDrawPreview = null;
+  function cancelPolyDraw(): void {
+    polyDrawPoints = [];
+    polyDrawPreview = null;
     render();
     updateApparatusOverlay(lastHoverX, lastHoverY);
   }
@@ -1480,6 +1578,16 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     selectBox.style.height = `${(bounds.maxDy - bounds.minDy + 1) * cellPxY}px`;
   }
 
+  /** Commits one clicked corner of a polygon draw (tube or glass), snapped
+   * to an octant direction from the previous corner so every segment is
+   * axis- or diagonal-aligned -- see tube-shapes.ts's snapOctant. */
+  function addPolyPoint(x: number, y: number): void {
+    const last = polyDrawPoints[polyDrawPoints.length - 1];
+    const snapped = last ? snapOctant(last, { x, y }) : { x, y };
+    polyDrawPoints = [...polyDrawPoints, snapped];
+    render();
+  }
+
   function applyTool(x: number, y: number): void {
     if (!tool) return;
     switch (tool.kind) {
@@ -1487,6 +1595,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         send({ type: 'paint', x, y, radius: brushWidth, specId: tool.specId, tempC: brushTempC });
         break;
       case 'wall':
+        if (isGlassPolygonTool(tool)) {
+          addPolyPoint(x, y);
+          break;
+        }
         send({ type: 'paint', x, y, radius: wallBrushRadius(tool, brushWidth), specId: tool.specId, tempC: brushTempC });
         break;
       case 'radiator':
@@ -1505,16 +1617,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         send({ type: 'paintStirrer', x, y, radius: brushWidth });
         break;
       case 'filter':
-        send({ type: 'paintFilter', x, y, radius: wallBrushRadius(tool, brushWidth) });
+        // Handled by the pointerdown/pointerup line-drag handlers below
+        // (lineDrawStart), same as the sink -- a filter is one straight
+        // one-cell-wide line, not a brush.
         break;
       case 'sink':
         // Handled directly by the pointerdown/pointermove/pointerup handlers
-        // below (sinkDrawStart, committed on release) rather than here -- a
+        // below (lineDrawStart, committed on release) rather than here -- a
         // sink is a single free-form drag from anchor to release point, not
         // a repeated per-move paint like the other brush tools.
         break;
       case 'flask':
-        send({ type: 'placeFlask', x, y, facing: flaskFacing, sizeScale: flaskSizeScale, stirred: tool.stirred });
+        send({ type: 'placeFlask', x, y, facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, kind: tool.flask });
         break;
       case 'grabber':
         break;
@@ -1530,13 +1644,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           total: funnelDraft.totalMode === 'infinite' ? null : funnelDraft.totalAmount,
         });
         break;
-      case 'tube': {
-        const last = tubeDrawPoints[tubeDrawPoints.length - 1];
-        const snapped = last ? snapOctant(last, { x, y }) : { x, y };
-        tubeDrawPoints = [...tubeDrawPoints, snapped];
-        render();
+      case 'tube':
+        addPolyPoint(x, y);
         break;
-      }
       case 'select-apparatus':
         apparatusSelection.beginSelection(x, y);
         render();
@@ -1580,8 +1690,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     } else if (tool?.kind === 'mixer') {
       isMixing = true;
       send({ type: 'stirStart', x, y, radius: brushWidth });
-    } else if (tool?.kind === 'sink') {
-      sinkDrawStart = { x, y };
+    } else if (isLineDragTool(tool)) {
+      lineDrawStart = { x, y };
       updateApparatusOverlay(x, y);
     } else {
       applyTool(x, y);
@@ -1602,7 +1712,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // knee/segment, dragging moves it -- see continueDrag's doc comment.
         const msg = apparatusSelection.continueDrag(x, y);
         if (msg) send(msg);
-      } else if (tool?.kind !== 'funnel' && tool?.kind !== 'tube' && tool?.kind !== 'sink') {
+      } else if (tool?.kind !== 'funnel' && !isPolygonTool(tool) && !isLineDragTool(tool)) {
         // Single-click action (place once) rather than a brush --
         // applyTool already ran once on pointerdown, so a drag shouldn't
         // re-place on every move.
@@ -1637,9 +1747,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // Right-click finishes the in-progress tube draw (commits every already-
   // clicked segment) rather than opening the browser context menu.
   canvas.addEventListener('contextmenu', (event) => {
-    if (tool?.kind !== 'tube') return;
+    if (!isPolygonTool(tool)) return;
     event.preventDefault();
-    finishTubeDraw();
+    finishPolyDraw();
   });
   /** Any modal currently up. Escape closes the topmost one before it falls
    * through to the tube-draw cancel below, and the single-letter shortcuts
@@ -1671,7 +1781,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         toggleSettingsOverlay(false);
         return;
       }
-      if (tool?.kind === 'tube' && tubeDrawPoints.length > 0) cancelTubeDraw();
+      if (isPolygonTool(tool) && polyDrawPoints.length > 0) cancelPolyDraw();
       return;
     }
 
@@ -1714,11 +1824,15 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       send({ type: 'stirEnd' });
       isMixing = false;
     }
-    if (sinkDrawStart) {
-      const width = wallBrushRadius(tool, brushWidth);
-      const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;
-      send({ type: 'paintSinkLine', x0: sinkDrawStart.x, y0: sinkDrawStart.y, x1: lastHoverX, y1: lastHoverY, width, port });
-      sinkDrawStart = null;
+    if (lineDrawStart) {
+      if (tool?.kind === 'filter') {
+        send({ type: 'paintFilterLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY });
+      } else {
+        const width = wallBrushRadius(tool, brushWidth);
+        const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;
+        send({ type: 'paintSinkLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, width, port });
+      }
+      lineDrawStart = null;
       updateApparatusOverlay(lastHoverX, lastHoverY);
     }
     apparatusSelection.endDrag();

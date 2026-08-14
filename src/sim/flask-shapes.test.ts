@@ -71,6 +71,49 @@ describe('flask-shapes', () => {
     expect(width).toBe(7);
   });
 
+  it('builds the beaker as a straight-sided open-topped vessel with a closed base', () => {
+    const shape = flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE, 'beaker');
+    const baseDxs = shape.cells
+      .filter((c) => c.dy === 0)
+      .map((c) => c.dx)
+      .sort((a, b) => a - b);
+    for (let i = 1; i < baseDxs.length; i++) {
+      expect((baseDxs[i] as number) - (baseDxs[i - 1] as number)).toBe(1); // closed base, no gap
+    }
+    // Straight sides: every wall row above the base is exactly the two edge
+    // cells, at the same dx as the base's own edges (unlike the Erlenmeyer,
+    // which tapers to a narrower neck).
+    const half = Math.max(...baseDxs);
+    const topDy = Math.min(...shape.cells.map((c) => c.dy));
+    for (let dy = -1; dy >= topDy; dy--) {
+      const rowDxs = shape.cells
+        .filter((c) => c.dy === dy)
+        .map((c) => c.dx)
+        .sort((a, b) => a - b);
+      expect(rowDxs).toEqual([-half, half]);
+    }
+    // Open top: the topmost row is walls only, no cell bridging the mouth.
+    expect(shape.cells.filter((c) => c.dy === topDy).length).toBe(2);
+  });
+
+  it('never lets the beaker reservoir collide with its outline', () => {
+    const shape = flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE, 'beaker');
+    const wallKeys = new Set(shape.cells.map((c) => `${c.dx},${c.dy}`));
+    for (const cell of shape.reservoirCells) {
+      expect(wallKeys.has(`${cell.dx},${cell.dy}`)).toBe(false);
+    }
+    expect(shape.reservoirCells.length).toBeGreaterThan(0);
+  });
+
+  it('gives the beaker a different footprint from the Erlenmeyer at the same size', () => {
+    const beaker = flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE, 'beaker');
+    const erlenmeyer = flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE, 'erlenmeyer');
+    expect(beaker.cells.length).not.toBe(erlenmeyer.cells.length);
+    // The default kind is the Erlenmeyer, so scenarios authored before the
+    // beaker existed keep the shape they were written against.
+    expect(flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE).cells).toEqual(erlenmeyer.cells);
+  });
+
   it('scales the footprint up and down with sizeScale', () => {
     const small = flaskBounds(flaskShapeFor('up', 0.5));
     const normal = flaskBounds(flaskShapeFor('up', 1.0));

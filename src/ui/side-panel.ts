@@ -39,10 +39,14 @@ export interface ToolMeta {
    * "edit" mode, since a filter line isn't a tracked instance: its
    * allow-list is one global config, live-edited straight from the tool). */
   filterPanel: 'none' | 'config';
-  /** The flask tool's size panel -- same 2-state convention as filterPanel:
-   * a placed flask isn't a tracked instance either, so there's no "edit"
-   * mode, only pre-placement config. */
+  /** The flask tool's size/stirred panel -- same 2-state convention as
+   * filterPanel: a placed flask isn't a tracked instance either, so there's
+   * no "edit" mode, only pre-placement config. */
   flaskPanel: 'none' | 'config';
+  /** The Glass tool's polygon-draw panel -- explains the click/right-click
+   * interaction, which is the tool's only "setting" (glass lines are always
+   * one cell wide and stamped at ambient temperature). */
+  glassPanel: 'none' | 'config';
   /** The Sink tool's live tally panel -- same 2-state convention as
    * filterPanel/flaskPanel: a sink line isn't a tracked instance (there's
    * one global counter shared by every sink drawn on the grid, see
@@ -111,6 +115,11 @@ export interface SidePanelCallbacks {
   onRemoveFilterSpecies(specId: number): void;
   flaskSizeScale: number;
   onSetFlaskSize(value: number): void;
+  /** Whether the flask tool stamps a stirrer over the vessel's interior --
+   * one setting shared by both glassware shapes, replacing what used to be a
+   * separate "Erlenmeyer (stirred)" tool. */
+  flaskStirred: boolean;
+  onSetFlaskStirred(value: boolean): void;
   /** Non-zero running totals only, already sorted highest-first -- see
    * app.ts's sinkTallyEntries. */
   sinkTally: readonly SinkTallyEntry[];
@@ -336,7 +345,7 @@ function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
 
   container.appendChild(
     hintBox(
-      "Draw a filter line like a wall. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. One shared allow-list applies to every filter line on the grid.",
+      'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. One shared allow-list applies to every filter line on the grid.',
       'HOW IT WORKS',
     ),
   );
@@ -347,10 +356,43 @@ function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCall
   addDivider(container);
 
   addSlider(container, 'Size', MIN_FLASK_SIZE_SCALE, MAX_FLASK_SIZE_SCALE, 0.1, cb.flaskSizeScale, (v) => `${v.toFixed(1)}x`, cb.onSetFlaskSize);
+  addStirredToggle(container, cb.flaskStirred, cb.onSetFlaskStirred);
 
   container.appendChild(
     hintBox(
-      'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor.',
+      'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.',
+      'HOW IT WORKS',
+    ),
+  );
+}
+
+function addStirredToggle(container: HTMLElement, stirred: boolean, onChange: (stirred: boolean) => void): void {
+  const wrap = el('div', 'setting');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = 'Stirring';
+  wrap.appendChild(labelEl);
+
+  const row = el('div', 'funnel-toggle-row');
+  const plainBtn = el('button', 'funnel-toggle-btn');
+  plainBtn.textContent = 'Plain';
+  plainBtn.classList.toggle('active', !stirred);
+  plainBtn.onclick = () => onChange(false);
+  const stirredBtn = el('button', 'funnel-toggle-btn');
+  stirredBtn.textContent = 'Stirred';
+  stirredBtn.classList.toggle('active', stirred);
+  stirredBtn.onclick = () => onChange(true);
+  row.appendChild(plainBtn);
+  row.appendChild(stirredBtn);
+  wrap.appendChild(row);
+  container.appendChild(wrap);
+}
+
+function addGlassPanel(container: HTMLElement, meta: ToolMeta): void {
+  if (meta.glassPanel === 'none') return;
+  addDivider(container);
+  container.appendChild(
+    hintBox(
+      'Click to place each corner, right-click to finish, Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.',
       'HOW IT WORKS',
     ),
   );
@@ -465,5 +507,6 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   addTubePanel(container, meta, cb);
   addFilterPanel(container, meta, cb);
   addFlaskPanel(container, meta, cb);
+  addGlassPanel(container, meta);
   addSinkPanel(container, meta, cb);
 }

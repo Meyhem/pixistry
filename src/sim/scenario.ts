@@ -72,7 +72,7 @@ function applyWallLine(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupC
  * handler (worker.ts) -- not tracked instance state, since a flask has no
  * per-tick behavior of its own beyond the vessel/stirrer masks it sets. */
 function applyFlask(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
-  const shape = flaskShapeFor(cmd.facing, cmd.sizeScale);
+  const shape = flaskShapeFor(cmd.facing, cmd.sizeScale, cmd.glassware);
   stampGlass(
     grid,
     species,

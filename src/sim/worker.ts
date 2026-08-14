@@ -53,6 +53,8 @@ import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import { flaskShapeFor } from './flask-shapes';
 import { stampGlass } from './apparatus';
+import { GLASS_WALL_SPEC_ID } from './walls';
+import type { Point } from './tube-shapes';
 
 const WIDTH = 160;
 const HEIGHT = 100;
@@ -279,11 +281,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.stirrerMask[grid.index(px, py)] = 1;
       });
       break;
-    case 'paintFilter':
+    case 'paintFilterLine':
       if (!isToolAllowed(activeRestrictions, 'filter')) break;
-      paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
-        grid.filterMask[grid.index(px, py)] = 1;
-      });
+      // Width 0 -> the bare Bresenham core, one cell wide (see
+      // sinkLineCells, reused here rather than hand-rolling a second line
+      // rasterizer -- same reason scenario.ts's applyWallLine reuses it).
+      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, 0)) {
+        if (grid.inBounds(x, y)) grid.filterMask[grid.index(x, y)] = 1;
+      }
       break;
     case 'setFilterSpecies':
       filterAllowSpecies = new Set(msg.species);
@@ -400,7 +405,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // one-shot stamp (real glass walls, plus stirrerMask for the stirred
       // variant), same as painting a wall material. No instance array, no
       // per-tick step function.
-      const shape = flaskShapeFor(msg.facing, msg.sizeScale);
+      const shape = flaskShapeFor(msg.facing, msg.sizeScale, msg.kind);
       stampGlass(
         grid,
         species,
@@ -418,6 +423,20 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.vesselMask[idx] = 1;
         if (msg.stirred) grid.stirrerMask[idx] = 1;
       }
+      break;
+    }
+    case 'placeGlassPolyline': {
+      // Glass is a paintable wall material, not a ToolKind of its own, so
+      // this is gated by the same isPaintAllowed check the free-draw brush
+      // used to go through as an ordinary 'paint' message.
+      if (!isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID)) break;
+      const cells: Point[] = [];
+      for (let i = 0; i + 1 < msg.points.length; i++) {
+        const a = msg.points[i] as Point;
+        const b = msg.points[i + 1] as Point;
+        cells.push(...sinkLineCells(a.x, a.y, b.x, b.y, 0));
+      }
+      stampGlass(grid, species, cells);
       break;
     }
     case 'paintSinkLine':
