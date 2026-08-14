@@ -128,4 +128,45 @@ describe('stirRegion', () => {
     }
     expect(changed).toBeGreaterThan(before.length * 0.3);
   });
+
+  it('pops some liquid cells up into empty headroom above them', () => {
+    const palette = buildPalette();
+    const water = findEntry(palette, 'H2O');
+
+    // A flat pool with open sky above it -- over many pulses, agitateCells
+    // should send at least some cells up into rows that started empty.
+    const grid = new SimGrid(12, 12);
+    for (let x = 0; x < 12; x++) grid.set(x, 8, water.specId, PhaseCode.Liquid);
+    for (let y = 5; y < 8; y++) {
+      for (let x = 0; x < 12; x++) expect(grid.isEmptyAt(grid.index(x, y))).toBe(true);
+    }
+
+    const rng = mulberry32(3);
+    let poppedAbove = false;
+    for (let i = 0; i < 40; i++) {
+      stirRegion(grid, rng, 5, 8, 6);
+      for (let y = 5; y < 8; y++) {
+        for (let x = 0; x < 12; x++) {
+          if (!grid.isEmptyAt(grid.index(x, y))) poppedAbove = true;
+        }
+      }
+    }
+
+    expect(poppedAbove).toBe(true);
+  });
+
+  it('never pops gas cells (they already rise on their own)', () => {
+    const palette = buildPalette();
+    const hydrogen = findEntry(palette, 'H2');
+
+    const grid = new SimGrid(8, 8);
+    for (let x = 0; x < 8; x++) grid.set(x, 6, hydrogen.specId, PhaseCode.Gas);
+
+    const rng = mulberry32(4);
+    for (let i = 0; i < 40; i++) stirRegion(grid, rng, 3, 6, 5);
+
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 8; x++) expect(grid.isEmptyAt(grid.index(x, y))).toBe(true);
+    }
+  });
 });

@@ -17,7 +17,7 @@
 // stirState, which calls this once per simulation tick for as long as the
 // mixer brush is held down, "every pixel in the brush is randomized every
 // tick" is now literal, not just per pointer-move event.
-import { SimGrid } from './grid';
+import { PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { forEachCellInRadius } from './geometry';
 import { isWallSpecId } from './walls';
 
@@ -61,6 +61,37 @@ export function shuffleCells(grid: SimGrid, rng: Rng, indices: readonly number[]
   });
 }
 
+const POP_PROBABILITY = 0.12;
+const MAX_POP_HEIGHT = 3;
+
+/** Gives stirring a visible "agitation" kick on top of shuffleCells' in-place
+ * content swap: a fraction of solid/liquid cells (gas already rises on its
+ * own via movement.ts) jump straight up into whatever empty headroom sits
+ * above them, capped at MAX_POP_HEIGHT and stopping at the first
+ * obstruction (wall, other matter, or a tube's lumen) rather than tunneling
+ * through it. Ordinary gravity in movement.ts then pulls them back down over
+ * the next few ticks, so the visible effect is a chaotic bubble/splash
+ * rather than a clean instantaneous permutation. */
+export function agitateCells(grid: SimGrid, rng: Rng, indices: readonly number[]): void {
+  for (const idx of indices) {
+    if (rng() >= POP_PROBABILITY) continue;
+    const phase = grid.phase[idx] as PhaseCode;
+    if (phase !== PhaseCode.Solid && phase !== PhaseCode.Liquid) continue;
+    const x = idx % grid.width;
+    const y = Math.floor(idx / grid.width);
+    let targetY = y;
+    for (let step = 1; step <= MAX_POP_HEIGHT; step++) {
+      const ny = y - step;
+      if (!grid.inBounds(x, ny)) break;
+      const nIdx = grid.index(x, ny);
+      if (!grid.isEmptyAt(nIdx) || (grid.tubeMask[nIdx] as TubeMaskValue) === TubeMaskValue.Lumen) break;
+      targetY = ny;
+    }
+    if (targetY === y) continue;
+    grid.swap(idx, grid.index(x, targetY));
+  }
+}
+
 /**
  * One stir pulse centered at (cx, cy): collects every stirrable cell within
  * `radius` and randomly permutes their contents, so every pixel in the
@@ -74,4 +105,5 @@ export function stirRegion(grid: SimGrid, rng: Rng, cx: number, cy: number, radi
     if (isStirrable(grid, idx)) indices.push(idx);
   });
   shuffleCells(grid, rng, indices);
+  agitateCells(grid, rng, indices);
 }

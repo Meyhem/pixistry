@@ -7,7 +7,7 @@
 // agitate cells the same way: a full random permutation of contents, not a
 // partial probabilistic swap.
 import { SimGrid } from './grid';
-import { isStirrable, shuffleCells } from './mixer';
+import { agitateCells, isStirrable, shuffleCells } from './mixer';
 
 type Rng = () => number;
 
@@ -25,4 +25,5 @@ export function stepStirrers(grid: SimGrid, rng: Rng): void {
     if (isStirrable(grid, idx)) indices.push(idx);
   }
   shuffleCells(grid, rng, indices);
+  agitateCells(grid, rng, indices);
 }

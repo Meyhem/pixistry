@@ -54,6 +54,11 @@ const TICK_MS = 1000 / 60;
 const TICK_DT_SECONDS = TICK_MS / 1000;
 const MIN_SPEED = 0.25;
 const MAX_SPEED = 4;
+// Stirring used to re-shuffle every single sim tick (60/sec), which visually
+// read as noisy flicker rather than agitation. Throttled to a fixed cadence
+// in sim-time instead of wall-clock time (tick count, not setInterval count)
+// so it stays consistent regardless of the speed multiplier's ticks-per-frame.
+const STIR_INTERVAL_TICKS = Math.round(0.25 / TICK_DT_SECONDS);
 
 const palette = buildPalette();
 const species = new SpeciesTable();
@@ -125,8 +130,10 @@ function runOneTick(): void {
   stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++, filterAllowSpecies);
   stepTubes(grid, tubes);
-  if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
-  stepStirrers(grid, rng);
+  if (tick % STIR_INTERVAL_TICKS === 0) {
+    if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
+    stepStirrers(grid, rng);
+  }
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
   // Mutually exclusive per cell by construction (see exposedFaceCount):

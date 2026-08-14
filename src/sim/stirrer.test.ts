@@ -92,4 +92,28 @@ describe('stepStirrers', () => {
     expect(moved).toBe(true);
     expect(grid.specId).not.toEqual(before);
   });
+
+  it('pops some liquid cells up into empty headroom above the overlay', () => {
+    const palette = buildPalette();
+    const water = findEntry(palette, 'H2O');
+
+    const grid = new SimGrid(12, 12);
+    for (let x = 0; x < 12; x++) {
+      grid.set(x, 8, water.specId, PhaseCode.Liquid);
+      for (let y = 0; y < 12; y++) grid.stirrerMask[grid.index(x, y)] = 1;
+    }
+
+    const rng = mulberry32(3);
+    let poppedAbove = false;
+    for (let i = 0; i < 40; i++) {
+      stepStirrers(grid, rng);
+      for (let y = 5; y < 8; y++) {
+        for (let x = 0; x < 12; x++) {
+          if (!grid.isEmptyAt(grid.index(x, y))) poppedAbove = true;
+        }
+      }
+    }
+
+    expect(poppedAbove).toBe(true);
+  });
 });
