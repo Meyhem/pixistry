@@ -3,6 +3,7 @@ import { PhaseCode, SimGrid } from './grid';
 import { stirRegion } from './mixer';
 import { mulberry32 } from './rng';
 import { buildPalette, type PaletteEntry } from './species';
+import { GLASS_WALL_SPEC_ID, WALL_PHASE } from './walls';
 
 function findEntry(palette: PaletteEntry[], label: string): PaletteEntry {
   const entry = palette.find((p) => p.label === label);
@@ -37,18 +38,38 @@ describe('stirRegion', () => {
     expect(countBySpec(grid)).toEqual(before);
   });
 
-  it('does not touch solids or walls', () => {
-    const palette = buildPalette();
-    const iron = findEntry(palette, 'Fe');
-
+  it('does not touch walls', () => {
     const grid = new SimGrid(5, 5);
-    grid.set(2, 2, iron.specId, PhaseCode.Solid);
+    grid.set(2, 2, GLASS_WALL_SPEC_ID, WALL_PHASE);
     const before = grid.specId.slice();
 
     const rng = mulberry32(1);
     for (let i = 0; i < 10; i++) stirRegion(grid, rng, 2, 2, 3);
 
     expect(grid.specId).toEqual(before);
+  });
+
+  it('also shuffles solid cells alongside liquid/gas ones', () => {
+    const palette = buildPalette();
+    const iron = findEntry(palette, 'Fe');
+    const water = findEntry(palette, 'H2O');
+
+    const grid = new SimGrid(5, 5);
+    grid.set(2, 2, iron.specId, PhaseCode.Solid);
+    for (let x = 0; x < 5; x++) {
+      if (x !== 2) grid.set(x, 2, water.specId, PhaseCode.Liquid);
+    }
+    const before = grid.specId.slice();
+
+    const rng = mulberry32(1);
+    let moved = false;
+    for (let i = 0; i < 20; i++) {
+      stirRegion(grid, rng, 2, 2, 3);
+      if (grid.specId[grid.index(2, 2)] !== iron.specId) moved = true;
+    }
+
+    expect(moved).toBe(true);
+    expect(grid.specId).not.toEqual(before);
   });
 
   it('leaves an empty grid untouched', () => {

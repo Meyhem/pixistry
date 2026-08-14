@@ -1,5 +1,5 @@
 // The stirrer apparatus: a painted overlay (grid.stirrerMask) that
-// continuously randomizes whatever liquid/gas cells sit inside its drawn
+// continuously randomizes whatever stirrable cells sit inside its drawn
 // shape, every tick, for as long as it's placed -- unlike the mixer tool's
 // brush stroke (mixer.ts), which only stirs while actively dragged, a
 // stirrer keeps agitating on its own once drawn, the way a real magnetic

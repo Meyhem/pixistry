@@ -113,8 +113,9 @@ probability gating, energy bookkeeping).
   apparatus used to live here as heater-glass/cooler-glass wall materials, occupying `grid.specId` and
   blocking movement like any other wall; that's been replaced by the non-physical radiator overlay
   described in the `heat.ts` entry above, so a placed radiator no longer collides with anything.
-- **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent liquid/gas cells in a
-  radius, independent of `movement.ts`'s density-driven swaps. This is **stirring only**. The design doc
+- **`mixer.ts`** (M4) — `stirRegion`: forces extra random swaps between adjacent stirrable (non-empty,
+  non-wall, so solids included alongside liquid/gas) cells in a radius, independent of `movement.ts`'s
+  density-driven swaps. This is **stirring only**. The design doc
   frames the mixer's real purpose as forcing contact for interface-limited immiscible pairs; now that
   `react.ts` (M5) wires reactions into the tick loop, stirring genuinely helps interface-limited pairs meet
   faster, but the mixer implementation itself is unchanged from M4.

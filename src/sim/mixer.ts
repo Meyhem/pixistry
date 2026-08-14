@@ -1,10 +1,12 @@
-// The mixer tool (M4): randomizes every liquid/gas cell within a brush
-// radius, independent of movement.ts's density-driven swap logic. This is
+// The mixer tool (M4): randomizes every non-empty, non-wall cell within a
+// brush radius (solids included -- this sim's solids are already granular
+// and fall like sand, so shuffling them is physically consistent),
+// independent of movement.ts's density-driven swap logic. This is
 // stirring only -- the mixer's "real" chemistry purpose (forcing contact
 // for interface-limited immiscible pairs) has no effect yet because
 // reactions aren't wired into the grid tick loop (see ARCHITECTURE.md's
 // "What's next"). Until that wiring exists, stirring just visibly speeds up
-// two liquids/gases mixing by color.
+// mixing by color.
 //
 // Originally did a per-cell probabilistic single swap with one random
 // neighbor, which visibly failed to actually randomize a stirred region --
@@ -15,7 +17,7 @@
 // stirState, which calls this once per simulation tick for as long as the
 // mixer brush is held down, "every pixel in the brush is randomized every
 // tick" is now literal, not just per pointer-move event.
-import { PhaseCode, SimGrid } from './grid';
+import { SimGrid } from './grid';
 import { forEachCellInRadius } from './geometry';
 import { isWallSpecId } from './walls';
 
@@ -24,9 +26,7 @@ type Rng = () => number;
 export function isStirrable(grid: SimGrid, idx: number): boolean {
   if (grid.isEmptyAt(idx)) return false;
   const specId = grid.specId[idx] as number;
-  if (isWallSpecId(specId)) return false;
-  const phase = grid.phase[idx] as PhaseCode;
-  return phase === PhaseCode.Liquid || phase === PhaseCode.Gas;
+  return !isWallSpecId(specId);
 }
 
 /** Randomly permutes the (specId, phase, u) contents held at `indices` --
