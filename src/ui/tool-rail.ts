@@ -5,9 +5,10 @@
 // scroll), and the rail doubles as the "what's selected" readout, since the
 // active tool's slot wears its own swatch.
 //
-// Species are the one thing the rail can't hold a slot for -- there are 149
-// of them -- so the top slot opens the Tool Chest modal (tool-chest.ts),
-// which is now purely the species picker.
+// Species are the one thing the rail can't hold a slot *each* for -- there
+// are 149 -- so the Paint slot, sitting with the everyday tools in the first
+// group, opens the Tool Chest modal (tool-chest.ts, now purely the species
+// picker) and renames itself to whichever species is loaded.
 //
 // This module is the canonical home for the UI-side `ToolKind` union and the
 // select-apparatus label/color (both lived in tool-chest.ts while the chest
@@ -71,14 +72,19 @@ interface RailSlot {
   icon: IconName;
   active: boolean;
   locked: boolean;
+  /** Extra class on the button -- only the species slot uses one. */
+  className?: string;
+  /** Hover-flyout text, when it differs from the slot's own label (the
+   * species slot's label is whatever species is loaded). */
+  hint?: string;
   onSelect(): void;
 }
 
 /** The rail's groups, top to bottom. Captions are short enough to fit the
  * rail's own width -- they're the only trace left of the chest's section
- * headings, and they're what stops fifteen icons reading as one undivided
+ * headings, and they're what stops sixteen icons reading as one undivided
  * pile. */
-const GROUP_CAPTIONS = ['GLASS', 'HEAT', 'FLOW', 'TOOLS'] as const;
+const GROUP_CAPTIONS = ['TOOLS', 'GLASS', 'HEAT', 'FLOW'] as const;
 
 function toolSlot(label: string, color: string, icon: IconName, kind: ToolKind, cb: ToolRailCallbacks): RailSlot {
   return {
@@ -109,6 +115,21 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
   const glassWall = walls.find((w) => w.kind === 'glass');
   const insulatorWall = walls.find((w) => w.kind === 'insulator');
 
+  // The everyday five, in the order a hand reaches for them: point at
+  // something, put matter down, take it away, then the two that rearrange
+  // what's already there. Paint sits among them rather than in a group of its
+  // own -- it's the tool you use most, not a category.
+  const tools: RailSlot[] = [
+    // select-apparatus only edits already-placed apparatus (it creates no
+    // matter of its own), so it's never locked -- there's no sim-side
+    // ToolKind for it to be checked against.
+    toolSlot(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, 'select', 'select-apparatus', cb),
+    speciesSlot(cb),
+    toolSlot('Erase', ERASE_COLOR, 'erase', 'erase', cb),
+    toolSlot('Mix', MIXER_COLOR, 'mix', 'mixer', cb),
+    toolSlot('Grab', GRABBER_COLOR, 'grab', 'grabber', cb),
+  ];
+
   const glassware: RailSlot[] = [
     // One slot per vessel shape -- whether it comes with a stirrer is a
     // setting in the tool's own settings panel (see side-panel.ts's flask
@@ -133,21 +154,30 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
     toolSlot(VENT_LABEL, VENT_COLOR, 'vent', 'vent', cb),
   ];
 
-  const tools: RailSlot[] = [
-    toolSlot('Erase', ERASE_COLOR, 'erase', 'erase', cb),
-    toolSlot('Mix', MIXER_COLOR, 'mix', 'mixer', cb),
-    toolSlot('Grab', GRABBER_COLOR, 'grab', 'grabber', cb),
-    // select-apparatus only edits already-placed apparatus (it creates no
-    // matter of its own), so it's never locked -- there's no sim-side
-    // ToolKind for it to be checked against.
-    toolSlot(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, 'select', 'select-apparatus', cb),
-  ];
+  return [tools, glassware, thermal, flow];
+}
 
-  return [glassware, thermal, flow, tools];
+/** The paint slot. Unlike every other slot it opens a modal (the Tool Chest
+ * species picker) rather than selecting outright, and it renames itself to
+ * whichever species is loaded -- it's both the "pick a species" button and
+ * the readout of which one is on the brush. */
+function speciesSlot(cb: ToolRailCallbacks): RailSlot {
+  return {
+    label: cb.speciesActive ? cb.speciesLabel : 'Paint',
+    // Unpainted, the slot wears the app's own accent rather than a stale
+    // species color: nothing is selected to be colored *by*.
+    color: cb.speciesColor,
+    icon: 'species',
+    active: cb.speciesActive,
+    locked: false,
+    className: 'rail-slot-species',
+    hint: cb.speciesActive ? `${cb.speciesLabel} -- pick another species (T)` : 'Paint a species (T)',
+    onSelect: cb.onOpenSpecies,
+  };
 }
 
 function slotButton(slot: RailSlot): HTMLButtonElement {
-  const button = el('button', 'rail-slot');
+  const button = el('button', slot.className ? `rail-slot ${slot.className}` : 'rail-slot');
   button.style.setProperty('--swatch', slot.color);
   button.appendChild(toolIcon(slot.icon));
 
@@ -155,7 +185,7 @@ function slotButton(slot: RailSlot): HTMLButtonElement {
   // a native title tooltip: a 500ms tooltip delay is too slow for a rail
   // you're meant to scan.
   const name = el('span', 'rail-slot-name');
-  name.textContent = slot.label;
+  name.textContent = slot.hint ?? slot.label;
   button.appendChild(name);
 
   if (slot.active) button.classList.add('active');
@@ -175,25 +205,6 @@ function slotButton(slot: RailSlot): HTMLButtonElement {
 
 export function buildToolRail(container: HTMLElement, walls: readonly WallMaterial[], cb: ToolRailCallbacks): void {
   container.innerHTML = '';
-
-  // The species slot is its own group at the top: it's the only slot that
-  // opens a modal rather than selecting a tool outright, and the only one
-  // whose swatch changes with what's selected inside it.
-  const speciesGroup = el('div', 'rail-group');
-  const speciesCaption = el('div', 'rail-caption');
-  speciesCaption.textContent = 'PAINT';
-  speciesGroup.appendChild(speciesCaption);
-  const species = el('button', 'rail-slot rail-slot-species');
-  species.style.setProperty('--swatch', cb.speciesColor);
-  species.appendChild(toolIcon('species'));
-  const speciesName = el('span', 'rail-slot-name');
-  speciesName.textContent = cb.speciesActive ? cb.speciesLabel : 'Elements & Compounds';
-  species.appendChild(speciesName);
-  if (cb.speciesActive) species.classList.add('active');
-  species.setAttribute('aria-label', cb.speciesActive ? `${cb.speciesLabel} -- pick another species (T)` : 'Elements & Compounds (T)');
-  species.onclick = cb.onOpenSpecies;
-  speciesGroup.appendChild(species);
-  container.appendChild(speciesGroup);
 
   railGroups(walls, cb).forEach((slots, index) => {
     const group = el('div', 'rail-group');

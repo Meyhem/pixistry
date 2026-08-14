@@ -1117,9 +1117,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSelectTool: selectToolKind,
       onSelectWall: (specId) => setTool({ kind: 'wall', specId }),
       speciesActive: !!activeSpecies,
-      speciesLabel: activeSpecies?.label ?? 'Elements & Compounds',
-      // Unpainted, the slot wears the app's own accent rather than a
-      // stale species color: nothing is selected to be colored *by*.
+      speciesLabel: activeSpecies?.label ?? 'Paint',
       speciesColor: activeSpecies?.color ?? '#6fd3a8',
       onOpenSpecies: openChest,
     };

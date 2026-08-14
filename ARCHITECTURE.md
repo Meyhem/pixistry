@@ -180,12 +180,14 @@ probability gating, energy bookkeeping).
   clusters themselves, so the gap between them is still live canvas.
 
   The rail is one icon slot per tool (`ui/tool-icons.ts`, inline 24x24 stroked SVG drawn from
-  `currentColor`), grouped PAINT / GLASS / HEAT / FLOW / TOOLS, with the active slot wearing its tool's
-  own swatch and each slot naming itself in a hover flyout. It's also the canonical home for the UI-side
-  `ToolKind` union. Under 860px of window height it drops the group captions and pairs slots two-wide,
-  since 16 slots in one column need ~560px. Species are the one thing that can't have a slot — there are
-  149 — so the top slot opens the Tool Chest (`ui/tool-chest.ts`), now purely the searchable species
-  picker, with the periodic table hanging off its footer. Everything else is still a modal over the
+  `currentColor`), grouped TOOLS / GLASS / HEAT / FLOW, with the active slot wearing its tool's own swatch
+  and each slot naming itself in a hover flyout. It's also the canonical home for the UI-side `ToolKind`
+  union. Under 860px of window height it drops the group captions and pairs slots two-wide, since 16 slots
+  in one column need ~560px. Species are the one thing that can't have a slot *each* — there are 149 — so
+  the Paint slot (second in the TOOLS group, between Select and Erase, since it's the tool used most
+  rather than a category of its own) opens the Tool Chest (`ui/tool-chest.ts`), now purely the searchable
+  species picker with the periodic table hanging off its footer, and renames itself to whichever species
+  is loaded. Everything else is still a modal over the
   canvas: the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell instead of
   a docked column), the periodic table, the bench menu, and comfort settings. Keyboard: `T` species chest,
   `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This
