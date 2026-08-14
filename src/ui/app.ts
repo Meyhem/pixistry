@@ -117,6 +117,26 @@ function isGlassPolygonTool(t: Tool | null): boolean {
   return t?.kind === 'wall' && t.specId === GLASS_WALL_SPEC_ID;
 }
 
+/** Dismiss a modal by clicking its backdrop -- the same gesture Esc does,
+ * for the half of players who reach for the mouse instead.
+ *
+ * Both the pointerdown *and* the click have to land on the backdrop itself.
+ * A click event fires on the nearest common ancestor of its down and up
+ * targets, so a drag that starts on a slider inside the modal and releases
+ * out over the backdrop (easy to do with the brush-width slider) would
+ * otherwise read as a backdrop click and close the modal mid-adjustment. */
+function closeOnBackdropClick(overlay: HTMLElement, close: () => void): void {
+  let downOnBackdrop = false;
+  overlay.addEventListener('pointerdown', (event) => {
+    downOnBackdrop = event.target === overlay;
+  });
+  overlay.addEventListener('click', (event) => {
+    const wasBackdrop = downOnBackdrop;
+    downOnBackdrop = false;
+    if (wasBackdrop && event.target === overlay) close();
+  });
+}
+
 /** Tools drawn as a single straight drag from anchor to release point (see
  * lineDrawStart), rather than a repeated per-move brush paint. */
 function isLineDragTool(t: Tool | null): boolean {
@@ -254,6 +274,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   settingsOverlay.className = 'pt-overlay';
   settingsOverlay.style.display = 'none';
   root.appendChild(settingsOverlay);
+  // No closeOnBackdropClick here, unlike every other overlay below: comfort
+  // settings isn't a card on a backdrop but a full-screen panel (see
+  // comfort-screen.ts, which overwrites this element's own class and is
+  // shared with the title menu), so "outside the modal" would mean the
+  // panel's own empty space. Esc and its ← button close it.
 
   function renderSettingsOverlay(): void {
     buildComfortScreen(settingsOverlay, comfortSettings, {
@@ -411,11 +436,19 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   chestOverlay.className = 'pt-overlay';
   chestOverlay.style.display = 'none';
   root.appendChild(chestOverlay);
+  closeOnBackdropClick(chestOverlay, () => {
+    chestOpen = false;
+    render();
+  });
 
   const toolSettingsOverlay = document.createElement('div');
   toolSettingsOverlay.className = 'pt-overlay';
   toolSettingsOverlay.style.display = 'none';
   root.appendChild(toolSettingsOverlay);
+  closeOnBackdropClick(toolSettingsOverlay, () => {
+    toolSettingsOpen = false;
+    render();
+  });
 
   // The tool-settings panel body is one long-lived node that gets moved into
   // the modal shell each time it opens, rather than a fresh element per open:
@@ -442,7 +475,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   const toolSettingsClose = document.createElement('button');
   toolSettingsClose.className = 'pt-close-btn';
   toolSettingsClose.textContent = '✕';
-  toolSettingsClose.title = 'Close (Esc)';
+  toolSettingsClose.title = 'Close (Esc, or click outside)';
   toolSettingsClose.onclick = () => {
     toolSettingsOpen = false;
     render();
@@ -456,15 +489,28 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   benchMenuOverlay.className = 'pt-overlay';
   benchMenuOverlay.style.display = 'none';
   root.appendChild(benchMenuOverlay);
+  closeOnBackdropClick(benchMenuOverlay, () => {
+    benchMenuOpen = false;
+    render();
+  });
 
   const ptOverlay = document.createElement('div');
   ptOverlay.className = 'pt-overlay';
   ptOverlay.style.display = 'none';
   root.appendChild(ptOverlay);
+  closeOnBackdropClick(ptOverlay, () => {
+    ptOpen = false;
+    ptSelectedSymbol = null;
+    render();
+  });
 
   // Campaign briefing/win modal -- same fixed backdrop as ptOverlay (see
   // .campaign-overlay in style.css), shown full-screen over an otherwise
   // inert bench until Start is clicked, and again once the goals are met.
+  // Deliberately not click-away dismissable (and Esc doesn't close it
+  // either): both states are waiting on a decision -- start the experiment,
+  // replay it, take the next one -- and there's no way to bring either back
+  // once dismissed.
   const campaignOverlay = document.createElement('div');
   campaignOverlay.className = 'pt-overlay campaign-overlay';
   campaignOverlay.style.display = 'none';

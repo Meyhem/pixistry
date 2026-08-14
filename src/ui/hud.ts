@@ -236,7 +236,7 @@ export function buildBenchMenu(container: HTMLElement, cb: BenchMenuCallbacks): 
   header.appendChild(title);
   const closeButton = el('button', 'pt-close-btn');
   closeButton.textContent = '✕';
-  closeButton.title = 'Close (Esc)';
+  closeButton.title = 'Close (Esc, or click outside)';
   closeButton.onclick = cb.onClose;
   header.appendChild(closeButton);
   modal.appendChild(header);

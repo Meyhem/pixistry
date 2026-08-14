@@ -1953,6 +1953,14 @@ input[type='range'] {
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
+  /* The pin badge hangs 7px outside its tile (see .pin-btn), which is enough
+     to hand the vertically-scrolling list a horizontal scrollbar as well --
+     `overflow-y: auto` alone would leave overflow-x at `auto`, never
+     `visible`. Clip that axis and pay the 7px back as padding so the badges
+     on the right-hand column aren't cut off. */
+  overflow-x: hidden;
+  padding-right: 8px;
+  padding-top: 8px;
 }
 
 .chest-grid {

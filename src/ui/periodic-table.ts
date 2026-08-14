@@ -39,6 +39,7 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
 
   const closeButton = el('button', 'pt-close-btn');
   closeButton.textContent = '×';
+  closeButton.title = 'Close (Esc, or click outside)';
   closeButton.onclick = cb.onClose;
   header.appendChild(closeButton);
   modal.appendChild(header);
