@@ -32,6 +32,20 @@ export interface ThermalProfile {
   thermalConductivityLiquid: number;
   thermalConductivityGas: number;
   density: number;
+  /** True only for phaseAtSTP: 'aqueous' species. A dissolved-salt cell is
+   * one pixel standing in for a whole solution (see species-data.ts's
+   * WATER_THERMAL doc comment) -- it has no separate water-molecule mass to
+   * boil off as vapor while leaving solid residue behind, and no separate
+   * ice-vs-brine split to freeze into. Without this flag, heat.ts's normal
+   * melt/boil landmark logic (borrowed wholesale from WATER_THERMAL) would
+   * carry it straight into PhaseCode.Gas above 100C -- rendering, e.g.,
+   * "gaseous dissolved sodium carbonate" floating up like a gas, which is
+   * not a real physical state. Real boiling of a solution requires
+   * splitting mass into vapor + residual solid, a mechanic this per-cell
+   * model doesn't have, so the physically defensible simplification is to
+   * keep the cell permanently liquid instead of faking a state that can't
+   * exist. */
+  alwaysLiquid: boolean;
 }
 
 const CELSIUS_TO_KELVIN = 273.15;
@@ -118,6 +132,7 @@ export class SpeciesTable {
       thermalConductivityLiquid: data.thermalConductivityLiquid,
       thermalConductivityGas: data.thermalConductivityGas,
       density: data.density,
+      alwaysLiquid: data.phaseAtSTP === 'aqueous',
     };
   }
 }

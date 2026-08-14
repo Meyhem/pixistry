@@ -94,6 +94,10 @@ export function massOf(species: SpeciesTable, specId: number): number {
 /** Derives {temperature, phase} from stored internal energy. */
 export function temperatureOf(thermal: ThermalProfile, massG: number, u: number): { tempK: number; phase: PhaseCode } {
   if (massG <= 0) return { tempK: thermal.meltK, phase: PhaseCode.Solid };
+  // alwaysLiquid species (dissolved solutions) skip the melt/boil landmarks
+  // entirely -- see ThermalProfile's doc comment for why they can never
+  // legitimately reach Solid or Gas.
+  if (thermal.alwaysLiquid) return { tempK: u / (massG * thermal.specificHeatLiquid), phase: PhaseCode.Liquid };
   const L = landmarks(thermal, massG);
 
   if (u < L.uMeltStart) return { tempK: u / (massG * thermal.specificHeatSolid), phase: PhaseCode.Solid };
@@ -108,6 +112,7 @@ export function temperatureOf(thermal: ThermalProfile, massG: number, u: number)
 /** Inverse of temperatureOf -- used to seed a freshly painted cell at ambient
  * temperature with the internal energy (and therefore phase) that implies. */
 export function energyForTemperature(thermal: ThermalProfile, massG: number, targetK: number): { u: number; phase: PhaseCode } {
+  if (thermal.alwaysLiquid) return { u: massG * thermal.specificHeatLiquid * targetK, phase: PhaseCode.Liquid };
   const L = landmarks(thermal, massG);
   if (targetK < thermal.meltK) return { u: massG * thermal.specificHeatSolid * targetK, phase: PhaseCode.Solid };
   if (targetK < thermal.boilK) {

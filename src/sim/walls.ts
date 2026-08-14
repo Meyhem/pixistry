@@ -95,6 +95,7 @@ export function wallThermalProfile(wall: WallMaterial): ThermalProfile {
     thermalConductivityLiquid: wall.thermalConductivity,
     thermalConductivityGas: wall.thermalConductivity,
     density: wall.density,
+    alwaysLiquid: false,
   };
 }
 

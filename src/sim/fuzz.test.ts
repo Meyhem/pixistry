@@ -17,7 +17,7 @@
 // this guards, and worker.ts's own tick order runs them unconditionally
 // regardless of whether any instance exists.
 import { describe, expect, it } from 'vitest';
-import { SimGrid } from './grid';
+import { PhaseCode, SimGrid } from './grid';
 import {
   celsiusToKelvin,
   energyForTemperature,
@@ -33,6 +33,7 @@ import { stepMovement } from './movement';
 import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable } from './species';
+import { SPECIES } from './species-data';
 import { wallList } from './walls';
 
 const WIDTH = 24;
@@ -87,6 +88,16 @@ describe('fuzz: long random-activity run stays numerically stable', () => {
         const { tempK } = temperatureOf(thermal, mass, u);
         expect(Number.isFinite(tempK), `tick ${tick} idx ${idx}: tempK=${tempK} is not finite`).toBe(true);
         expect(tempK, `tick ${tick} idx ${idx}: tempK=${tempK} exceeded MAX_TEMP_K`).toBeLessThanOrEqual(MAX_TEMP_K);
+
+        // A dissolved-species cell (one pixel standing in for a whole
+        // solution) has no mechanism to split into vapor + residual solid
+        // or ice + brine -- see ThermalProfile.alwaysLiquid's doc comment --
+        // so it must never drift into Solid or Gas no matter how extreme
+        // the random paint temperature or subsequent conduction/radiator
+        // activity gets.
+        if (SPECIES[specId]?.phaseAtSTP === 'aqueous') {
+          expect(grid.phase[idx], `tick ${tick} idx ${idx}: aqueous ${SPECIES[specId]?.name} left Liquid phase`).toBe(PhaseCode.Liquid);
+        }
       }
     }
 
