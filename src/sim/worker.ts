@@ -44,6 +44,7 @@ import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
+import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import { flaskShapeFor } from './flask-shapes';
@@ -108,6 +109,12 @@ let filterAllowSpecies = new Set<number>();
 // every sink line drawn on the grid, not per-instance.
 const sinkCounter = new SinkCounter();
 
+// Manual quicksave (see world-snapshot.ts) -- null until the first
+// 'snapshotWorld' message; 'restoreWorld' is a no-op until then (see the
+// frame message's hasSnapshot, which lets the UI grey out its Restore
+// button instead of sending a message that would silently do nothing).
+let worldSnapshot: WorldSnapshot | null = null;
+
 function post(message: WorkerToMainMessage, transfer: Transferable[] = []): void {
   (self as unknown as Worker).postMessage(message, transfer);
 }
@@ -154,7 +161,7 @@ function runOneTick(): void {
 }
 
 function postFrame(): void {
-  post(buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, tick }));
+  post(buildFrame(grid, species, { funnels, tubes, grabState, sinkCounter, hasSnapshot: worldSnapshot !== null, tick }));
 }
 
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
@@ -322,6 +329,32 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'resetSinkCounts':
       sinkCounter.reset();
       break;
+    case 'resetWorld':
+      grid.clearAll();
+      funnels = [];
+      tubes = [];
+      sinkCounter.reset();
+      filterAllowSpecies = new Set();
+      grabState = null;
+      stirState = null;
+      tick = 0;
+      break;
+    case 'snapshotWorld':
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, sinkCounter, tick);
+      break;
+    case 'restoreWorld': {
+      if (!worldSnapshot) break;
+      const restored = restoreWorldSnapshot(grid, sinkCounter, worldSnapshot);
+      funnels = restored.funnels;
+      tubes = restored.tubes;
+      tick = restored.tick;
+      // A restore is also a fresh start for anything mid-drag -- a held
+      // grab/stir brush referencing cells that may no longer be what it
+      // last saw would otherwise misbehave on the very next tick.
+      grabState = null;
+      stirState = null;
+      break;
+    }
   }
 };
 

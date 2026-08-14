@@ -105,6 +105,7 @@ export interface FrameState {
   readonly tubes: readonly TubeInstance[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
+  readonly hasSnapshot: boolean;
   readonly tick: number;
 }
 
@@ -138,6 +139,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,
+    hasSnapshot: state.hasSnapshot,
     tick: state.tick,
   };
 }

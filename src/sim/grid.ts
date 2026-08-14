@@ -132,6 +132,26 @@ export class SimGrid {
     this.u[idx] = 0;
   }
 
+  /** Wipes every field back to its constructor-time state, in place --
+   * `specId`/`phase`/`u` themselves plus every overlay (radiator/stirrer/
+   * tube/filter/vessel/sink masks). Used by worker.ts's 'resetWorld'
+   * handler ("start fresh" -- not the same as restoreWorldSnapshot's
+   * "rewind to a saved point", see world-snapshot.ts) so the grid stays one
+   * stable instance for the worker's whole lifetime rather than being
+   * reconstructed. */
+  clearAll(): void {
+    this.specId.fill(EMPTY);
+    this.u.fill(0);
+    this.phase.fill(PhaseCode.Empty);
+    this.radiatorRadius.fill(0);
+    this.radiatorTargetK.fill(0);
+    this.stirrerMask.fill(0);
+    this.tubeMask.fill(0);
+    this.filterMask.fill(0);
+    this.vesselMask.fill(0);
+    this.sinkMask.fill(0);
+  }
+
   swap(i: number, j: number): void {
     const specId = this.specId[i] as number;
     const phase = this.phase[i] as number;

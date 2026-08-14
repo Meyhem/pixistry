@@ -284,8 +284,8 @@ Each phase is independently shippable and leaves `main` working.
 
 | Phase | Contents | Notes |
 |---|---|---|
-| **0** | `resetWorld`, world snapshot/restore, `mountApp` teardown | pure plumbing, useful on its own |
-| **1** | **Sink tool** end to end (mask, `stepSinks`, line-draw UI, tally panel, renderer, tests) | ships to sandbox alone |
+| **0** ✅ | `resetWorld`, world snapshot/restore, `mountApp` teardown | done -- `grid.clearAll`, `world-snapshot.ts`, Save/Restore/Clear All buttons in sandbox, `mountApp` returns `unmount()` (unused by main.ts until Phase 2's menu needs it) |
+| **1** ✅ | **Sink tool** end to end (mask, `stepSinks`, line-draw UI, tally panel, renderer, tests) | done -- shipped to sandbox alone |
 | **2** | Menu + mode shell + progress persistence | Sandbox / Campaign routing |
 | **3** | `scenario-data.ts`, `scenario.ts`, `objectives.ts`, worker restrictions, solvability test | 3 scenarios only |
 | **4** | Campaign UI: briefing, HUD progress bars, locked tools, hints, win + stars | first playable slice ends here |

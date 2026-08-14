@@ -48,6 +48,10 @@ export interface ToolbarCallbacks {
   onTogglePause(): void;
   onStep(): void;
   onSetSpeed(speed: number): void;
+  hasSnapshot: boolean;
+  onResetWorld(): void;
+  onSnapshotWorld(): void;
+  onRestoreWorld(): void;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -237,5 +241,25 @@ export function buildToolbar(
   }
   speedSelect.onchange = () => cb.onSetSpeed(Number(speedSelect.value));
   sim.items.appendChild(speedSelect);
+
+  const saveButton = el('button', 'step-btn');
+  saveButton.textContent = 'Save';
+  saveButton.title = 'Save the current grid so you can come back to it later';
+  saveButton.onclick = cb.onSnapshotWorld;
+  sim.items.appendChild(saveButton);
+
+  const restoreButton = el('button', 'step-btn');
+  restoreButton.textContent = 'Restore';
+  restoreButton.title = cb.hasSnapshot ? 'Go back to the last saved grid' : 'Save first -- nothing saved yet';
+  restoreButton.disabled = !cb.hasSnapshot;
+  restoreButton.onclick = cb.onRestoreWorld;
+  sim.items.appendChild(restoreButton);
+
+  const resetWorldButton = el('button', 'world-reset-btn');
+  resetWorldButton.textContent = 'Clear All';
+  resetWorldButton.title = 'Wipe the whole grid and start over';
+  resetWorldButton.onclick = cb.onResetWorld;
+  sim.items.appendChild(resetWorldButton);
+
   container.appendChild(sim.row);
 }

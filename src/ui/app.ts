@@ -122,7 +122,16 @@ function savePinnedLabels(labels: readonly string[]): void {
   }
 }
 
-export function mountApp(root: HTMLElement): void {
+/** Mounts the whole app into `root` and returns an `unmount` teardown --
+ * terminates the worker (stops its tick-loop `setInterval` immediately
+ * rather than waiting on GC) and removes every listener/observer that
+ * outlives the DOM subtree (window/ResizeObserver; the canvas's own
+ * listeners die with the canvas element itself once it's detached). Not
+ * called by main.ts today (there's only ever one mounted app for the whole
+ * page lifetime), but needed once a menu can mount/unmount Sandbox and
+ * Campaign in turn without leaking a worker or a stale window listener each
+ * time -- see .grill/campaign-mode.md's Phase 2. */
+export function mountApp(root: HTMLElement): () => void {
   root.innerHTML = '';
 
   const header = document.createElement('div');
@@ -232,7 +241,8 @@ export function mountApp(root: HTMLElement): void {
     updateApparatusOverlay(lastHoverX, lastHoverY);
     updateSelectionBox();
   };
-  new ResizeObserver(fitCanvasWrap).observe(canvasCol);
+  const resizeObserver = new ResizeObserver(fitCanvasWrap);
+  resizeObserver.observe(canvasCol);
   window.addEventListener('resize', fitCanvasWrap);
 
   const sidePanel = document.createElement('div');
@@ -341,6 +351,7 @@ export function mountApp(root: HTMLElement): void {
   let lastSinkMask: Uint8Array | null = null;
   let lastSinkTotals: Uint32Array | null = null;
   let lastSinkGrandTotal = 0;
+  let hasSnapshot = false;
   let lastTick = 0;
 
   function describeToolMeta(t: Tool | null): ToolMeta {
@@ -541,6 +552,13 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'setSpeed', speed });
         render();
       },
+      hasSnapshot,
+      onResetWorld: () => {
+        if (!window.confirm('Clear the whole grid? This cannot be undone unless you Save first.')) return;
+        send({ type: 'resetWorld' });
+      },
+      onSnapshotWorld: () => send({ type: 'snapshotWorld' }),
+      onRestoreWorld: () => send({ type: 'restoreWorld' }),
     };
     buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
   }
@@ -1118,12 +1136,14 @@ export function mountApp(root: HTMLElement): void {
     event.preventDefault();
     finishTubeDraw();
   });
-  window.addEventListener('keydown', (event) => {
+  function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && tool?.kind === 'tube' && tubeDrawPoints.length > 0) {
       cancelTubeDraw();
     }
-  });
-  window.addEventListener('pointerup', () => {
+  }
+  window.addEventListener('keydown', handleKeydown);
+
+  function handleWindowPointerUp(): void {
     if (isGrabbing) {
       send({ type: 'grabEnd' });
       isGrabbing = false;
@@ -1140,7 +1160,8 @@ export function mountApp(root: HTMLElement): void {
     }
     apparatusSelection.endDrag();
     isPointerDown = false;
-  });
+  }
+  window.addEventListener('pointerup', handleWindowPointerUp);
 
   worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
     const msg = event.data;
@@ -1169,6 +1190,8 @@ export function mountApp(root: HTMLElement): void {
       lastSinkMask = msg.sinkMask;
       lastSinkTotals = msg.sinkTotals;
       lastSinkGrandTotal = msg.sinkGrandTotal;
+      const snapshotChanged = hasSnapshot !== msg.hasSnapshot;
+      hasSnapshot = msg.hasSnapshot;
       apparatusSelection.setFunnels(msg.funnels);
       apparatusSelection.setTubes(msg.tubes);
       lastTick = msg.tick;
@@ -1184,6 +1207,10 @@ export function mountApp(root: HTMLElement): void {
         funnelFillSpecId: msg.funnelFillSpecId,
         sinkMask: msg.sinkMask,
       });
+      // The Restore button's disabled state depends on hasSnapshot -- only
+      // rebuild the toolbar when it actually flips (Save/Restore/Reset
+      // World are the only things that change it), not every frame.
+      if (snapshotChanged) renderToolbar();
       // The select-apparatus tool's edit panel shows a placed funnel's live
       // "Remaining" count and needs to reflect Reset immediately -- only the
       // side panel is rebuilt here, not the toolbar, so a rapid succession of
@@ -1235,4 +1262,12 @@ export function mountApp(root: HTMLElement): void {
     },
     labelOf: (specId) => speciesLookup.labelOf(specId),
   });
+
+  return function unmount(): void {
+    worker.terminate();
+    resizeObserver.disconnect();
+    window.removeEventListener('resize', fitCanvasWrap);
+    window.removeEventListener('keydown', handleKeydown);
+    window.removeEventListener('pointerup', handleWindowPointerUp);
+  };
 }

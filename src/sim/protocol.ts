@@ -51,6 +51,10 @@ export type WorkerToMainMessage =
        * SinkCounter doc comment). */
       sinkTotals: Uint32Array;
       sinkGrandTotal: number;
+      /** Whether a 'snapshotWorld' has been saved and is available to
+       * 'restoreWorld' -- lets the UI grey out its Restore button rather
+       * than sending a message the worker would just silently no-op. */
+      hasSnapshot: boolean;
       tick: number;
     };
 
@@ -90,4 +94,14 @@ export type MainToWorkerMessage =
   | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
   | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean }
   | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number }
-  | { type: 'resetSinkCounts' };
+  | { type: 'resetSinkCounts' }
+  /** Wipes the whole grid/apparatus/sink state back to a blank sheet -- see
+   * grid.ts's clearAll. Distinct from restoreWorld: this has no saved point
+   * to go back to, it just starts over. */
+  | { type: 'resetWorld' }
+  /** Saves the current grid/apparatus/sink state, overwriting any
+   * previously saved snapshot -- see world-snapshot.ts. */
+  | { type: 'snapshotWorld' }
+  /** Copies the last snapshotWorld save back over the live world. A no-op
+   * if nothing's been saved yet (see the frame message's hasSnapshot). */
+  | { type: 'restoreWorld' };

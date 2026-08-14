@@ -202,6 +202,30 @@ body {
   border: 2px solid var(--accent);
 }
 
+.pause-btn:disabled,
+.step-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.world-reset-btn {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(224, 90, 90, 0.4);
+  background: #1e2120;
+  color: #e05a5a;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.world-reset-btn:hover {
+  border-color: #e05a5a;
+  background: color-mix(in srgb, #e05a5a 14%, #1e2120);
+}
+
 .speed-select {
   height: 28px;
   padding: 0 10px;
