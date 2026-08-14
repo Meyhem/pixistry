@@ -7,11 +7,11 @@
 // the rest of src/ui, and cheap at this element count.
 import type { PaletteEntry } from '../sim/species';
 import type { WallMaterial } from '../sim/walls';
-import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
-import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
-import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
-import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
-import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
+import { RADIATOR_LABEL } from '../sim/radiators';
+import { FUNNEL_LABEL } from '../sim/funnel';
+import { STIRRER_LABEL } from '../sim/stirrer';
+import { TUBE_LABEL } from '../sim/tube';
+import { FILTER_LABEL } from '../sim/filter-apparatus';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 
@@ -76,6 +76,35 @@ function makePaletteButton(label: string, swatch: string | null, active: boolean
   return button;
 }
 
+interface DropdownOption {
+  value: string;
+  label: string;
+  active: boolean;
+  onSelect: () => void;
+}
+
+function makeDropdown(placeholder: string, options: DropdownOption[]): HTMLSelectElement {
+  const select = el('select', 'dropdown-select');
+  const ph = el('option');
+  ph.value = '';
+  ph.textContent = placeholder;
+  ph.disabled = true;
+  select.appendChild(ph);
+  for (const opt of options) {
+    const option = el('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    select.appendChild(option);
+  }
+  const activeOpt = options.find((opt) => opt.active);
+  select.value = activeOpt ? activeOpt.value : '';
+  select.onchange = () => {
+    const chosen = options.find((opt) => opt.value === select.value);
+    chosen?.onSelect();
+  };
+  return select;
+}
+
 function makeQuickSpeciesButton(entry: PaletteEntry, active: boolean, pinned: boolean, cb: ToolbarCallbacks): HTMLDivElement {
   const wrap = el('div', 'quick-item');
   const button = makePaletteButton(entry.label, entry.color, active, () => cb.onSelectPaint(entry.specId));
@@ -121,41 +150,54 @@ export function buildToolbar(
   container.appendChild(elements.row);
 
   const apparatus = makeRow('APPARATUS');
-  for (const wall of walls) {
-    apparatus.items.appendChild(makePaletteButton(wall.label, wall.color, cb.isWallActive(wall.specId), () => cb.onSelectWall(wall.specId)));
-  }
-  apparatus.items.appendChild(
-    makePaletteButton(RADIATOR_LABEL, RADIATOR_COLOR, cb.isToolActive('radiator'), () => cb.onSelectTool('radiator')),
-  );
-  apparatus.items.appendChild(
-    makePaletteButton(FUNNEL_LABEL, FUNNEL_COLOR, cb.isToolActive('funnel'), () => cb.onSelectTool('funnel')),
-  );
-  apparatus.items.appendChild(
-    makePaletteButton(STIRRER_LABEL, STIRRER_COLOR, cb.isToolActive('stirrer'), () => cb.onSelectTool('stirrer')),
-  );
-  apparatus.items.appendChild(makePaletteButton(TUBE_LABEL, TUBE_COLOR, cb.isToolActive('tube'), () => cb.onSelectTool('tube')));
-  apparatus.items.appendChild(makePaletteButton(FILTER_LABEL, FILTER_COLOR, cb.isToolActive('filter'), () => cb.onSelectTool('filter')));
+  const glassWall = walls.find((w) => w.kind === 'glass');
+  const insulatorWall = walls.find((w) => w.kind === 'insulator');
 
-  const flaskSelect = el('select', 'flask-select');
-  const flaskPlaceholder = el('option');
-  flaskPlaceholder.value = '';
-  flaskPlaceholder.textContent = 'Flasks';
-  flaskPlaceholder.disabled = true;
-  flaskSelect.appendChild(flaskPlaceholder);
-  const flaskOptions: { value: 'flask-erlenmeyer' | 'flask-erlenmeyer-stirred'; label: string }[] = [
-    { value: 'flask-erlenmeyer', label: 'Erlenmeyer' },
-    { value: 'flask-erlenmeyer-stirred', label: 'Erlenmeyer (stirred)' },
+  const glasswareOptions: DropdownOption[] = [
+    {
+      value: 'flask-erlenmeyer',
+      label: 'Erlenmeyer',
+      active: cb.isToolActive('flask-erlenmeyer'),
+      onSelect: () => cb.onSelectTool('flask-erlenmeyer'),
+    },
+    {
+      value: 'flask-erlenmeyer-stirred',
+      label: 'Erlenmeyer (stirred)',
+      active: cb.isToolActive('flask-erlenmeyer-stirred'),
+      onSelect: () => cb.onSelectTool('flask-erlenmeyer-stirred'),
+    },
   ];
-  for (const opt of flaskOptions) {
-    const option = el('option');
-    option.value = opt.value;
-    option.textContent = opt.label;
-    flaskSelect.appendChild(option);
+  if (glassWall) {
+    glasswareOptions.push({
+      value: `wall-${glassWall.specId}`,
+      label: 'Free Draw',
+      active: cb.isWallActive(glassWall.specId),
+      onSelect: () => cb.onSelectWall(glassWall.specId),
+    });
   }
-  const activeFlask = flaskOptions.find((opt) => cb.isToolActive(opt.value));
-  flaskSelect.value = activeFlask ? activeFlask.value : '';
-  flaskSelect.onchange = () => cb.onSelectTool(flaskSelect.value as ToolKind);
-  apparatus.items.appendChild(flaskSelect);
+  apparatus.items.appendChild(makeDropdown('Glassware', glasswareOptions));
+
+  const thermalOptions: DropdownOption[] = [];
+  if (insulatorWall) {
+    thermalOptions.push({
+      value: `wall-${insulatorWall.specId}`,
+      label: 'Insulator',
+      active: cb.isWallActive(insulatorWall.specId),
+      onSelect: () => cb.onSelectWall(insulatorWall.specId),
+    });
+  }
+  thermalOptions.push(
+    { value: 'radiator', label: RADIATOR_LABEL, active: cb.isToolActive('radiator'), onSelect: () => cb.onSelectTool('radiator') },
+    { value: 'stirrer', label: STIRRER_LABEL, active: cb.isToolActive('stirrer'), onSelect: () => cb.onSelectTool('stirrer') },
+  );
+  apparatus.items.appendChild(makeDropdown('Thermal & Mixing', thermalOptions));
+
+  const flowOptions: DropdownOption[] = [
+    { value: 'funnel', label: FUNNEL_LABEL, active: cb.isToolActive('funnel'), onSelect: () => cb.onSelectTool('funnel') },
+    { value: 'tube', label: TUBE_LABEL, active: cb.isToolActive('tube'), onSelect: () => cb.onSelectTool('tube') },
+    { value: 'filter', label: FILTER_LABEL, active: cb.isToolActive('filter'), onSelect: () => cb.onSelectTool('filter') },
+  ];
+  apparatus.items.appendChild(makeDropdown('Flow Control', flowOptions));
 
   container.appendChild(apparatus.row);
 
