@@ -20,6 +20,7 @@ function makeFunnel(overrides: Partial<FunnelInstance> = {}): FunnelInstance {
     ticksUntilDrip: 0,
     total: null,
     remaining: null,
+    enabled: true,
     ...overrides,
   };
 }

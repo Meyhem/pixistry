@@ -60,6 +60,7 @@ export function funnelSnapshots(funnels: readonly FunnelInstance[]): FunnelSnaps
     ratePerMinute: rateFromIntervalTicks(f.intervalTicks),
     total: f.total,
     remaining: f.remaining,
+    enabled: f.enabled,
   }));
 }
 

@@ -60,6 +60,17 @@ describe('flask-shapes', () => {
     expect(nextFlaskFacing('up', -1)).toBe(FLASK_FACINGS[FLASK_FACINGS.length - 1]);
   });
 
+  it('has a 7px-wide neck (+50% over the original 5px)', () => {
+    // The neck is the two straight-run wall cells nearest the mouth, i.e.
+    // the smallest dx span among rows sharing the topmost dy.
+    const shape = flaskShapeFor('up', DEFAULT_FLASK_SIZE_SCALE);
+    let topDy = 0;
+    for (const c of shape.cells) if (c.dy < topDy) topDy = c.dy;
+    const mouthRowDxs = shape.cells.filter((c) => c.dy === topDy).map((c) => c.dx);
+    const width = Math.max(...mouthRowDxs) - Math.min(...mouthRowDxs) + 1;
+    expect(width).toBe(7);
+  });
+
   it('scales the footprint up and down with sizeScale', () => {
     const small = flaskBounds(flaskShapeFor('up', 0.5));
     const normal = flaskBounds(flaskShapeFor('up', 1.0));

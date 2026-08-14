@@ -32,6 +32,7 @@ import {
   moveFunnelInstance,
   placeFunnelInstance,
   resetFunnelInstance,
+  setFunnelEnabledInstance,
   stepFunnels,
   updateFunnelInstance,
   type FunnelInstance,
@@ -63,10 +64,6 @@ let tick = 0;
 let running = true;
 let speed = 1;
 let tickAccumulator = 0;
-// Off by default (see app.ts's DEFAULT_FUNNELS_ENABLED) -- a placed funnel's
-// glass still sits on the grid as inert matter while disabled, it just never
-// drips until toggled on from the SETTINGS row.
-let funnelsEnabled = false;
 
 // The grabber tool (see grabber.ts): held cells are pulled out of `grid`
 // entirely for the duration of a drag, so they're immune to
@@ -125,7 +122,7 @@ function withTube(id: number, fn: (instance: TubeInstance) => void): void {
 }
 
 function runOneTick(): void {
-  if (funnelsEnabled) stepFunnels(grid, species, funnels);
+  stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++, filterAllowSpecies);
   stepTubes(grid, tubes);
   if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
@@ -184,6 +181,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.stirrerMask[grid.index(px, py)] = 0;
         grid.tubeMask[grid.index(px, py)] = 0;
         grid.filterMask[grid.index(px, py)] = 0;
+        grid.vesselMask[grid.index(px, py)] = 0;
       });
       // Erasing a funnel's anchor (its spout tip) removes the whole tracked
       // instance, not just whatever glass cells the brush touched -- the
@@ -205,9 +203,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'setSpeed':
       speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, msg.speed));
-      break;
-    case 'setFunnelsEnabled':
-      funnelsEnabled = msg.enabled;
       break;
     case 'stirStart':
       stirState = { x: msg.x, y: msg.y, radius: msg.radius };
@@ -257,6 +252,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'resetFunnel':
       withFunnel(msg.id, resetFunnelInstance);
       break;
+    case 'setFunnelEnabled':
+      withFunnel(msg.id, (instance) => setFunnelEnabledInstance(instance, msg.enabled));
+      break;
     case 'moveFunnel':
       withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y));
       break;
@@ -285,12 +283,17 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         species,
         shape.cells.map((cell) => ({ x: msg.x + cell.dx, y: msg.y + cell.dy })),
       );
-      if (msg.stirred) {
-        for (const cell of shape.reservoirCells) {
-          const x = msg.x + cell.dx;
-          const y = msg.y + cell.dy;
-          if (grid.inBounds(x, y)) grid.stirrerMask[grid.index(x, y)] = 1;
-        }
+      // vesselMask marks every flask's interior (not just the stirred
+      // variant's stirrerMask) -- see grid.ts's doc comment and
+      // movement.ts's tryDiagonal, which uses it to stop matter from
+      // hopping diagonally through the glass instead of the mouth.
+      for (const cell of shape.reservoirCells) {
+        const x = msg.x + cell.dx;
+        const y = msg.y + cell.dy;
+        if (!grid.inBounds(x, y)) continue;
+        const idx = grid.index(x, y);
+        grid.vesselMask[idx] = 1;
+        if (msg.stirred) grid.stirrerMask[idx] = 1;
       }
       break;
     }

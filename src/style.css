@@ -231,39 +231,6 @@ body {
   cursor: not-allowed;
 }
 
-.settings-item-label {
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.settings-toggle-group {
-  display: inline-flex;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-}
-
-.settings-toggle-btn {
-  height: 28px;
-  padding: 0 14px;
-  border: none;
-  background: #1e2120;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.settings-toggle-btn + .settings-toggle-btn {
-  border-left: 1px solid rgba(255, 255, 255, 0.14);
-}
-
-.settings-toggle-btn.active {
-  background: var(--accent);
-  color: #111;
-}
-
 .workspace {
   display: flex;
   gap: 20px;

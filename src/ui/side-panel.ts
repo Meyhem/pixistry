@@ -60,6 +60,9 @@ export interface FunnelFieldValues {
   totalAmount: number;
   /** Only meaningful when funnelPanel === 'edit'. */
   remaining: number | null;
+  /** Only meaningful when funnelPanel === 'edit' -- a newly placed funnel
+   * always starts false (see FunnelInstance.enabled's doc comment). */
+  enabled: boolean;
 }
 
 export interface SidePanelCallbacks {
@@ -77,6 +80,7 @@ export interface SidePanelCallbacks {
   onSetFunnelRate(value: number): void;
   onSetFunnelTotalMode(mode: 'finite' | 'infinite'): void;
   onSetFunnelTotalAmount(value: number): void;
+  onSetFunnelEnabled(enabled: boolean): void;
   onResetFunnel(): void;
   tubeFields: TubeFieldValues;
   /** Every paintable species, for the filter's chip-list picker. */
@@ -204,6 +208,27 @@ function addTotalModeToggle(container: HTMLElement, mode: 'finite' | 'infinite',
   container.appendChild(wrap);
 }
 
+function addFunnelEnabledToggle(container: HTMLElement, enabled: boolean, onChange: (enabled: boolean) => void): void {
+  const wrap = el('div', 'setting');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = 'State';
+  wrap.appendChild(labelEl);
+
+  const row = el('div', 'funnel-toggle-row');
+  const runningBtn = el('button', 'funnel-toggle-btn');
+  runningBtn.textContent = 'Running';
+  runningBtn.classList.toggle('active', enabled);
+  runningBtn.onclick = () => onChange(true);
+  const stoppedBtn = el('button', 'funnel-toggle-btn');
+  stoppedBtn.textContent = 'Stopped';
+  stoppedBtn.classList.toggle('active', !enabled);
+  stoppedBtn.onclick = () => onChange(false);
+  row.appendChild(runningBtn);
+  row.appendChild(stoppedBtn);
+  wrap.appendChild(row);
+  container.appendChild(wrap);
+}
+
 function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallbacks): void {
   if (meta.funnelPanel === 'none') return;
   addDivider(container);
@@ -223,6 +248,7 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   }
 
   if (meta.funnelPanel === 'edit') {
+    addFunnelEnabledToggle(container, f.enabled, cb.onSetFunnelEnabled);
     container.appendChild(propRow('Remaining', f.remaining === null ? 'infinite' : String(f.remaining)));
 
     const resetBtn = el('button', 'funnel-reset-btn');
@@ -234,8 +260,8 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   container.appendChild(
     hintBox(
       meta.funnelPanel === 'config'
-        ? 'Rotate with the scroll wheel while hovering the grid, then click to place. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
-        : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it.",
+        ? 'Rotate with the scroll wheel while hovering the grid, then click to place. A placed funnel starts Stopped -- switch it to Running here once placed. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
+        : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it, without changing Running/Stopped.",
       'HOW IT WORKS',
     ),
   );

@@ -10,6 +10,7 @@ import {
   placeFunnelInstance,
   rateFromIntervalTicks,
   resetFunnelInstance,
+  setFunnelEnabledInstance,
   stepFunnels,
   updateFunnelInstance,
   type FunnelInstance,
@@ -17,8 +18,12 @@ import {
 
 const species = new SpeciesTable();
 
+// A freshly placed funnel starts disabled (see FunnelInstance.enabled's doc
+// comment) -- every test below is about drip mechanics, not the enabled
+// gate itself, so `place` switches it on immediately, same as clicking
+// Running in the edit panel right after placement.
 function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelInstance>[2]> = {}): FunnelInstance {
-  return placeFunnelInstance(grid, species, {
+  const instance = placeFunnelInstance(grid, species, {
     x: 50,
     y: 50,
     facing: 'down',
@@ -28,6 +33,8 @@ function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelIn
     total: 5,
     ...overrides,
   });
+  instance.enabled = true;
+  return instance;
 }
 
 describe('funnel', () => {
@@ -51,6 +58,31 @@ describe('funnel', () => {
 
   it('clamps the fastest rate to one pixel per tick', () => {
     expect(intervalTicksForRate(999999)).toBe(1);
+  });
+
+  it('starts disabled and never drips until enabled', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = placeFunnelInstance(grid, species, {
+      x: 50,
+      y: 50,
+      facing: 'down',
+      specId: SpeciesId.H2O,
+      tempC: 21,
+      ratePerMinute: 3600,
+      total: 5,
+    });
+    expect(instance.enabled).toBe(false);
+    const spawn = funnelSpawnOffset(instance.facing);
+    const spawnIdx = grid.index(instance.anchorX + spawn.dx, instance.anchorY + spawn.dy);
+
+    for (let i = 0; i < 5; i++) stepFunnels(grid, species, [instance]);
+    expect(grid.isEmptyAt(spawnIdx)).toBe(true);
+    expect(instance.remaining).toBe(5);
+
+    setFunnelEnabledInstance(instance, true);
+    stepFunnels(grid, species, [instance]);
+    expect(grid.specId[spawnIdx]).toBe(SpeciesId.H2O);
+    expect(instance.remaining).toBe(4);
   });
 
   it('drips exactly one pixel every intervalTicks ticks, at the spawn cell beyond the spout', () => {

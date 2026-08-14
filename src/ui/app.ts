@@ -38,10 +38,6 @@ const DEFAULT_FUNNEL_RATE_PER_MINUTE = 60;
 const DEFAULT_FUNNEL_TOTAL_AMOUNT = 100;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
-// Off by default -- the addition funnel is opt-in until a returning player
-// turns it on in SETTINGS, rather than showing up unannounced in APPARATUS.
-const DEFAULT_FUNNELS_ENABLED = false;
-const FUNNELS_ENABLED_STORAGE_KEY = 'pixistry.funnelsEnabled';
 
 type Tool =
   | { kind: 'paint'; specId: number }
@@ -120,24 +116,6 @@ function savePinnedLabels(labels: readonly string[]): void {
   } catch {
     // Storage unavailable (private browsing, quota) -- pins just won't
     // survive a reload, which is a fine degradation.
-  }
-}
-
-function loadFunnelsEnabled(): boolean {
-  try {
-    const raw = localStorage.getItem(FUNNELS_ENABLED_STORAGE_KEY);
-    if (raw === null) return DEFAULT_FUNNELS_ENABLED;
-    return raw === 'true';
-  } catch {
-    return DEFAULT_FUNNELS_ENABLED;
-  }
-}
-
-function saveFunnelsEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(FUNNELS_ENABLED_STORAGE_KEY, String(enabled));
-  } catch {
-    // Storage unavailable -- the setting just won't survive a reload.
   }
 }
 
@@ -265,7 +243,6 @@ export function mountApp(root: HTMLElement): void {
   let tool: Tool | null = null;
   let running = true;
   let speed = 1;
-  let funnelsEnabled = loadFunnelsEnabled();
   let brushWidth = DEFAULT_RADIUS;
   let brushTempC = DEFAULT_BRUSH_TEMP_C;
   let radiationRadius = DEFAULT_RADIATION_RADIUS;
@@ -443,16 +420,6 @@ export function mountApp(root: HTMLElement): void {
     render();
   }
 
-  function setFunnelsEnabled(enabled: boolean): void {
-    funnelsEnabled = enabled;
-    saveFunnelsEnabled(enabled);
-    send({ type: 'setFunnelsEnabled', enabled });
-    // Disabling mid-placement would leave the funnel tool selected but
-    // grayed out in APPARATUS -- fall back to nothing selected instead.
-    if (!enabled && tool?.kind === 'funnel') tool = null;
-    render();
-  }
-
   /** Pushes the edit draft's full config to the worker as one message -- see
    * FunnelEditDraft's doc comment for why every field is sent together
    * rather than patched individually. */
@@ -522,8 +489,6 @@ export function mountApp(root: HTMLElement): void {
         send({ type: 'setSpeed', speed });
         render();
       },
-      funnelsEnabled,
-      onSetFunnelsEnabled: setFunnelsEnabled,
     };
     buildToolbar(toolbar, palette, wallList(), pinnedLabels, toolbarCallbacks);
   }
@@ -567,6 +532,7 @@ export function mountApp(root: HTMLElement): void {
             totalMode: apparatusSelection.editDraft.totalMode,
             totalAmount: apparatusSelection.editDraft.totalAmount,
             remaining: selectedFunnel?.remaining ?? null,
+            enabled: selectedFunnel?.enabled ?? false,
           }
         : {
             specLabel: speciesLookup.labelOf(funnelDraft.specId) ?? `spec ${funnelDraft.specId}`,
@@ -576,6 +542,7 @@ export function mountApp(root: HTMLElement): void {
             totalMode: funnelDraft.totalMode,
             totalAmount: funnelDraft.totalAmount,
             remaining: null,
+            enabled: false,
           };
 
     // The radiator tool's settings are only ever read at paint time (see
@@ -677,6 +644,11 @@ export function mountApp(root: HTMLElement): void {
       // render to update the panel's layout.
       onSetFunnelTotalMode: funnelSetter('totalMode', { render: true }),
       onSetFunnelTotalAmount: funnelSetter('totalAmount'),
+      onSetFunnelEnabled: (enabled) => {
+        if (apparatusSelection.selectedFunnelId !== null) {
+          send({ type: 'setFunnelEnabled', id: apparatusSelection.selectedFunnelId, enabled });
+        }
+      },
       onResetFunnel: () => {
         if (apparatusSelection.selectedFunnelId !== null) send({ type: 'resetFunnel', id: apparatusSelection.selectedFunnelId });
       },
@@ -1103,9 +1075,6 @@ export function mountApp(root: HTMLElement): void {
         tool = { kind: 'paint', specId: initial.specId };
         funnelDraft.specId = initial.specId;
       }
-      // Worker starts with funnels disabled by default; only needs a
-      // message if a returning player had previously turned them on.
-      if (funnelsEnabled) send({ type: 'setFunnelsEnabled', enabled: true });
       render();
     } else if (msg.type === 'frame') {
       lastSpecId = msg.specId;

@@ -18,6 +18,7 @@ export interface FunnelSnapshot {
   ratePerMinute: number;
   total: number | null;
   remaining: number | null;
+  enabled: boolean;
 }
 
 export interface TubeSnapshot {
@@ -56,7 +57,6 @@ export type MainToWorkerMessage =
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
   | { type: 'setSpeed'; speed: number }
-  | { type: 'setFunnelsEnabled'; enabled: boolean }
   | { type: 'stirStart'; x: number; y: number; radius: number }
   | { type: 'stirMove'; x: number; y: number }
   | { type: 'stirEnd' }
@@ -75,6 +75,7 @@ export type MainToWorkerMessage =
     }
   | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
   | { type: 'resetFunnel'; id: number }
+  | { type: 'setFunnelEnabled'; id: number; enabled: boolean }
   | { type: 'moveFunnel'; id: number; x: number; y: number }
   | { type: 'placeTube'; points: Point[]; coneSize: number; filter: number[] | null }
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }

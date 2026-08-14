@@ -126,7 +126,19 @@ function commitSwap(grid: SimGrid, moved: Uint8Array, a: number, b: number): tru
  * step in moveFalling and moveRising -- all three sites (solid/liquid
  * falling, buoyant liquid rising, gas rising) roll the same DIAGONAL_P once
  * a straight move has already failed; only the direction (targetY) and the
- * density predicate differ between them. */
+ * density predicate differ between them.
+ *
+ * A single diagonal step is otherwise enough to cut through the corner of
+ * any one-pixel-thick wall -- fine (desired, even) for a grain sliding past
+ * a wall's outer corner as it piles up, but not for a cell sitting directly
+ * outside a placed flask's glass: the interior is open right up against the
+ * inner face of that same wall pixel, so the same corner-cut lets matter
+ * hop straight from "just outside the vessel" to "inside it" without ever
+ * passing through the mouth -- see grid.ts's vesselMask. Blocking a diagonal
+ * move whenever it would cross from outside a vessel into its interior
+ * closes that off, while leaving straight-line movement through the actual
+ * mouth (never diagonal, since the mouth's interior columns have open sky
+ * directly above them) and diagonal movement anywhere else entirely alone. */
 function tryDiagonal(
   grid: SimGrid,
   moved: Uint8Array,
@@ -136,11 +148,13 @@ function tryDiagonal(
   rng: Rng,
   canMove: (targetIdx: number) => boolean,
 ): boolean {
+  const fromInsideVessel = (grid.vesselMask[idx] as number) !== 0;
   for (const dx of pickDiagonalOrder(rng)) {
     const nx = x + dx;
     if (!grid.inBounds(nx, targetY)) continue;
     const nIdx = grid.index(nx, targetY);
     if (moved[nIdx]) continue;
+    if (!fromInsideVessel && (grid.vesselMask[nIdx] as number) !== 0) continue;
     if (canMove(nIdx) && rng() < DIAGONAL_P) return commitSwap(grid, moved, idx, nIdx);
   }
   return false;

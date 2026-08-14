@@ -364,6 +364,40 @@ describe('stepMovement', () => {
     expect(allowed.reachedFiltered).toBe(true);
   });
 
+  it('never lets a falling solid diagonally hop from outside a vessel into its masked interior (regression: "falling through glass")', () => {
+    // A solid sitting directly above a wall pixel, with the vessel's open
+    // interior one column over, used to be able to slip in via the diagonal
+    // fallback even though it was never aligned with the vessel's actual
+    // mouth -- see grid.ts's vesselMask and movement.ts's tryDiagonal.
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 3);
+    grid.set(0, 1, GLASS_WALL_SPEC_ID, WALL_PHASE);
+    grid.vesselMask[grid.index(1, 1)] = 1; // masked interior, open, one column over
+    grid.set(0, 0, SpeciesId.Fe, PhaseCode.Solid); // sits directly above the wall pixel
+    const rng = mulberry32(1);
+
+    for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
+
+    expect(grid.isEmptyAt(grid.index(1, 1))).toBe(true); // never made it into the masked interior
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.Fe); // no legal move at all (off-grid to the other side)
+  });
+
+  it('still allows diagonal movement between two cells that are both already inside a vessel interior', () => {
+    // 2-wide grid so the down-right diagonal (x=2) is off-grid, leaving
+    // down-left (0,1) as the only candidate regardless of pickDiagonalOrder.
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 2);
+    grid.vesselMask[grid.index(1, 0)] = 1; // the mover's own cell, already inside the interior
+    grid.vesselMask[grid.index(0, 1)] = 1; // the diagonal target, also inside the interior
+    grid.set(1, 1, SpeciesId.Fe, PhaseCode.Solid); // blocks the straight-down move
+    grid.set(1, 0, SpeciesId.Fe, PhaseCode.Solid); // the mover
+    const rng = mulberry32(1);
+
+    for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
+
+    expect(grid.specId[grid.index(0, 1)]).toBe(SpeciesId.Fe); // diagonal move within the interior is unaffected
+  });
+
   it('leaves EMPTY untouched when the grid is all vacuum', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(4, 4);

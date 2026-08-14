@@ -63,6 +63,17 @@ export class SimGrid {
    * like a wall otherwise. Unlike tubeMask there's no "kind" distinction --
    * every filtered cell behaves the same regardless of what's drawn there. */
   readonly filterMask: Uint8Array;
+  /** Placed-flask interior overlay -- same "fixed background field, not
+   * matter" convention as the masks above: painted once at placement time
+   * over every cell inside a flask's glass (see worker.ts's 'placeFlask'
+   * handler and flask-shapes.ts's reservoirCells), left untouched by set/
+   * clear/swap. Read only by movement.ts's diagonal fallback, to block a
+   * cell from hopping diagonally from outside a vessel straight into its
+   * interior past a single-pixel wall corner ("falling through glass") --
+   * see tryDiagonal's doc comment. Straight-line movement through the
+   * vessel's actual mouth never consults this, so ordinary pouring is
+   * unaffected. */
+  readonly vesselMask: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -76,6 +87,7 @@ export class SimGrid {
     this.stirrerMask = new Uint8Array(size);
     this.tubeMask = new Uint8Array(size);
     this.filterMask = new Uint8Array(size);
+    this.vesselMask = new Uint8Array(size);
   }
 
   index(x: number, y: number): number {

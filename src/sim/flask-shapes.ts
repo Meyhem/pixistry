@@ -19,7 +19,7 @@ export const MIN_FLASK_SIZE_SCALE = 0.5;
 export const MAX_FLASK_SIZE_SCALE = 2.0;
 export const DEFAULT_FLASK_SIZE_SCALE = 1.0;
 
-const NECK_HALF_WIDTH = 2; // half-width of the straight neck -> 5px across at scale 1
+const NECK_HALF_WIDTH = 3; // half-width of the straight neck -> 7px across at scale 1 (+50% over the original 5px)
 const BASE_HALF_WIDTH = 12; // half-width of the flat base -> 25px across at scale 1
 const CONE_ROWS = 16; // rows the conical body tapers over, from base up to the neck
 const NECK_ROWS = 10; // straight neck rows above the cone

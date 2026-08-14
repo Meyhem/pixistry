@@ -46,8 +46,6 @@ export interface ToolbarCallbacks {
   onTogglePause(): void;
   onStep(): void;
   onSetSpeed(speed: number): void;
-  funnelsEnabled: boolean;
-  onSetFunnelsEnabled(enabled: boolean): void;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
@@ -74,14 +72,6 @@ function makePaletteButton(label: string, swatch: string | null, active: boolean
   }
   button.textContent = label;
   button.disabled = disabled;
-  button.onclick = onClick;
-  return button;
-}
-
-function makeToggleButton(label: string, active: boolean, onClick: () => void): HTMLButtonElement {
-  const button = el('button', 'settings-toggle-btn');
-  button.classList.toggle('active', active);
-  button.textContent = label;
   button.onclick = onClick;
   return button;
 }
@@ -138,13 +128,7 @@ export function buildToolbar(
     makePaletteButton(RADIATOR_LABEL, RADIATOR_COLOR, cb.isToolActive('radiator'), () => cb.onSelectTool('radiator')),
   );
   apparatus.items.appendChild(
-    makePaletteButton(
-      FUNNEL_LABEL,
-      FUNNEL_COLOR,
-      cb.isToolActive('funnel'),
-      () => cb.onSelectTool('funnel'),
-      !cb.funnelsEnabled,
-    ),
+    makePaletteButton(FUNNEL_LABEL, FUNNEL_COLOR, cb.isToolActive('funnel'), () => cb.onSelectTool('funnel')),
   );
   apparatus.items.appendChild(
     makePaletteButton(STIRRER_LABEL, STIRRER_COLOR, cb.isToolActive('stirrer'), () => cb.onSelectTool('stirrer')),
@@ -209,14 +193,4 @@ export function buildToolbar(
   speedSelect.onchange = () => cb.onSetSpeed(Number(speedSelect.value));
   sim.items.appendChild(speedSelect);
   container.appendChild(sim.row);
-
-  const settings = makeRow('SETTINGS');
-  const funnelsLabel = el('span', 'settings-item-label');
-  funnelsLabel.textContent = 'Addition Funnels';
-  settings.items.appendChild(funnelsLabel);
-  const toggleGroup = el('div', 'settings-toggle-group');
-  toggleGroup.appendChild(makeToggleButton('On', cb.funnelsEnabled, () => cb.onSetFunnelsEnabled(true)));
-  toggleGroup.appendChild(makeToggleButton('Off', !cb.funnelsEnabled, () => cb.onSetFunnelsEnabled(false)));
-  settings.items.appendChild(toggleGroup);
-  container.appendChild(settings.row);
 }

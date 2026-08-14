@@ -29,6 +29,10 @@ export interface FunnelInstance {
   /** null = infinite supply. */
   total: number | null;
   remaining: number | null;
+  /** Starts false on every newly placed funnel -- dripping is opt-in per
+   * instance, switched on from the select-apparatus tool's edit panel
+   * (see setFunnelEnabledInstance), rather than a global setting. */
+  enabled: boolean;
 }
 
 // TICK_MS in worker.ts is 1000/60, i.e. 60 ticks/sec -> 3600 ticks/minute.
@@ -84,6 +88,7 @@ export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placem
     ticksUntilDrip: 0,
     total: placement.total,
     remaining: placement.total,
+    enabled: false,
   };
 }
 
@@ -140,15 +145,22 @@ export function resetFunnelInstance(instance: FunnelInstance): void {
   instance.ticksUntilDrip = 0;
 }
 
-/** One tick's worth of dripping for every placed funnel. A depleted funnel
- * (remaining === 0) is left alone -- its glass stays on the grid, inert. A
- * funnel whose spawn cell is currently occupied pauses rather than
- * overwriting or burning its budget, and retries every tick until the cell
- * clears (see the plan's "pause and wait" behavior) -- only a successful
- * drip resets the fixed-interval timer. */
+/** Starts or stops a placed funnel's dripping without touching its other
+ * config -- the select-apparatus tool's edit panel toggle. */
+export function setFunnelEnabledInstance(instance: FunnelInstance, enabled: boolean): void {
+  instance.enabled = enabled;
+}
+
+/** One tick's worth of dripping for every placed funnel. A funnel that's
+ * off (see FunnelInstance.enabled) or depleted (remaining === 0) is left
+ * alone -- its glass stays on the grid, inert. A funnel whose spawn cell is
+ * currently occupied pauses rather than overwriting or burning its budget,
+ * and retries every tick until the cell clears (see the plan's "pause and
+ * wait" behavior) -- only a successful drip resets the fixed-interval
+ * timer. */
 export function stepFunnels(grid: SimGrid, species: SpeciesTable, instances: readonly FunnelInstance[]): void {
   for (const instance of instances) {
-    if (instance.remaining === 0) continue;
+    if (!instance.enabled || instance.remaining === 0) continue;
     if (instance.ticksUntilDrip > 0) {
       instance.ticksUntilDrip -= 1;
       // Reaching exactly 0 this tick means it's due now, not next tick --
