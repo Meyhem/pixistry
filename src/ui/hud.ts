@@ -12,16 +12,19 @@
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el } from './dom';
 import { formatCelsius } from './format';
+import { CHEST_CATEGORIES, type ChestCategory } from './tool-chest';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
 export interface HudCallbacks {
-  /** Active tool chip -- label/swatch come straight from side-panel.ts's
-   * ToolMeta, so the chip and the tool-settings modal always agree. */
+  /** Active tool -- label/swatch come straight from side-panel.ts's ToolMeta,
+   * so the HUD and the tool-settings modal always agree. Shown inside
+   * whichever category button owns the active tool. */
   toolLabel: string;
   toolColor: string;
-  toolCategory: string;
-  onOpenChest(): void;
+  /** Which of the five category buttons owns the active tool, if any. */
+  activeCategory: ChestCategory | null;
+  onOpenChest(category: ChestCategory): void;
   /** Whether the active tool has any configuration beyond the two brush
    * sliders below; the ⚙ button is hidden entirely when it doesn't, rather
    * than opening an empty modal. */
@@ -110,28 +113,40 @@ export function buildHud(top: HTMLElement, bottom: HTMLElement, cb: HudCallbacks
     left.appendChild(badge);
   }
 
-  // The chip *is* the chest button: the thing you'd click to see what's
-  // selected is the same thing you'd click to change it.
-  const chip = el('button', 'tool-chip');
-  chip.title = 'Open the Tool Chest (T)';
-  chip.onclick = cb.onOpenChest;
-  const swatch = el('span', 'tool-chip-swatch');
-  swatch.style.background = cb.toolColor || '#3a3d3a';
-  const chipText = el('span', 'tool-chip-text');
-  const chipLabel = el('span', 'tool-chip-label');
-  chipLabel.textContent = cb.toolLabel;
-  chipText.appendChild(chipLabel);
-  if (cb.toolCategory) {
-    const chipCategory = el('span', 'tool-chip-category');
-    chipCategory.textContent = cb.toolCategory;
-    chipText.appendChild(chipCategory);
+  // One button per chest category. The button owning the active tool doubles
+  // as the old active-tool chip: it wears the tool's swatch and names it, so
+  // "what's selected" and "change it" are still the same control -- just
+  // narrowed to the shelf the current tool came off.
+  const shelf = el('div', 'hud-shelf');
+  for (const category of CHEST_CATEGORIES) {
+    const active = cb.activeCategory === category.id;
+    const button = el('button', 'hud-cat-btn');
+    button.title = `${category.label} (${category.key})`;
+
+    const name = el('span', 'hud-cat-name');
+    name.textContent = category.short;
+    button.appendChild(name);
+
+    if (active) {
+      const color = cb.toolColor || '#3a3d3a';
+      button.classList.add('active');
+      button.style.setProperty('--swatch', color);
+      const swatch = el('span', 'hud-cat-swatch');
+      swatch.style.background = color;
+      const toolLabel = el('span', 'hud-cat-tool');
+      toolLabel.textContent = cb.toolLabel;
+      button.appendChild(swatch);
+      button.appendChild(toolLabel);
+    } else {
+      const key = el('span', 'hud-key');
+      key.textContent = category.key;
+      button.appendChild(key);
+    }
+
+    button.onclick = () => cb.onOpenChest(category.id);
+    shelf.appendChild(button);
   }
-  chip.appendChild(swatch);
-  chip.appendChild(chipText);
-  const chipHint = el('span', 'hud-key');
-  chipHint.textContent = 'T';
-  chip.appendChild(chipHint);
-  left.appendChild(chip);
+  left.appendChild(shelf);
   top.appendChild(left);
 
   const right = el('div', 'hud-cluster');

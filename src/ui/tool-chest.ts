@@ -1,9 +1,15 @@
-// The Tool Chest: one searchable modal holding everything that used to live
+// The Tool Chest: the searchable modal holding everything that used to live
 // in the four always-visible toolbar rows (ELEMENTS/APPARATUS/TOOLS). The
-// bench itself now shows only the *active* tool as a chip in the floating HUD
-// (see hud.ts) -- picking a different one is a deliberate trip through this
-// modal, which buys the sim canvas the ~170px of vertical space the old
-// toolbar card occupied permanently.
+// bench itself only shows the five category buttons in the floating HUD (see
+// hud.ts) -- picking a tool is a deliberate trip through this modal, which
+// buys the sim canvas the ~170px of vertical space the old toolbar card
+// occupied permanently.
+//
+// One modal, five entry points: the HUD has a button per `ChestCategory` and
+// the chest opens showing only that category's entries. The categories used
+// to be five headed sections inside a single scrolling list, which meant
+// every trip to (say) Flow Control started by scrolling past all 149
+// paintable species.
 //
 // This module is also the canonical home for the UI-side `ToolKind` union and
 // the select-apparatus label/color (both were in the deleted toolbar.ts), since
@@ -37,7 +43,45 @@ export type ToolKind =
 export const SELECT_APPARATUS_LABEL = 'Select';
 export const SELECT_APPARATUS_COLOR = '#4da3ff';
 
+/** The five chest categories -- one HUD button and one chest view each. */
+export type ChestCategory = 'species' | 'glassware' | 'thermal' | 'flow' | 'tools';
+
+export interface ChestCategoryInfo {
+  readonly id: ChestCategory;
+  /** Chest modal title. */
+  readonly label: string;
+  /** HUD button caption -- the top strip can't fit the full title five times. */
+  readonly short: string;
+  readonly subtitle: string;
+  /** Number key that opens this category from the bench (see app.ts). */
+  readonly key: string;
+}
+
+const SPECIES_CATEGORY: ChestCategoryInfo = {
+  id: 'species',
+  label: 'Elements & Compounds',
+  short: 'Elements',
+  subtitle: 'Everything you can paint onto the bench, plus the periodic table.',
+  key: '1',
+};
+
+export const CHEST_CATEGORIES: readonly ChestCategoryInfo[] = [
+  SPECIES_CATEGORY,
+  { id: 'glassware', label: 'Glassware', short: 'Glassware', subtitle: 'Vessels to hold a reaction, and glass to draw your own.', key: '2' },
+  { id: 'thermal', label: 'Thermal & Mixing', short: 'Thermal', subtitle: 'Heat it, insulate it, stir it.', key: '3' },
+  { id: 'flow', label: 'Flow Control', short: 'Flow', subtitle: 'Feed matter in, move it around, filter it, throw it away.', key: '4' },
+  { id: 'tools', label: 'Tools', short: 'Tools', subtitle: 'Erase, mix, grab, and edit what you have already placed.', key: '5' },
+];
+
+export function chestCategoryInfo(id: ChestCategory): ChestCategoryInfo {
+  // The array is exhaustive over the union, so the fallback is unreachable --
+  // it's here to keep the return type non-optional.
+  return CHEST_CATEGORIES.find((c) => c.id === id) ?? SPECIES_CATEGORY;
+}
+
 export interface ToolChestCallbacks {
+  /** Which category the chest is showing -- the modal renders exactly one. */
+  category: ChestCategory;
   isPaintActive(specId: number): boolean;
   isWallActive(specId: number): boolean;
   isToolActive(kind: ToolKind): boolean;
@@ -103,7 +147,7 @@ function matches(label: string, query: string): boolean {
   return query === '' || label.toLowerCase().includes(query.toLowerCase());
 }
 
-function renderSection(title: string, entries: ChestEntry[], query: string, cb: ToolChestCallbacks): HTMLDivElement | null {
+function renderSection(entries: ChestEntry[], query: string, cb: ToolChestCallbacks): HTMLDivElement | null {
   // Locked entries sink to the end of their section but stay visible: a
   // campaign scenario can forbid all but a handful of the 149 paintable
   // species, and leaving them interleaved would bury the usable ones. Showing
@@ -112,11 +156,8 @@ function renderSection(title: string, entries: ChestEntry[], query: string, cb: 
   const visible = entries.filter((entry) => matches(entry.label, query)).sort((a, b) => Number(a.locked) - Number(b.locked));
   if (visible.length === 0) return null;
 
+  // No section heading any more: the modal title *is* the category name.
   const section = el('div', 'chest-section');
-  const heading = el('div', 'chest-section-title');
-  heading.textContent = title;
-  section.appendChild(heading);
-
   const grid = el('div', 'chest-grid');
   for (const entry of visible) {
     const wrap = el('div', 'chest-item');
@@ -159,12 +200,14 @@ export function buildToolChest(
   const modal = el('div', 'pt-modal chest-modal');
   container.appendChild(modal);
 
+  const info = chestCategoryInfo(cb.category);
+
   const header = el('div', 'pt-modal-header');
   const titleBox = el('div');
   const title = el('div', 'pt-modal-title');
-  title.textContent = 'Tool Chest';
+  title.textContent = info.label;
   const subtitle = el('div', 'pt-modal-subtitle');
-  subtitle.textContent = 'Everything you can paint, place, or poke the bench with.';
+  subtitle.textContent = info.subtitle;
   titleBox.appendChild(title);
   titleBox.appendChild(subtitle);
   header.appendChild(titleBox);
@@ -178,7 +221,7 @@ export function buildToolChest(
 
   const search = el('input', 'chest-search');
   search.type = 'search';
-  search.placeholder = 'Search tools and species…';
+  search.placeholder = `Search ${info.label.toLowerCase()}…`;
   search.value = cb.query;
   // Rebuilding on every keystroke would replace the focused input under the
   // caret, so the query lives in app.ts state and this handler re-renders
@@ -192,80 +235,19 @@ export function buildToolChest(
   const rebuildResults = (query: string): void => {
     results.innerHTML = '';
 
-    const pinnedOrder = new Map(pinnedLabels.map((label, index) => [label, index]));
-    const species = [...palette].sort((a, b) => {
-      const ai = pinnedOrder.get(a.label) ?? Number.MAX_SAFE_INTEGER;
-      const bi = pinnedOrder.get(b.label) ?? Number.MAX_SAFE_INTEGER;
-      return ai !== bi ? ai - bi : a.label.localeCompare(b.label);
-    });
-
-    const speciesEntries: ChestEntry[] = species.map((entry) => ({
-      label: entry.label,
-      color: entry.color,
-      active: cb.isPaintActive(entry.specId),
-      locked: !!cb.isPaintLocked?.(entry.specId),
-      pinnable: cb.pinnable,
-      pinned: cb.isPinned(entry.label),
-      onSelect: () => cb.onSelectPaint(entry.specId),
-      onTogglePin: () => cb.onTogglePin(entry.label),
-    }));
-
-    const glassWall = walls.find((w) => w.kind === 'glass');
-    const insulatorWall = walls.find((w) => w.kind === 'insulator');
-
-    const glassware: ChestEntry[] = [
-      // One entry per vessel shape -- whether it comes with a stirrer is a
-      // setting inside the tool's own settings panel (see side-panel.ts's
-      // flask panel), not a separate chest entry per combination.
-      toolEntry('Erlenmeyer', FUNNEL_COLOR, 'flask-erlenmeyer', cb),
-      toolEntry('Beaker', FUNNEL_COLOR, 'flask-beaker', cb),
-    ];
-    if (glassWall) glassware.push(wallEntry(`${glassWall.label} (polygon)`, glassWall, cb));
-
-    const thermal: ChestEntry[] = [];
-    if (insulatorWall) thermal.push(wallEntry(insulatorWall.label, insulatorWall, cb));
-    thermal.push(toolEntry(RADIATOR_LABEL, RADIATOR_COLOR, 'radiator', cb), toolEntry(STIRRER_LABEL, STIRRER_COLOR, 'stirrer', cb));
-
-    const flow: ChestEntry[] = [
-      toolEntry(FUNNEL_LABEL, FUNNEL_COLOR, 'funnel', cb),
-      toolEntry(TUBE_LABEL, TUBE_COLOR, 'tube', cb),
-      toolEntry(FILTER_LABEL, FILTER_COLOR, 'filter', cb),
-      toolEntry(SINK_LABEL, SINK_COLOR, 'sink', cb),
-      toolEntry(VENT_LABEL, VENT_COLOR, 'vent', cb),
-    ];
-
-    const tools: ChestEntry[] = [
-      toolEntry('Erase', null, 'erase', cb),
-      toolEntry('Mix', '#c9a8ff', 'mixer', cb),
-      toolEntry('Grab', '#f2d94e', 'grabber', cb),
-      // select-apparatus only edits already-placed apparatus (it creates no
-      // matter of its own), so it's never locked -- there's no sim-side
-      // ToolKind for it to be checked against.
-      toolEntry(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, 'select-apparatus', cb),
-    ];
-
-    const sections: Array<HTMLDivElement | null> = [
-      renderSection('Elements & Compounds', speciesEntries, query, cb),
-      renderSection('Glassware', glassware, query, cb),
-      renderSection('Thermal & Mixing', thermal, query, cb),
-      renderSection('Flow Control', flow, query, cb),
-      renderSection('Tools', tools, query, cb),
-    ];
-    let shown = 0;
-    for (const section of sections) {
-      if (!section) continue;
+    const section = renderSection(categoryEntries(cb.category, palette, walls, pinnedLabels, cb), query, cb);
+    if (section) {
       results.appendChild(section);
-      shown++;
-    }
-    if (shown === 0) {
+    } else {
       const empty = el('div', 'chest-empty');
       empty.textContent = `Nothing matches “${query}”.`;
       results.appendChild(empty);
     }
 
     // The periodic table stays its own modal (it's a reference chart, not a
-    // flat list), reachable from the chest's footer rather than a second
-    // permanent button on the bench.
+    // flat list), reachable from the foot of the species category rather than
+    // a sixth permanent button on the bench.
+    if (cb.category !== 'species') return;
     const footer = el('div', 'chest-footer');
     const ptButton = el('button', 'pt-open-btn');
     const dots = el('span', 'pt-dots');
@@ -292,6 +274,78 @@ export function buildToolChest(
   // click. Deferred to the next frame because the element isn't in the
   // document yet on the first call for a freshly created overlay.
   requestAnimationFrame(() => search.focus());
+}
+
+/** Every entry belonging to one category, in display order. The split is
+ * fixed here rather than derived from ToolKind so a tool's category is a
+ * deliberate editorial choice (Stirrer is filed under mixing, not flow). */
+function categoryEntries(
+  category: ChestCategory,
+  palette: readonly PaletteEntry[],
+  walls: readonly WallMaterial[],
+  pinnedLabels: readonly string[],
+  cb: ToolChestCallbacks,
+): ChestEntry[] {
+  if (category === 'species') {
+    const pinnedOrder = new Map(pinnedLabels.map((label, index) => [label, index]));
+    return [...palette]
+      .sort((a, b) => {
+        const ai = pinnedOrder.get(a.label) ?? Number.MAX_SAFE_INTEGER;
+        const bi = pinnedOrder.get(b.label) ?? Number.MAX_SAFE_INTEGER;
+        return ai !== bi ? ai - bi : a.label.localeCompare(b.label);
+      })
+      .map((entry) => ({
+        label: entry.label,
+        color: entry.color,
+        active: cb.isPaintActive(entry.specId),
+        locked: !!cb.isPaintLocked?.(entry.specId),
+        pinnable: cb.pinnable,
+        pinned: cb.isPinned(entry.label),
+        onSelect: () => cb.onSelectPaint(entry.specId),
+        onTogglePin: () => cb.onTogglePin(entry.label),
+      }));
+  }
+
+  if (category === 'glassware') {
+    const glassWall = walls.find((w) => w.kind === 'glass');
+    const entries: ChestEntry[] = [
+      // One entry per vessel shape -- whether it comes with a stirrer is a
+      // setting inside the tool's own settings panel (see side-panel.ts's
+      // flask panel), not a separate chest entry per combination.
+      toolEntry('Erlenmeyer', FUNNEL_COLOR, 'flask-erlenmeyer', cb),
+      toolEntry('Beaker', FUNNEL_COLOR, 'flask-beaker', cb),
+    ];
+    if (glassWall) entries.push(wallEntry(`${glassWall.label} (polygon)`, glassWall, cb));
+    return entries;
+  }
+
+  if (category === 'thermal') {
+    const insulatorWall = walls.find((w) => w.kind === 'insulator');
+    const entries: ChestEntry[] = [];
+    if (insulatorWall) entries.push(wallEntry(insulatorWall.label, insulatorWall, cb));
+    entries.push(toolEntry(RADIATOR_LABEL, RADIATOR_COLOR, 'radiator', cb), toolEntry(STIRRER_LABEL, STIRRER_COLOR, 'stirrer', cb));
+    return entries;
+  }
+
+  if (category === 'flow') {
+    return [
+      toolEntry(FUNNEL_LABEL, FUNNEL_COLOR, 'funnel', cb),
+      toolEntry(TUBE_LABEL, TUBE_COLOR, 'tube', cb),
+      toolEntry(FILTER_LABEL, FILTER_COLOR, 'filter', cb),
+      toolEntry(SINK_LABEL, SINK_COLOR, 'sink', cb),
+      toolEntry(VENT_LABEL, VENT_COLOR, 'vent', cb),
+    ];
+  }
+
+  return [
+    toolEntry('Erase', null, 'erase', cb),
+    toolEntry('Mix', '#c9a8ff', 'mixer', cb),
+    toolEntry('Grab', '#f2d94e', 'grabber', cb),
+    // select-apparatus only edits already-placed apparatus (it creates no
+    // matter of its own), so it's never locked -- there's no sim-side
+    // ToolKind for it to be checked against.
+    toolEntry(SELECT_APPARATUS_LABEL, SELECT_APPARATUS_COLOR, 'select-apparatus', cb),
+  ];
 }
 
 function toolEntry(label: string, color: string | null, kind: ToolKind, cb: ToolChestCallbacks): ChestEntry {

@@ -173,14 +173,18 @@ probability gating, energy bookkeeping).
 
   **Layout is "full-bleed canvas + floating HUD + modals".** The sim canvas fills the entire mount, and
   the only permanent chrome is two translucent strips (`ui/hud.ts`) hovering over its top and bottom
-  edges — active-tool chip, transport controls and a `⋯` bench menu up top; brush width/temperature and
-  the temperature legend below. The strips are click-through except for the control clusters themselves,
-  so the gap between them is still live canvas. Everything else is a modal over that canvas: the Tool
-  Chest (`ui/tool-chest.ts`, one searchable list of every species/apparatus/tool, and the canonical home
-  for the UI-side `ToolKind` union), the tool-settings modal (`ui/side-panel.ts`'s builder rendered into
-  an overlay shell instead of a docked column), the periodic table, the bench menu, and comfort settings.
-  Keyboard: `T` chest, `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the
-  topmost modal. This replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent
+  edges — five Tool Chest category buttons, transport controls and a `⋯` bench menu up top; brush
+  width/temperature and the temperature legend below. The strips are click-through except for the control
+  clusters themselves, so the gap between them is still live canvas. Everything else is a modal over that
+  canvas: the Tool Chest (`ui/tool-chest.ts`, one searchable modal per `ChestCategory` — Elements &
+  Compounds / Glassware / Thermal & Mixing / Flow Control / Tools — and the canonical home for the UI-side
+  `ToolKind` union), the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell
+  instead of a docked column), the periodic table (reachable from the foot of the species category), the
+  bench menu, and comfort settings. The category button owning the active tool wears that tool's swatch
+  and label, so the HUD still says what's selected without a separate chip; `chestCategoryOfTool`
+  (`ui/app.ts`) is the mapping, and it has to stay in step with `categoryEntries` in `ui/tool-chest.ts`.
+  Keyboard: `1`–`5` open the five categories (`T` is kept as an alias for the first), `E` tool settings,
+  `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent
   260px side-panel column, which between them left the canvas roughly a sixth of the window — and one
   bug: `mountApp` reused `#app` without clearing the `menu-screen` class the title screen sets on it, so
   `align-items: center` shrink-wrapped the whole bench to its content width.
