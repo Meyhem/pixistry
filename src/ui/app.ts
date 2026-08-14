@@ -122,16 +122,30 @@ function savePinnedLabels(labels: readonly string[]): void {
   }
 }
 
+export interface MountAppOptions {
+  /** Which shell launched this mount -- purely cosmetic today (shows a
+   * CAMPAIGN badge in the header); Phase 3/4 (.grill/campaign-mode.md) will
+   * use it to load scenario restrictions and HUD. */
+  mode?: 'sandbox' | 'campaign';
+  /** Which scenario to load in campaign mode. Unused until Phase 3 adds the
+   * scenario engine; accepted now so main.ts's routing doesn't need to
+   * change shape again when that lands. */
+  scenarioId?: string;
+  /** Present when a menu shell mounted this app and can take it down again
+   * -- shows a "Menu" button in the header that calls back rather than
+   * leaving the player stuck in Sandbox/Campaign with no way out. */
+  onExitToMenu?: () => void;
+}
+
 /** Mounts the whole app into `root` and returns an `unmount` teardown --
  * terminates the worker (stops its tick-loop `setInterval` immediately
  * rather than waiting on GC) and removes every listener/observer that
  * outlives the DOM subtree (window/ResizeObserver; the canvas's own
- * listeners die with the canvas element itself once it's detached). Not
- * called by main.ts today (there's only ever one mounted app for the whole
- * page lifetime), but needed once a menu can mount/unmount Sandbox and
- * Campaign in turn without leaking a worker or a stale window listener each
- * time -- see .grill/campaign-mode.md's Phase 2. */
-export function mountApp(root: HTMLElement): () => void {
+ * listeners die with the canvas element itself once it's detached). Called
+ * by main.ts's menu shell (.grill/campaign-mode.md's Phase 2) to mount/
+ * unmount Sandbox and Campaign in turn without leaking a worker or a stale
+ * window listener each time. */
+export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () => void {
   root.innerHTML = '';
 
   const header = document.createElement('div');
@@ -144,6 +158,23 @@ export function mountApp(root: HTMLElement): () => void {
   subtitleEl.textContent = 'falling-sand chemistry sandbox';
   header.appendChild(titleEl);
   header.appendChild(subtitleEl);
+  if (options.mode === 'campaign') {
+    const modeBadge = document.createElement('span');
+    modeBadge.className = 'mode-badge';
+    modeBadge.textContent = 'CAMPAIGN';
+    header.appendChild(modeBadge);
+  }
+  if (options.onExitToMenu) {
+    const menuButton = document.createElement('button');
+    menuButton.className = 'menu-exit-btn';
+    menuButton.textContent = '← Menu';
+    menuButton.title = 'Back to the title screen';
+    menuButton.onclick = () => {
+      if (!window.confirm('Leave and return to the menu? This will lose anything not saved.')) return;
+      options.onExitToMenu?.();
+    };
+    header.appendChild(menuButton);
+  }
   root.appendChild(header);
 
   const toolbar = document.createElement('div');
