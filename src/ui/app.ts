@@ -1360,12 +1360,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetFlaskStirred: flaskSetter('stirred', { render: true }),
       flaskShape: flaskFields.kind,
       onSetFlaskShape: flaskSetter('kind', { render: true }),
-      onRotateFlask: () => {
-        if (!isFlaskEditMode || !apparatusSelection.flaskEditDraft) return;
-        apparatusSelection.flaskEditDraft.facing = nextFlaskFacing(apparatusSelection.flaskEditDraft.facing, 1);
-        sendFlaskUpdate();
-        render();
-      },
       // A Vent's panel shows what it threw away, a Sink's what it collected
       // -- two tallies, one panel (see side-panel.ts's sinkPanel).
       sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
@@ -1813,6 +1807,24 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         event.preventDefault();
         flaskFacing = nextFlaskFacing(flaskFacing, event.deltaY > 0 ? 1 : -1);
         updateApparatusOverlay(lastHoverX, lastHoverY);
+      } else if (tool?.kind === 'select-apparatus') {
+        // A selected flask rotates on the wheel exactly like an unplaced one
+        // does -- the same gesture before and after placement, rather than a
+        // button that only exists in the edit panel.
+        const selected = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
+        if (!selected) return;
+        event.preventDefault();
+        const draft = apparatusSelection.flaskEditDraft;
+        const facing = nextFlaskFacing(draft?.facing ?? selected.facing, event.deltaY > 0 ? 1 : -1);
+        if (draft) draft.facing = facing;
+        send({
+          type: 'updateFlask',
+          id: selected.id,
+          facing,
+          sizeScale: draft?.sizeScale ?? selected.sizeScale,
+          stirred: draft?.stirred ?? selected.stirred,
+          kind: draft?.kind ?? selected.kind,
+        });
       }
     },
     { passive: false },

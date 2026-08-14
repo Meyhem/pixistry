@@ -125,9 +125,6 @@ export interface SidePanelCallbacks {
    * -- pre-placement the shape is what you picked in the Tool Chest. */
   flaskShape: FlaskKind;
   onSetFlaskShape(kind: FlaskKind): void;
-  /** Rotates a placed flask one 45-degree step (the scroll wheel does this
-   * before placement, but a selected flask needs a control of its own). */
-  onRotateFlask(): void;
   /** Non-zero running totals only, already sorted highest-first -- see
    * app.ts's sinkTallyEntries. */
   sinkTally: readonly SinkTallyEntry[];
@@ -367,18 +364,11 @@ function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCall
   addSlider(container, 'Size', MIN_FLASK_SIZE_SCALE, MAX_FLASK_SIZE_SCALE, 0.1, cb.flaskSizeScale, (v) => `${v.toFixed(1)}x`, cb.onSetFlaskSize);
   addStirredToggle(container, cb.flaskStirred, cb.onSetFlaskStirred);
 
-  if (meta.flaskPanel === 'edit') {
-    const rotateBtn = el('button', 'funnel-reset-btn');
-    rotateBtn.textContent = 'Rotate 45°';
-    rotateBtn.onclick = cb.onRotateFlask;
-    container.appendChild(rotateBtn);
-  }
-
   container.appendChild(
     hintBox(
       meta.flaskPanel === 'config'
         ? 'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.'
-        : 'Drag the vessel to move it. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline.',
+        : 'Drag the vessel to move it, or rotate it with the scroll wheel over the grid (45-degree steps), same as before placement. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline.',
       'HOW IT WORKS',
     ),
   );
