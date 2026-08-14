@@ -32,7 +32,7 @@ export function buildPeriodicTable(overlay: HTMLElement, palette: PaletteEntry[]
   const title = el('div', 'pt-modal-title');
   title.textContent = 'Periodic table';
   const subtitle = el('div', 'pt-modal-subtitle');
-  subtitle.textContent = 'Periods 1-5 shown · colored elements are simulated in Pixistry';
+  subtitle.textContent = 'Periods 1-5, plus period 6 main group · colored elements are simulated in Pixistry';
   headerText.appendChild(title);
   headerText.appendChild(subtitle);
   header.appendChild(headerText);

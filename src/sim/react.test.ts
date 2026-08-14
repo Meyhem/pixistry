@@ -128,3 +128,162 @@ describe('stepReactions', () => {
     expect(products).toContain(SpeciesId.NaCl);
   });
 });
+
+// One end-to-end case per category from the halogen-metal/precipitation/
+// acid-base/hydrolysis/dissolution expansion, plus the negative calibration
+// points that same table deliberately encodes as "no rule". Table-wide
+// invariants (every id valid, no duplicate pairs, solubility coverage) live
+// in reactions.test.ts instead of being re-checked per case here.
+describe('stepReactions: halogen-metal / precipitation / acid-base / hydrolysis / dissolution expansion', () => {
+  it('halogen-metal: Ba + Cl2 -> BaCl2', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.Ba);
+    paint(grid, species, 1, 0, SpeciesId.Cl2);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.BaCl2);
+  });
+
+  it('halogen displacement: Cl2 displaces iodide out of KI(aq) into KCl(aq) + I2', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.Cl2);
+    paint(grid, species, 1, 0, SpeciesId.KIAq);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.KClAq);
+    expect(products).toContain(SpeciesId.I2);
+  });
+
+  it('does not let Br2 displace chloride back out of NaCl(aq) -- no reverse-direction rule exists', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.Br2);
+    paint(grid, species, 1, 0, SpeciesId.NaClAq);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.Br2);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.NaClAq);
+  });
+
+  it('acid-base: aqueous HCl neutralizes aqueous NaOH into NaCl(aq) + H2O', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.HClAq);
+    paint(grid, species, 1, 0, SpeciesId.NaOHAq);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.NaClAq);
+    expect(products).toContain(SpeciesId.H2O);
+  });
+
+  it('acid + carbonate is a 3-product reaction that fizzes CO2 into a free neighbor cell', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 1);
+    paint(grid, species, 0, 0, SpeciesId.HClAq);
+    paint(grid, species, 1, 0, SpeciesId.CaCO3);
+    // (2, 0) stays empty -- the 3rd product's landing spot.
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)], grid.specId[grid.index(2, 0)]];
+    expect(products).toContain(SpeciesId.CaCl2Aq);
+    expect(products).toContain(SpeciesId.H2O);
+    expect(products).toContain(SpeciesId.CO2);
+  });
+
+  it('does not let copper react with aqueous HCl -- Cu sits below H2 in the activity series, no rule for it', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.HClAq);
+    paint(grid, species, 1, 0, SpeciesId.Cu);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.HClAq);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.Cu);
+  });
+
+  it('but copper does dissolve in aqueous nitric acid (the oxidizing-acid exception, brown NO2 fumes) -- a 3-product reaction, needs a free neighbor', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(3, 1);
+    paint(grid, species, 0, 0, SpeciesId.HNO3Aq);
+    paint(grid, species, 1, 0, SpeciesId.Cu);
+    // (2, 0) stays empty -- the 3rd product's landing spot.
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)], grid.specId[grid.index(2, 0)]];
+    expect(products).toContain(SpeciesId.CuNO32Aq);
+    expect(products).toContain(SpeciesId.NO2);
+    expect(products).toContain(SpeciesId.H2O);
+  });
+
+  it('hydrolysis: CaO + H2O -> Ca(OH)2(aq), the slaked-lime reaction', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.CaO);
+    paint(grid, species, 1, 0, SpeciesId.H2O);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.CaOH2Aq);
+  });
+
+  it('precipitation: AgNO3(aq) + NaCl(aq) -> AgCl precipitate + NaNO3(aq)', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.AgNO3Aq);
+    paint(grid, species, 1, 0, SpeciesId.NaClAq);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.AgCl);
+    expect(products).toContain(SpeciesId.NaNO3Aq);
+  });
+
+  it('precipitation: Pb(NO3)2(aq) + KI(aq) -> PbI2 golden-yellow precipitate', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.PbNO32Aq);
+    paint(grid, species, 1, 0, SpeciesId.KIAq);
+
+    stepReactions(grid, species, alwaysFire);
+
+    const products = [grid.specId[grid.index(0, 0)], grid.specId[grid.index(1, 0)]];
+    expect(products).toContain(SpeciesId.PbI2);
+  });
+
+  it('dissolution: soluble BaCl2 dissolves into BaCl2(aq)', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.BaCl2);
+    paint(grid, species, 1, 0, SpeciesId.H2O);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.BaCl2Aq);
+  });
+
+  it('leaves insoluble PbI2 next to water untouched -- no dissolution rule for it, same as AgCl', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+    paint(grid, species, 0, 0, SpeciesId.PbI2);
+    paint(grid, species, 1, 0, SpeciesId.H2O);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.PbI2);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.H2O);
+  });
+});

@@ -1,8 +1,12 @@
-// Static periodic-table data (periods 1-5, Z 1-54) for the periodic-table
-// modal -- hand-authored the same way species-data.ts/reactions.ts are: a
-// small fixed table, no derivation. Only the 15 elements the sim actually
-// simulates (see PURE_FOR_ELEMENT) are clickable; the rest render dimmed as
-// "not simulated" context around them.
+// Static periodic-table data (periods 1-5 in full, Z 1-54, plus the
+// period-6 main-group elements needed to give Ba/Pb a cell -- Cs/Ba on the
+// left edge and Tl/Pb/Bi/Po/At/Rn on the right, period 6's transition
+// metals/lanthanides deliberately left out since nothing in the sim needs
+// them) for the periodic-table modal -- hand-authored the same way
+// species-data.ts/reactions.ts are: a small fixed table, no derivation.
+// Only the 19 elements the sim actually simulates (see PURE_FOR_ELEMENT)
+// are clickable; the rest render dimmed as "not simulated" context around
+// them.
 export type ElementCategory =
   | 'alkali'
   | 'alkalineEarth'
@@ -102,6 +106,14 @@ export const ELEMENTS: readonly ElementData[] = [
   { z: 52, symbol: 'Te', name: 'Tellurium', group: 16, period: 5, category: 'metalloid' },
   { z: 53, symbol: 'I', name: 'Iodine', group: 17, period: 5, category: 'halogen' },
   { z: 54, symbol: 'Xe', name: 'Xenon', group: 18, period: 5, category: 'nobleGas' },
+  { z: 55, symbol: 'Cs', name: 'Caesium', group: 1, period: 6, category: 'alkali' },
+  { z: 56, symbol: 'Ba', name: 'Barium', group: 2, period: 6, category: 'alkalineEarth' },
+  { z: 81, symbol: 'Tl', name: 'Thallium', group: 13, period: 6, category: 'postTransitionMetal' },
+  { z: 82, symbol: 'Pb', name: 'Lead', group: 14, period: 6, category: 'postTransitionMetal' },
+  { z: 83, symbol: 'Bi', name: 'Bismuth', group: 15, period: 6, category: 'postTransitionMetal' },
+  { z: 84, symbol: 'Po', name: 'Polonium', group: 16, period: 6, category: 'metalloid' },
+  { z: 85, symbol: 'At', name: 'Astatine', group: 17, period: 6, category: 'halogen' },
+  { z: 86, symbol: 'Rn', name: 'Radon', group: 18, period: 6, category: 'nobleGas' },
 ];
 
 /** Element symbol -> paint-palette label of its pure/elemental species, for
@@ -124,15 +136,36 @@ export const PURE_FOR_ELEMENT: Record<string, string> = {
   Cu: 'Cu',
   Zn: 'Zn',
   Ag: 'Ag',
+  Br: 'Br2',
+  I: 'I2',
+  Pb: 'Pb',
+  Ba: 'Ba',
 };
 
 /** Element symbol -> paint-palette labels of compounds it forms that are
  * directly paintable (species-data.ts's paintable:true), for the modal's
- * "pickable in Pixistry" list. */
+ * "pickable in Pixistry" list. Generated from species-data.ts's SPECIES
+ * table (every paintable compound whose formula contains the element) --
+ * see the halogen-metal/precipitation/acid-base/hydrolysis/dissolution
+ * expansion comment there for what each compound is for. */
 export const COMPOUNDS_FOR_ELEMENT: Record<string, readonly string[]> = {
-  H: ['H2O'],
-  O: ['H2O'],
-  Na: ['NaCl'],
-  Cl: ['NaCl', 'AgCl'],
-  Ag: ['AgCl'],
+  H: ["H2O", "H2SO4", "HNO3", "HBr", "HI", "KOH", "Ca(OH)2", "Ba(OH)2", "Mg(OH)2", "Cu(OH)2", "Fe(OH)2", "Fe(OH)3", "Al(OH)3", "Zn(OH)2", "NH4Cl", "HCl(aq)", "H2SO4(aq)", "HNO3(aq)", "HBr(aq)", "HI(aq)", "H2CO3(aq)", "H2SO3(aq)", "NaOH(aq)", "KOH(aq)", "Ca(OH)2(aq)", "Ba(OH)2(aq)", "NH3(aq)", "NH4Cl(aq)"],
+  N: ["HNO3", "NO", "NO2", "AgNO3", "Pb(NO3)2", "NaNO3", "KNO3", "Ba(NO3)2", "Cu(NO3)2", "Fe(NO3)3", "Ca(NO3)2", "NH4Cl", "HNO3(aq)", "NH3(aq)", "AgNO3(aq)", "Pb(NO3)2(aq)", "NaNO3(aq)", "KNO3(aq)", "Ba(NO3)2(aq)", "Cu(NO3)2(aq)", "Fe(NO3)3(aq)", "Ca(NO3)2(aq)", "NH4Cl(aq)"],
+  O: ["H2O", "H2SO4", "HNO3", "KOH", "Ca(OH)2", "Ba(OH)2", "MgO", "CaO", "BaO", "Na2O", "K2O", "PbO", "Ag2O", "SO2", "SO3", "NO", "NO2", "AgNO3", "Pb(NO3)2", "NaNO3", "KNO3", "Ba(NO3)2", "Cu(NO3)2", "Fe(NO3)3", "Ca(NO3)2", "Na2SO4", "K2SO4", "CuSO4", "MgSO4", "ZnSO4", "FeSO4", "BaSO4", "PbSO4", "CaSO4", "Na2CO3", "K2CO3", "CaCO3", "BaCO3", "CuCO3", "Mg(OH)2", "Cu(OH)2", "Fe(OH)2", "Fe(OH)3", "Al(OH)3", "Zn(OH)2", "H2SO4(aq)", "HNO3(aq)", "H2CO3(aq)", "H2SO3(aq)", "NaOH(aq)", "KOH(aq)", "Ca(OH)2(aq)", "Ba(OH)2(aq)", "AgNO3(aq)", "Pb(NO3)2(aq)", "NaNO3(aq)", "KNO3(aq)", "Ba(NO3)2(aq)", "Cu(NO3)2(aq)", "Fe(NO3)3(aq)", "Ca(NO3)2(aq)", "Na2SO4(aq)", "K2SO4(aq)", "CuSO4(aq)", "MgSO4(aq)", "ZnSO4(aq)", "FeSO4(aq)", "Na2CO3(aq)", "K2CO3(aq)"],
+  Cl: ["NaCl", "AgCl", "BaCl2", "AlCl3", "FeCl2", "FeCl3", "CuCl2", "ZnCl2", "PbCl2", "NH4Cl", "HCl(aq)", "BaCl2(aq)", "AlCl3(aq)", "FeCl2(aq)", "FeCl3(aq)", "CuCl2(aq)", "ZnCl2(aq)", "NH4Cl(aq)"],
+  C: ["Na2CO3", "K2CO3", "CaCO3", "BaCO3", "CuCO3", "H2CO3(aq)", "Na2CO3(aq)", "K2CO3(aq)"],
+  Na: ["NaCl", "Na2O", "NaBr", "NaI", "NaNO3", "Na2SO4", "Na2CO3", "NaOH(aq)", "NaBr(aq)", "NaI(aq)", "NaNO3(aq)", "Na2SO4(aq)", "Na2CO3(aq)"],
+  Mg: ["MgO", "MgBr2", "MgI2", "MgSO4", "Mg(OH)2", "MgBr2(aq)", "MgI2(aq)", "MgSO4(aq)"],
+  Al: ["AlCl3", "AlBr3", "AlI3", "Al(OH)3", "AlCl3(aq)", "AlBr3(aq)", "AlI3(aq)"],
+  S: ["H2SO4", "SO2", "SO3", "Na2SO4", "K2SO4", "CuSO4", "MgSO4", "ZnSO4", "FeSO4", "BaSO4", "PbSO4", "CaSO4", "H2SO4(aq)", "H2SO3(aq)", "Na2SO4(aq)", "K2SO4(aq)", "CuSO4(aq)", "MgSO4(aq)", "ZnSO4(aq)", "FeSO4(aq)"],
+  K: ["KOH", "K2O", "KBr", "KI", "KNO3", "K2SO4", "K2CO3", "KOH(aq)", "KBr(aq)", "KI(aq)", "KNO3(aq)", "K2SO4(aq)", "K2CO3(aq)"],
+  Ca: ["Ca(OH)2", "CaO", "CaBr2", "CaI2", "Ca(NO3)2", "CaSO4", "CaCO3", "Ca(OH)2(aq)", "CaBr2(aq)", "CaI2(aq)", "Ca(NO3)2(aq)"],
+  Fe: ["FeCl2", "FeCl3", "FeBr3", "FeI2", "Fe(NO3)3", "FeSO4", "Fe(OH)2", "Fe(OH)3", "FeCl2(aq)", "FeCl3(aq)", "FeBr3(aq)", "FeI2(aq)", "Fe(NO3)3(aq)", "FeSO4(aq)"],
+  Cu: ["CuCl2", "CuBr2", "Cu(NO3)2", "CuSO4", "CuCO3", "Cu(OH)2", "CuCl2(aq)", "CuBr2(aq)", "Cu(NO3)2(aq)", "CuSO4(aq)"],
+  Zn: ["ZnCl2", "ZnBr2", "ZnI2", "ZnSO4", "Zn(OH)2", "ZnCl2(aq)", "ZnBr2(aq)", "ZnI2(aq)", "ZnSO4(aq)"],
+  Ag: ["AgCl", "Ag2O", "AgBr", "AgI", "AgNO3", "AgNO3(aq)"],
+  Br: ["HBr", "BaBr2", "AlBr3", "FeBr3", "CuBr2", "ZnBr2", "PbBr2", "AgBr", "NaBr", "KBr", "MgBr2", "CaBr2", "HBr(aq)", "BaBr2(aq)", "AlBr3(aq)", "FeBr3(aq)", "CuBr2(aq)", "ZnBr2(aq)", "NaBr(aq)", "KBr(aq)", "MgBr2(aq)", "CaBr2(aq)"],
+  I: ["HI", "BaI2", "AlI3", "FeI2", "ZnI2", "PbI2", "AgI", "NaI", "KI", "MgI2", "CaI2", "HI(aq)", "BaI2(aq)", "AlI3(aq)", "FeI2(aq)", "ZnI2(aq)", "NaI(aq)", "KI(aq)", "MgI2(aq)", "CaI2(aq)"],
+  Pb: ["PbO", "PbCl2", "PbBr2", "PbI2", "Pb(NO3)2", "PbSO4", "Pb(NO3)2(aq)"],
+  Ba: ["Ba(OH)2", "BaO", "BaCl2", "BaBr2", "BaI2", "Ba(NO3)2", "BaSO4", "BaCO3", "Ba(OH)2(aq)", "BaCl2(aq)", "BaBr2(aq)", "BaI2(aq)", "Ba(NO3)2(aq)"],
 };

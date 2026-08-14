@@ -60,7 +60,15 @@ export const MAX_TEMP_K = 10000;
  * can add unbounded-over-time energy to a cell. */
 export function clampEnergyToMaxTemp(thermal: ThermalProfile, massG: number, u: number): number {
   if (massG <= 0) return u;
-  const maxU = energyForTemperature(thermal, massG, MAX_TEMP_K).u;
+  // energyForTemperature(MAX_TEMP_K) then back through temperatureOf isn't
+  // an exact round-trip, and the clamped value still has to survive being
+  // stored into grid.u (Float32Array, ~1.19e-7 relative precision -- see
+  // stepRadiators' comment) before some later tick reads it back and
+  // reconverts it again. Either step alone can land fractionally above
+  // MAX_TEMP_K; a margin has to beat both, so it needs to clear float32's
+  // relative precision, not just float64's. 1e-6 is ~10x that and still an
+  // undetectable 0.01K at this scale.
+  const maxU = energyForTemperature(thermal, massG, MAX_TEMP_K).u * (1 - 1e-6);
   return Math.min(u, maxU);
 }
 
