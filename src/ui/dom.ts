@@ -26,14 +26,27 @@ export function propRow(label: string, value: string): HTMLDivElement {
 
 /** The "HOW IT WORKS" explainer box repeated at the bottom of the radiator,
  * funnel, and tube panels (see side-panel.ts) -- title is optional since the
- * funnel tool's empty-selection hint has no title, just a body paragraph. */
-export function hintBox(body: string, title?: string): HTMLDivElement {
-  const hint = el('div', 'setting-hint-box');
-  if (title) {
-    const hintTitle = el('div', 'setting-hint-title');
-    hintTitle.textContent = title;
-    hint.appendChild(hintTitle);
+ * funnel tool's empty-selection hint has no title, just a body paragraph.
+ *
+ * A titled hint renders as a collapsed disclosure rather than an open
+ * paragraph: the panel is docked on the bench permanently now (it used to be
+ * a modal you opened, read, and dismissed), and these explainers run long
+ * enough that leaving them expanded would push the controls they belong to
+ * off the bottom of a laptop screen. Untitled hints are one-liners tied to a
+ * specific field ("No species added -- ...") and stay inline. */
+export function hintBox(body: string, title?: string): HTMLElement {
+  if (!title) {
+    const hint = el('div', 'setting-hint-box');
+    const hintBody = el('p', 'setting-hint');
+    hintBody.textContent = body;
+    hint.appendChild(hintBody);
+    return hint;
   }
+
+  const hint = el('details', 'setting-hint-box setting-hint-details');
+  const summary = el('summary', 'setting-hint-title');
+  summary.textContent = title;
+  hint.appendChild(summary);
   const hintBody = el('p', 'setting-hint');
   hintBody.textContent = body;
   hint.appendChild(hintBody);

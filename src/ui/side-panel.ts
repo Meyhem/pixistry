@@ -1,6 +1,6 @@
-// The right-hand card describing the active tool: swatch/label/category
-// chip, species melt/boil/phase readout when relevant, brush width, brush
-// temperature, and (for the radiator tool) radiation radius + target
+// The settings dock's contents: the card describing the active tool --
+// swatch/label/category chip, species melt/boil/phase readout when relevant,
+// brush width, brush temperature, and (for the radiator tool) radiation radius + target
 // temperature. The addition-funnel tool and the select-apparatus tool
 // (see app.ts) share a "funnel panel" section here -- the same field set is
 // used both to configure a funnel before placement and to live-edit an
@@ -130,6 +130,12 @@ export interface SidePanelCallbacks {
   sinkTally: readonly SinkTallyEntry[];
   sinkGrandTotal: number;
   onResetSinkCounts(): void;
+  /** Folds the dock away (app.ts's settingsDockOpen). Optional so the builder
+   * stays usable outside the dock, but in practice always supplied -- the
+   * header's » button is the only pointer-driven way back to a full-width
+   * bench, since the "⚙ Tool settings" button that used to advertise the E
+   * shortcut is gone. */
+  onFoldDock?(): void;
 }
 
 const MIN_RADIUS = 1;
@@ -491,6 +497,14 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   headerText.appendChild(title);
   headerText.appendChild(chip);
   header.appendChild(headerText);
+
+  if (cb.onFoldDock) {
+    const fold = el('button', 'dock-fold-btn');
+    fold.textContent = '»';
+    fold.title = 'Hide these settings (E)';
+    fold.onclick = cb.onFoldDock;
+    header.appendChild(fold);
+  }
   container.appendChild(header);
 
   addDivider(container);

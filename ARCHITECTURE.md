@@ -191,17 +191,24 @@ probability gating, energy bookkeeping).
   (`ui/periodic-table.ts` exports the picker — grid plus detail pane — separately from its modal shell for
   exactly this): pick an element, then one of the species it forms. The flat alphabetical species grid it
   replaced survives only as the search-results view, since a formula query like `CuSO4(aq)` has no element
-  to hang off. Everything else is still a modal over the
-  canvas: the tool-settings modal (`ui/side-panel.ts`'s builder rendered into an overlay shell instead of
-  a docked column), the periodic table, the bench menu, and comfort settings. Keyboard: `T` species chest,
-  `E` tool settings, `M` bench menu, `Space` pause, `.` step, `Esc` closes the topmost modal. This
+  to hang off. The active tool's own settings are the one thing *not* behind a modal: `ui/side-panel.ts`'s
+  builder is mounted permanently as the settings dock, a narrow card on the right edge opposite the rail,
+  shown whenever the active tool has anything to configure (an Erase/Mix/Grab tool shows nothing rather
+  than an empty card). It replaced a "⚙ Tool settings" button and the modal behind it, which put every
+  per-tool control two clicks away and hid the fact that a tool had settings at all. The bench reserves
+  the dock's strip the same way it reserves the rail's; `E` (or the header's » button) folds it away and
+  gives that width back, leaving a single ⚙ tab to bring it back. Its long "HOW IT WORKS" explainers are
+  collapsed disclosures now (`ui/dom.ts`'s `hintBox`), since a permanent panel can't afford a paragraph
+  per tool. Everything else is still a modal over the canvas: the periodic table, the bench menu, and
+  comfort settings. Keyboard: `T` species chest, `E` fold/unfold the settings dock, `M` bench menu,
+  `Space` pause, `.` step, `Esc` closes the topmost modal. This
   replaced a docked 4-row toolbar card (`ui/toolbar.ts`, deleted) and a permanent 260px side-panel column,
   which between them left the canvas roughly a sixth of the window — and one bug: `mountApp` reused `#app`
   without clearing the `menu-screen` class the title screen sets on it, so `align-items: center`
   shrink-wrapped the whole bench to its content width.
 
   Tool-specific settings rebuild to match the selected tool: every tool gets a brush-width slider (the
-  same `radius` used for paint/erase/stir/grab) — permanently in the HUD, so the tool-settings modal
+  same `radius` used for paint/erase/stir/grab) — permanently in the HUD, so the settings dock
   suppresses its own copy — and the radiator tool additionally shows radiation-radius and
   target-temperature sliders, sent to the worker via a `paintRadiator` message rather than the plain
   `paint` message — this

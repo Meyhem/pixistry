@@ -4,14 +4,15 @@
 // doc's "src/ui plain DOM/React panels", no framework.
 //
 // Layout is "full-bleed canvas + floating HUD + modals": the sim canvas fills
-// the entire mount, and the only permanent chrome is two translucent HUD
-// strips hovering over its top and bottom edges (hud.ts). Everything else is
-// a modal over that canvas -- the Tool Chest (tool-chest.ts) for picking a
-// tool, the tool-settings modal (side-panel.ts's builder, rendered into an
-// overlay) for configuring it, plus the periodic table, the bench menu, and
-// comfort settings. This replaced a docked 4-row toolbar card and a permanent
-// 260px side-panel column, which between them left the canvas about a sixth
-// of the window.
+// the entire mount, and the permanent chrome is two translucent HUD strips
+// hovering over its top and bottom edges (hud.ts), the tool rail down the
+// left (tool-rail.ts), and the settings dock down the right (side-panel.ts's
+// builder -- the active tool's own controls, which used to hide behind a "⚙
+// Tool settings" button and a modal). Everything else is a modal over the
+// canvas -- the Tool Chest (tool-chest.ts) for picking a species, the
+// periodic table, the bench menu, and comfort settings. This replaced a
+// docked 4-row toolbar card and a permanent 260px side-panel column, which
+// between them left the canvas about a sixth of the window.
 import { createRenderer, type Renderer } from '../render/renderer';
 import { AMBIENT_TEMPERATURE_K, kelvinToCelsius } from '../sim/heat';
 import type { GoalProgress } from '../sim/objectives';
@@ -427,11 +428,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   };
   const resizeObserver = new ResizeObserver(fitCanvasWrap);
   resizeObserver.observe(bench);
+  // canvasWrap as well as bench: folding the settings dock away (E) changes
+  // the wrap's inset, not the bench's size, and it does so over a 120ms
+  // transition -- a single fit at render() time would measure the old width
+  // and never re-fit. Safe from the write-then-re-observe loop the comment in
+  // fitCanvasWrap warns about, since the wrap is absolutely positioned and
+  // takes no size from the canvas it contains.
+  resizeObserver.observe(canvasWrap);
   window.addEventListener('resize', fitCanvasWrap);
 
-  // Tool Chest (tool-chest.ts), tool settings (side-panel.ts in a modal
-  // shell) and the bench menu (hud.ts) -- three more backdrop overlays with
-  // the same show/hide-and-rebuild convention as ptOverlay below.
+  // Tool Chest (tool-chest.ts) and the bench menu (hud.ts) -- two more
+  // backdrop overlays with the same show/hide-and-rebuild convention as
+  // ptOverlay below.
   const chestOverlay = document.createElement('div');
   chestOverlay.className = 'pt-overlay';
   chestOverlay.style.display = 'none';
@@ -442,49 +450,34 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     render();
   });
 
-  const toolSettingsOverlay = document.createElement('div');
-  toolSettingsOverlay.className = 'pt-overlay';
-  toolSettingsOverlay.style.display = 'none';
-  root.appendChild(toolSettingsOverlay);
-  closeOnBackdropClick(toolSettingsOverlay, () => {
-    toolSettingsOpen = false;
-    render();
-  });
-
-  // The tool-settings panel body is one long-lived node that gets moved into
-  // the modal shell each time it opens, rather than a fresh element per open:
-  // the frame handler below tests `sidePanel.contains(document.activeElement)`
-  // to skip rebuilds mid-slider-drag, and that test needs a stable identity.
+  // The tool-settings dock: the active tool's settings, floating on the right
+  // edge of the bench opposite the tool rail, always on screen rather than
+  // behind a "⚙ Tool settings" button. The button-and-modal it replaced put
+  // every per-tool control (a funnel's rate, a tube's filter, a sink's tally)
+  // two clicks and a dismissal away from the bench it configures, and hid the
+  // fact that a tool *had* settings at all until you noticed the button.
+  //
+  // It's one long-lived node rather than a fresh element per render: the frame
+  // handler below tests `sidePanel.contains(document.activeElement)` to skip
+  // rebuilds mid-slider-drag, and that test needs a stable identity.
   const sidePanel = document.createElement('div');
-  sidePanel.className = 'side-panel side-panel-modal';
+  sidePanel.className = 'side-panel settings-dock';
+  sidePanel.style.display = 'none';
+  bench.appendChild(sidePanel);
 
-  // The tool-settings modal *shell* is built once here for the same reason
-  // the panel body above is: renderSidePanel runs on every worker frame for
-  // some tools (select-apparatus, sink), and a shell rebuilt at 60Hz replaces
-  // the ✕ button between a real mouse's pointerdown and pointerup -- so the
-  // browser never fires a click and the modal simply could not be dismissed
-  // by clicking it (most visible with the Select tool, whose panel rebuilds
-  // every single frame). Only the title text and the overlay's display are
-  // touched per render now.
-  const toolSettingsModal = document.createElement('div');
-  toolSettingsModal.className = 'pt-modal tool-settings-modal';
-  const toolSettingsHeader = document.createElement('div');
-  toolSettingsHeader.className = 'pt-modal-header';
-  const toolSettingsTitle = document.createElement('div');
-  toolSettingsTitle.className = 'pt-modal-title';
-  toolSettingsHeader.appendChild(toolSettingsTitle);
-  const toolSettingsClose = document.createElement('button');
-  toolSettingsClose.className = 'pt-close-btn';
-  toolSettingsClose.textContent = '✕';
-  toolSettingsClose.title = 'Close (Esc, or click outside)';
-  toolSettingsClose.onclick = () => {
-    toolSettingsOpen = false;
+  // The way back once the dock is folded away: a single ⚙ tab on the right
+  // edge, in the dock's own place. Without it, folding would be a one-way
+  // door for anyone who doesn't know about E.
+  const dockToggle = document.createElement('button');
+  dockToggle.className = 'dock-toggle';
+  dockToggle.textContent = '⚙';
+  dockToggle.title = 'Show tool settings (E)';
+  dockToggle.style.display = 'none';
+  dockToggle.onclick = () => {
+    settingsDockOpen = true;
     render();
   };
-  toolSettingsHeader.appendChild(toolSettingsClose);
-  toolSettingsModal.appendChild(toolSettingsHeader);
-  toolSettingsModal.appendChild(sidePanel);
-  toolSettingsOverlay.appendChild(toolSettingsModal);
+  bench.appendChild(dockToggle);
 
   const benchMenuOverlay = document.createElement('div');
   benchMenuOverlay.className = 'pt-overlay';
@@ -580,7 +573,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // other bit of UI state does: render() rebuilds these wholesale.
   let chestOpen = false;
   let chestQuery = '';
-  let toolSettingsOpen = false;
+  // The settings dock isn't a modal -- it's permanent bench furniture -- but
+  // it can still be folded away with E when the bench needs the width.
+  let settingsDockOpen = true;
   let benchMenuOpen = false;
   let ptSelectedSymbol: string | null = null;
   let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' = 'paint';
@@ -1016,8 +1011,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   /** Whether the active tool has anything to configure beyond the two brush
-   * sliders the HUD already carries -- decides whether the "⚙ Tool settings"
-   * button appears at all, so it never opens an empty modal. */
+   * sliders the HUD already carries -- decides whether the settings dock is
+   * shown at all, so an Erase/Grab/Mix tool doesn't park an empty card on the
+   * bench. */
   function hasToolSettings(meta: ToolMeta): boolean {
     return (
       meta.isSpecies ||
@@ -1067,11 +1063,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       toolLabel: meta.label,
       toolColor: meta.color,
       toolCategory: meta.category,
-      hasToolSettings: hasToolSettings(meta),
-      onOpenToolSettings: () => {
-        toolSettingsOpen = true;
-        render();
-      },
       running,
       speed,
       onTogglePause: () => {
@@ -1446,12 +1437,16 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
       sinkGrandTotal: showingVent ? lastVentGrandTotal : lastSinkGrandTotal,
       onResetSinkCounts: () => send({ type: 'resetSinkCounts' }),
+      onFoldDock: () => {
+        settingsDockOpen = false;
+        render();
+      },
     };
     // Brush width/temperature live permanently in the bottom HUD strip now,
     // so the modal suppresses its own copies rather than showing the same two
     // sliders twice (with the HUD's pair visible right behind the backdrop).
     buildSidePanel(sidePanel, { ...meta, showBrushWidth: false, showBrushTemp: false }, sidePanelCallbacks);
-    renderToolSettingsOverlay(meta);
+    renderSettingsDock(meta);
 
     if (ptOpen) {
       ptOverlay.style.display = 'flex';
@@ -1505,20 +1500,19 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     updateApparatusOverlay(lastHoverX, lastHoverY);
   }
 
-  /** Shows/hides the long-lived tool-settings modal (shell and body are both
-   * built once -- see toolSettingsModal's declaration for why neither may be
-   * rebuilt per render) and retitles it for the active tool. */
-  function renderToolSettingsOverlay(meta: ToolMeta): void {
-    // A tool with nothing left to configure once the HUD owns the brush
-    // sliders has no modal to open; if it became the active tool while the
-    // modal was up, close it rather than show an empty shell.
-    if (!toolSettingsOpen || !hasToolSettings(meta)) {
-      toolSettingsOpen = false;
-      toolSettingsOverlay.style.display = 'none';
-      return;
-    }
-    toolSettingsTitle.textContent = `${meta.label} settings`;
-    toolSettingsOverlay.style.display = 'flex';
+  /** Shows/hides the settings dock (one long-lived node -- see sidePanel's
+   * declaration for why it's never rebuilt from scratch). A tool with nothing
+   * left to configure once the HUD owns the brush sliders gets no dock at
+   * all, rather than an empty card parked on the bench. */
+  function renderSettingsDock(meta: ToolMeta): void {
+    const hasSettings = hasToolSettings(meta);
+    sidePanel.style.display = settingsDockOpen && hasSettings ? 'flex' : 'none';
+    dockToggle.style.display = !settingsDockOpen && hasSettings ? 'flex' : 'none';
+    // The bench reserves the dock's strip whenever the dock is *enabled*, not
+    // whenever it happens to be filled: tying it to the active tool instead
+    // would rescale the whole canvas every time you switched between a tool
+    // with settings and one without.
+    bench.classList.toggle('dock-open', settingsDockOpen);
   }
 
   function gridCoordsFromEvent(event: PointerEvent): { x: number; y: number } {
@@ -1934,7 +1928,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * through to the tube-draw cancel below, and the single-letter shortcuts
    * are suppressed while one is open (they'd otherwise fire underneath it). */
   function anyModalOpen(): boolean {
-    return chestOpen || toolSettingsOpen || benchMenuOpen || ptOpen || settingsOverlay.style.display !== 'none';
+    return chestOpen || benchMenuOpen || ptOpen || settingsOverlay.style.display !== 'none';
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -1945,14 +1939,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
 
     if (event.key === 'Escape') {
-      if (benchMenuOpen || toolSettingsOpen || chestOpen || ptOpen) {
+      if (benchMenuOpen || chestOpen || ptOpen) {
         // Innermost-first: the standalone periodic table (the funnel/tube/
         // filter species picker) opens over the side panel.
         if (ptOpen) {
           ptOpen = false;
           ptSelectedSymbol = null;
         } else if (benchMenuOpen) benchMenuOpen = false;
-        else if (toolSettingsOpen) toolSettingsOpen = false;
         else {
           chestOpen = false;
           ptSelectedSymbol = null;
@@ -1979,7 +1972,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     } else if (event.key === 'e' || event.key === 'E') {
       if (!hasToolSettings(describeToolMeta(tool))) return;
       event.preventDefault();
-      toolSettingsOpen = true;
+      settingsDockOpen = !settingsDockOpen;
       render();
     } else if (event.key === 'm' || event.key === 'M') {
       event.preventDefault();

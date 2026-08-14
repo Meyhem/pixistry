@@ -5,12 +5,13 @@
 // bottom strip for the two controls that genuinely get adjusted mid-experiment
 // (brush width and brush temperature) plus the temperature legend.
 //
-// Everything else -- picking a tool (tool-rail.ts's left rail, and
-// tool-chest.ts for species), per-tool configuration
-// (side-panel.ts rendered into a modal), the periodic table, comfort settings,
-// save/restore/clear -- lives behind a modal, so no pixel of bench is spent on
-// a control the player isn't using right now.
-import { contrastTextColor, contrastTextShadow } from './contrast';
+// Per-tool configuration is the one thing that isn't behind a modal: it lives
+// in the settings dock on the right edge of the bench (side-panel.ts, mounted
+// by app.ts), permanently visible for whichever tool is active. Everything
+// else -- picking a tool (tool-rail.ts's left rail, and tool-chest.ts for
+// species), the periodic table, comfort settings, save/restore/clear -- is a
+// modal, so no pixel of bench is spent on a control the player isn't using
+// right now.
 import { el } from './dom';
 import { formatCelsius } from './format';
 
@@ -18,17 +19,11 @@ const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
 export interface HudCallbacks {
   /** Active tool -- label/swatch come straight from side-panel.ts's ToolMeta,
-   * so the readout, the rail's highlighted slot and the tool-settings modal
-   * all agree. */
+   * so the readout, the rail's highlighted slot and the settings dock all
+   * agree. */
   toolLabel: string;
   toolColor: string;
   toolCategory: string;
-  /** Whether the active tool has any configuration beyond the two brush
-   * sliders below; the ⚙ button is hidden entirely when it doesn't, rather
-   * than opening an empty modal. */
-  hasToolSettings: boolean;
-  onOpenToolSettings(): void;
-
   running: boolean;
   speed: number;
   onTogglePause(): void;
@@ -51,7 +46,7 @@ export interface HudCallbacks {
 }
 
 // Kept in lockstep with side-panel.ts's own constants: the same two values
-// are still editable there (in the tool-settings modal) for tools whose panel
+// are still editable there (in the settings dock) for tools whose panel
 // shows them, and a mismatched range would silently clamp differently
 // depending on which control the player happened to reach for.
 const MIN_RADIUS = 1;
@@ -179,17 +174,6 @@ export function buildHud(top: HTMLElement, bottom: HTMLElement, cb: HudCallbacks
     brush.appendChild(
       inlineSlider('Temp', cb.brushTempC, MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, (v) => formatCelsius(v), cb.onSetBrushTemp),
     );
-  }
-  if (cb.hasToolSettings) {
-    const settingsButton = el('button', 'hud-btn hud-btn-labelled');
-    settingsButton.textContent = '⚙ Tool settings';
-    settingsButton.title = `Configure ${cb.toolLabel} (E)`;
-    settingsButton.style.setProperty('--swatch', cb.toolColor || '#3a3d3a');
-    settingsButton.style.color = contrastTextColor(cb.toolColor || '#3a3d3a');
-    settingsButton.style.textShadow = contrastTextShadow(cb.toolColor || '#3a3d3a');
-    settingsButton.classList.add('hud-btn-swatch');
-    settingsButton.onclick = cb.onOpenToolSettings;
-    brush.appendChild(settingsButton);
   }
   // An empty cluster would still paint its background pill over the bench.
   if (brush.childElementCount > 0) bottom.appendChild(brush);
