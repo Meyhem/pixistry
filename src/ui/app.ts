@@ -26,10 +26,11 @@ import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
+import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
-import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
+import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import {
   buildToolChest,
@@ -41,7 +42,7 @@ import {
 import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
-import { ApparatusSelection, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
+import { ApparatusSelection, type FlaskEditDraft, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
 import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
 import { loadProgress, recordCompletion, recordDiscovery, saveProgress, starsForCompletion, unlockAchievement } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
@@ -702,16 +703,31 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       // The only branch that depends on live selection state rather than
       // just the tool kind, so it stays logic instead of a static table row.
       const selectedFunnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
-      const selectedTube = selectedFunnel ? undefined : apparatusSelection.findTube(apparatusSelection.selectedTubeId);
-      const nothingSelected = !selectedFunnel && !selectedTube;
+      const selectedTube = apparatusSelection.findTube(apparatusSelection.selectedTubeId);
+      const selectedFlask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
+      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask;
       return {
         ...TOOL_META_DEFAULTS,
-        label: selectedFunnel ? FUNNEL_LABEL : selectedTube ? TUBE_LABEL : SELECT_APPARATUS_LABEL,
-        color: selectedFunnel ? FUNNEL_COLOR : selectedTube ? TUBE_COLOR : SELECT_APPARATUS_COLOR,
+        label: selectedFunnel
+          ? FUNNEL_LABEL
+          : selectedTube
+            ? TUBE_LABEL
+            : selectedFlask
+              ? // Prefer the live edit draft over the worker's snapshot: the
+                // snapshot only catches up a frame later, and the HUD chip
+                // isn't rebuilt per frame, so a shape/stirred toggle would
+                // otherwise keep reading stale until some unrelated render.
+                flaskLabel(
+                  apparatusSelection.flaskEditDraft?.kind ?? selectedFlask.kind,
+                  apparatusSelection.flaskEditDraft?.stirred ?? selectedFlask.stirred,
+                )
+              : SELECT_APPARATUS_LABEL,
+        color: selectedFunnel ? FUNNEL_COLOR : selectedTube ? TUBE_COLOR : selectedFlask ? FLASK_COLOR : SELECT_APPARATUS_COLOR,
         category: nothingSelected ? 'TOOL' : 'APPARATUS',
         showBrushWidth: false,
         funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
         tubePanel: selectedTube ? 'edit' : 'none',
+        flaskPanel: selectedFlask ? 'edit' : 'none',
       };
     }
     const info = SIMPLE_TOOL_META[t.kind];
@@ -755,6 +771,21 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       tempC: editDraft.tempC,
       ratePerMinute: editDraft.ratePerMinute,
       total: editDraft.totalMode === 'infinite' ? null : editDraft.totalAmount,
+    });
+  }
+
+  /** Pushes a selected flask's whole config to the worker, which re-stamps
+   * the vessel (see flask.ts's updateFlaskInstance). */
+  function sendFlaskUpdate(): void {
+    const { selectedFlaskId, flaskEditDraft } = apparatusSelection;
+    if (selectedFlaskId === null || !flaskEditDraft) return;
+    send({
+      type: 'updateFlask',
+      id: selectedFlaskId,
+      facing: flaskEditDraft.facing,
+      sizeScale: flaskEditDraft.sizeScale,
+      stirred: flaskEditDraft.stirred,
+      kind: flaskEditDraft.kind,
     });
   }
 
@@ -1103,13 +1134,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const meta = describeToolMeta(tool);
     const showingVent = meta.sinkPanel === 'vent';
     const isEditMode = tool?.kind === 'select-apparatus';
-    const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
-    const selectedTube = isEditMode && !selectedFunnel ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
     // The select-apparatus tool's own selection can go stale (the selected
-    // funnel/tube got erased) -- drop it rather than keep pointing an edit
+    // apparatus got erased) -- drop it rather than keep pointing an edit
     // panel at nothing.
-    if (isEditMode && apparatusSelection.selectedFunnelId !== null && !selectedFunnel) apparatusSelection.selectFunnel(null);
-    if (isEditMode && apparatusSelection.selectedTubeId !== null && !selectedTube) apparatusSelection.selectTube(null);
+    if (isEditMode) apparatusSelection.dropStaleSelection();
+    const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
+    const selectedTube = isEditMode ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
+    const selectedFlask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
     if (isEditMode && selectedFunnel && !apparatusSelection.editDraft) {
       apparatusSelection.editDraft = {
         specId: selectedFunnel.specId,
@@ -1125,7 +1156,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         filter: selectedTube.filter ? new Set(selectedTube.filter) : null,
       };
     }
+    if (isEditMode && selectedFlask && !apparatusSelection.flaskEditDraft) {
+      apparatusSelection.flaskEditDraft = {
+        facing: selectedFlask.facing,
+        sizeScale: selectedFlask.sizeScale,
+        stirred: selectedFlask.stirred,
+        kind: selectedFlask.kind,
+      };
+    }
     const isTubeEditMode = isEditMode && !!selectedTube;
+    const isFlaskEditMode = isEditMode && !!selectedFlask;
+    const flaskFields: FlaskEditDraft =
+      isFlaskEditMode && apparatusSelection.flaskEditDraft
+        ? apparatusSelection.flaskEditDraft
+        : { facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, kind: tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND };
     const tubeFields: TubeFieldValues =
       isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : tubeDraft;
 
@@ -1219,6 +1263,24 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       };
     }
 
+    /** Same convention as funnelSetter/tubeSetter: writes through whichever
+     * flask config is live -- a selected flask's edit draft (pushed straight
+     * to the worker, which re-stamps the vessel) or the pre-placement tool
+     * state. */
+    function flaskSetter<K extends keyof FlaskEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FlaskEditDraft[K]) => void {
+      return (value) => {
+        if (isFlaskEditMode && apparatusSelection.flaskEditDraft) {
+          apparatusSelection.flaskEditDraft[key] = value;
+          sendFlaskUpdate();
+        } else if (key === 'sizeScale') {
+          flaskSizeScale = value as number;
+        } else if (key === 'stirred') {
+          flaskStirred = value as boolean;
+        }
+        if (opts.render) render();
+      };
+    }
+
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
       onSetBrushWidth: (value) => {
@@ -1288,16 +1350,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         sendFilterSpecies();
         render();
       },
-      flaskSizeScale,
-      onSetFlaskSize: (value) => {
-        flaskSizeScale = value;
-      },
-      flaskStirred,
+      flaskSizeScale: flaskFields.sizeScale,
+      // No render() while a slider is being dragged -- see funnelSetter.
+      onSetFlaskSize: flaskSetter('sizeScale'),
+      flaskStirred: flaskFields.stirred,
       // Unlike the size slider, this is a discrete two-button toggle whose
       // own active state has to be redrawn -- and the HUD's tool chip shows
       // the stirred/plain label too, so this one does render().
-      onSetFlaskStirred: (value) => {
-        flaskStirred = value;
+      onSetFlaskStirred: flaskSetter('stirred', { render: true }),
+      flaskShape: flaskFields.kind,
+      onSetFlaskShape: flaskSetter('kind', { render: true }),
+      onRotateFlask: () => {
+        if (!isFlaskEditMode || !apparatusSelection.flaskEditDraft) return;
+        apparatusSelection.flaskEditDraft.facing = nextFlaskFacing(apparatusSelection.flaskEditDraft.facing, 1);
+        sendFlaskUpdate();
         render();
       },
       // A Vent's panel shows what it threw away, a Sink's what it collected
@@ -1562,18 +1628,25 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   /** Positions the select-apparatus tool's corner-bracket overlay over the
    * selected funnel's bounding box, or hides it. */
   function updateSelectionBox(): void {
-    const selected = tool?.kind === 'select-apparatus' ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
-    if (!selected || gridWidth === 0 || gridHeight === 0) {
+    const isEditMode = tool?.kind === 'select-apparatus';
+    const funnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
+    const flask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
+    const box = funnel
+      ? { anchorX: funnel.anchorX, anchorY: funnel.anchorY, bounds: funnelBounds(funnelShapeFor(funnel.facing)) }
+      : flask
+        ? { anchorX: flask.x, anchorY: flask.y, bounds: flaskBounds(flaskShapeFor(flask.facing, flask.sizeScale, flask.kind)) }
+        : null;
+    if (!box || gridWidth === 0 || gridHeight === 0) {
       selectBox.style.display = 'none';
       return;
     }
     const rect = canvas.getBoundingClientRect();
     const cellPxX = rect.width / gridWidth;
     const cellPxY = rect.height / gridHeight;
-    const bounds = funnelBounds(funnelShapeFor(selected.facing));
+    const { anchorX, anchorY, bounds } = box;
     selectBox.style.display = 'block';
-    selectBox.style.left = `${canvas.offsetLeft + (selected.anchorX + bounds.minDx) * cellPxX}px`;
-    selectBox.style.top = `${canvas.offsetTop + (selected.anchorY + bounds.minDy) * cellPxY}px`;
+    selectBox.style.left = `${canvas.offsetLeft + (anchorX + bounds.minDx) * cellPxX}px`;
+    selectBox.style.top = `${canvas.offsetTop + (anchorY + bounds.minDy) * cellPxY}px`;
     selectBox.style.width = `${(bounds.maxDx - bounds.minDx + 1) * cellPxX}px`;
     selectBox.style.height = `${(bounds.maxDy - bounds.minDy + 1) * cellPxY}px`;
   }
@@ -1881,6 +1954,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       hasSnapshot = msg.hasSnapshot;
       apparatusSelection.setFunnels(msg.funnels);
       apparatusSelection.setTubes(msg.tubes);
+      apparatusSelection.setFlasks(msg.flasks);
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,

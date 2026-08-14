@@ -13,7 +13,7 @@ import { formatCelsius } from './format';
 import { contrastTextColor, contrastTextShadow } from './contrast';
 import { el, hintBox, propRow } from './dom';
 import { buildSpeciesChipList } from './species-chip-list';
-import { MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE } from '../sim/flask-shapes';
+import { MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE, type FlaskKind } from '../sim/flask-shapes';
 
 export interface ToolMeta {
   label: string;
@@ -39,10 +39,11 @@ export interface ToolMeta {
    * "edit" mode, since a filter line isn't a tracked instance: its
    * allow-list is one global config, live-edited straight from the tool). */
   filterPanel: 'none' | 'config';
-  /** The flask tool's size/stirred panel -- same 2-state convention as
-   * filterPanel: a placed flask isn't a tracked instance either, so there's
-   * no "edit" mode, only pre-placement config. */
-  flaskPanel: 'none' | 'config';
+  /** The flask tool's size/stirred panel -- same 3-state convention as
+   * funnelPanel: 'config' is the pre-placement draft, 'edit' is a placed
+   * flask selected with the select-apparatus tool (see flask.ts, which
+   * re-stamps the vessel on every edit). */
+  flaskPanel: 'none' | 'config' | 'edit';
   /** The Glass tool's polygon-draw panel -- explains the click/right-click
    * interaction, which is the tool's only "setting" (glass lines are always
    * one cell wide and stamped at ambient temperature). */
@@ -120,6 +121,13 @@ export interface SidePanelCallbacks {
    * separate "Erlenmeyer (stirred)" tool. */
   flaskStirred: boolean;
   onSetFlaskStirred(value: boolean): void;
+  /** Which glassware shape the panel is editing. Only shown in 'edit' mode
+   * -- pre-placement the shape is what you picked in the Tool Chest. */
+  flaskShape: FlaskKind;
+  onSetFlaskShape(kind: FlaskKind): void;
+  /** Rotates a placed flask one 45-degree step (the scroll wheel does this
+   * before placement, but a selected flask needs a control of its own). */
+  onRotateFlask(): void;
   /** Non-zero running totals only, already sorted highest-first -- see
    * app.ts's sinkTallyEntries. */
   sinkTally: readonly SinkTallyEntry[];
@@ -355,15 +363,46 @@ function addFlaskPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCall
   if (meta.flaskPanel === 'none') return;
   addDivider(container);
 
+  if (meta.flaskPanel === 'edit') addShapeToggle(container, cb.flaskShape, cb.onSetFlaskShape);
   addSlider(container, 'Size', MIN_FLASK_SIZE_SCALE, MAX_FLASK_SIZE_SCALE, 0.1, cb.flaskSizeScale, (v) => `${v.toFixed(1)}x`, cb.onSetFlaskSize);
   addStirredToggle(container, cb.flaskStirred, cb.onSetFlaskStirred);
 
+  if (meta.flaskPanel === 'edit') {
+    const rotateBtn = el('button', 'funnel-reset-btn');
+    rotateBtn.textContent = 'Rotate 45°';
+    rotateBtn.onclick = cb.onRotateFlask;
+    container.appendChild(rotateBtn);
+  }
+
   container.appendChild(
     hintBox(
-      'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.',
+      meta.flaskPanel === 'config'
+        ? 'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.'
+        : 'Drag the vessel to move it. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline.',
       'HOW IT WORKS',
     ),
   );
+}
+
+function addShapeToggle(container: HTMLElement, shape: FlaskKind, onChange: (kind: FlaskKind) => void): void {
+  const wrap = el('div', 'setting');
+  const labelEl = el('span', 'setting-label');
+  labelEl.textContent = 'Shape';
+  wrap.appendChild(labelEl);
+
+  const row = el('div', 'funnel-toggle-row');
+  for (const [kind, label] of [
+    ['erlenmeyer', 'Erlenmeyer'],
+    ['beaker', 'Beaker'],
+  ] as const) {
+    const button = el('button', 'funnel-toggle-btn');
+    button.textContent = label;
+    button.classList.toggle('active', shape === kind);
+    button.onclick = () => onChange(kind);
+    row.appendChild(button);
+  }
+  wrap.appendChild(row);
+  container.appendChild(wrap);
 }
 
 function addStirredToggle(container: HTMLElement, stirred: boolean, onChange: (stirred: boolean) => void): void {

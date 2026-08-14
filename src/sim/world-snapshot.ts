@@ -11,6 +11,7 @@
 // every array here stays the same fixed size (the grid's dimensions never
 // change) for the worker's whole lifetime.
 import type { SimGrid } from './grid';
+import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
 import type { SinkCounter } from './sink';
 import type { TubeInstance } from './tube';
@@ -29,6 +30,7 @@ export interface WorldSnapshot {
   readonly catalystStrength: Uint8Array;
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
+  readonly flasks: readonly FlaskInstance[];
   readonly sinkTotals: Uint32Array;
   readonly sinkGrandTotal: number;
   readonly sinkHistory: SinkCounter['history'];
@@ -48,6 +50,7 @@ export function captureWorldSnapshot(
   grid: SimGrid,
   funnels: readonly FunnelInstance[],
   tubes: readonly TubeInstance[],
+  flasks: readonly FlaskInstance[],
   sinkCounter: SinkCounter,
   ventCounter: SinkCounter,
   tick: number,
@@ -66,6 +69,7 @@ export function captureWorldSnapshot(
     catalystStrength: grid.catalystStrength.slice(),
     funnels: structuredClone(funnels as FunnelInstance[]),
     tubes: structuredClone(tubes as TubeInstance[]),
+    flasks: structuredClone(flasks as FlaskInstance[]),
     sinkTotals: sinkCounter.totals.slice(),
     sinkGrandTotal: sinkCounter.grandTotal,
     sinkHistory: structuredClone(sinkCounter.history),
@@ -81,6 +85,7 @@ export function captureWorldSnapshot(
 export interface RestoredWorld {
   readonly funnels: FunnelInstance[];
   readonly tubes: TubeInstance[];
+  readonly flasks: FlaskInstance[];
   readonly tick: number;
 }
 
@@ -109,6 +114,7 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ve
   return {
     funnels: structuredClone(snapshot.funnels as FunnelInstance[]),
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),
+    flasks: structuredClone(snapshot.flasks as FlaskInstance[]),
     tick: snapshot.tick,
   };
 }

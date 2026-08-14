@@ -32,6 +32,16 @@ export interface TubeSnapshot {
   filter: number[] | null;
 }
 
+export interface FlaskSnapshot {
+  id: number;
+  x: number;
+  y: number;
+  facing: FlaskFacing;
+  sizeScale: number;
+  stirred: boolean;
+  kind: FlaskKind;
+}
+
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
   | {
@@ -48,6 +58,7 @@ export type WorkerToMainMessage =
       funnelFillSpecId: Uint16Array;
       funnels: FunnelSnapshot[];
       tubes: TubeSnapshot[];
+      flasks: FlaskSnapshot[];
       sinkMask: Uint8Array;
       /** Indexed by specId (see species-data.ts's SPECIES array) -- how many
        * pixels of each species every sink line on the grid has ever
@@ -129,6 +140,11 @@ export type MainToWorkerMessage =
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
   | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
   | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
+  /** Re-stamps a placed flask with new settings (see flask.ts's
+   * updateFlaskInstance) -- every field is sent together, same
+   * "settings are a snapshot, not a patch" convention as updateFunnel. */
+  | { type: 'updateFlask'; id: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
+  | { type: 'moveFlask'; id: number; x: number; y: number }
   /** Stamps a one-cell-wide glass polyline through `points` (each pair of
    * consecutive points joined by a Bresenham line) -- the Glass tool draws
    * vessel walls as a clicked polygon chain, the same interaction as the

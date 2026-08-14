@@ -1,5 +1,5 @@
-// The select-apparatus tool's selection/drag state for both apparatus
-// types (funnel, tube) -- app.ts used to carry two parallel copies of the
+// The select-apparatus tool's selection/drag state for all three apparatus
+// types (funnel, tube, flask) -- app.ts used to carry two parallel copies of the
 // same idea (selectedFunnelId/editDraft/lastFunnels/findFunnel/selectFunnel
 // vs selectedTubeId/tubeEditDraft/lastTubes/findTube/selectTube), plus two
 // copies of the "nearest match across every placed instance" hit-test loop
@@ -9,7 +9,8 @@
 // on, so app.ts's pointerdown handler is one dispatch instead of three
 // sequential hit-tests with near-identical bodies.
 import { funnelBounds, funnelShapeFor } from '../sim/apparatus-shapes';
-import type { FunnelSnapshot, MainToWorkerMessage, TubeSnapshot } from '../sim/protocol';
+import { flaskBounds, flaskShapeFor, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
+import type { FlaskSnapshot, FunnelSnapshot, MainToWorkerMessage, TubeSnapshot } from '../sim/protocol';
 import { nearestKneeIndex, nearestSegmentIndex, pointSegmentDistance, type Point } from '../sim/tube-shapes';
 
 // How close (in grid cells) a click/hover needs to be to grab a tube's knee
@@ -23,6 +24,7 @@ export type ApparatusHit =
   | { kind: 'funnel'; id: number; anchorX: number; anchorY: number }
   | { kind: 'tube-knee'; tubeId: number; kneeIndex: number }
   | { kind: 'tube-segment'; tubeId: number; segIndex: number }
+  | { kind: 'flask'; id: number; anchorX: number; anchorY: number }
   | { kind: 'none' };
 
 /** Local draft for the select-apparatus tool's funnel edit panel -- mirrors
@@ -48,6 +50,16 @@ export interface TubeEditDraft {
   filter: Set<number> | null;
 }
 
+/** Same role again for a placed flask: every field edit re-sends the whole
+ * config as one 'updateFlask', which re-stamps the vessel (see flask.ts's
+ * updateFlaskInstance). */
+export interface FlaskEditDraft {
+  facing: FlaskFacing;
+  sizeScale: number;
+  stirred: boolean;
+  kind: FlaskKind;
+}
+
 function bestByDistance<T>(candidates: readonly { value: T; dist: number }[]): T | null {
   let best: { value: T; dist: number } | null = null;
   for (const c of candidates) {
@@ -59,11 +71,14 @@ function bestByDistance<T>(candidates: readonly { value: T; dist: number }[]): T
 export class ApparatusSelection {
   private funnels: readonly FunnelSnapshot[] = [];
   private tubes: readonly TubeSnapshot[] = [];
+  private flasks: readonly FlaskSnapshot[] = [];
 
   selectedFunnelId: number | null = null;
   editDraft: FunnelEditDraft | null = null;
   selectedTubeId: number | null = null;
   tubeEditDraft: TubeEditDraft | null = null;
+  selectedFlaskId: number | null = null;
+  flaskEditDraft: FlaskEditDraft | null = null;
 
   // Drag-to-move/reshape state, mutually exclusive across the three kinds --
   // set by beginSelection, read by continueDrag, cleared by endDrag.
@@ -82,6 +97,9 @@ export class ApparatusSelection {
   private draggingTubeSegment: number | null = null;
   private tubeSegmentDragLastX = 0;
   private tubeSegmentDragLastY = 0;
+  private draggingFlaskId: number | null = null;
+  private flaskDragOffsetX = 0;
+  private flaskDragOffsetY = 0;
 
   /** Refreshed once per incoming worker frame -- see app.ts's
    * worker.onmessage 'frame' handler. */
@@ -93,6 +111,10 @@ export class ApparatusSelection {
     this.tubes = tubes;
   }
 
+  setFlasks(flasks: readonly FlaskSnapshot[]): void {
+    this.flasks = flasks;
+  }
+
   findFunnel(id: number | null): FunnelSnapshot | undefined {
     return id === null ? undefined : this.funnels.find((f) => f.id === id);
   }
@@ -101,16 +123,44 @@ export class ApparatusSelection {
     return id === null ? undefined : this.tubes.find((t) => t.id === id);
   }
 
-  selectFunnel(id: number | null): void {
-    this.selectedFunnelId = id;
+  findFlask(id: number | null): FlaskSnapshot | undefined {
+    return id === null ? undefined : this.flasks.find((f) => f.id === id);
+  }
+
+  /** At most one apparatus is ever selected, so selecting any one kind
+   * clears the other two (and their edit drafts) -- the edit panel shows
+   * exactly one apparatus's fields. */
+  private clearSelections(): void {
+    this.selectedFunnelId = null;
     this.editDraft = null;
-    if (id !== null) this.selectTube(null);
+    this.selectedTubeId = null;
+    this.tubeEditDraft = null;
+    this.selectedFlaskId = null;
+    this.flaskEditDraft = null;
+  }
+
+  selectFunnel(id: number | null): void {
+    this.clearSelections();
+    this.selectedFunnelId = id;
   }
 
   selectTube(id: number | null): void {
+    this.clearSelections();
     this.selectedTubeId = id;
-    this.tubeEditDraft = null;
-    if (id !== null) this.selectFunnel(null);
+  }
+
+  selectFlask(id: number | null): void {
+    this.clearSelections();
+    this.selectedFlaskId = id;
+  }
+
+  /** Drops a selection whose apparatus no longer exists (it was erased, or a
+   * Reset/Restore replaced the whole instance list) -- called once per
+   * render so an edit panel never points at nothing. */
+  dropStaleSelection(): void {
+    if (this.selectedFunnelId !== null && !this.findFunnel(this.selectedFunnelId)) this.selectFunnel(null);
+    if (this.selectedTubeId !== null && !this.findTube(this.selectedTubeId)) this.selectTube(null);
+    if (this.selectedFlaskId !== null && !this.findFlask(this.selectedFlaskId)) this.selectFlask(null);
   }
 
   /** Bounding box hit-test against every placed funnel's rotated outline --
@@ -121,6 +171,20 @@ export class ApparatusSelection {
     for (const f of this.funnels) {
       const bounds = funnelBounds(funnelShapeFor(f.facing));
       if (x >= f.anchorX + bounds.minDx && x <= f.anchorX + bounds.maxDx && y >= f.anchorY + bounds.minDy && y <= f.anchorY + bounds.maxDy) {
+        return f;
+      }
+    }
+    return null;
+  }
+
+  /** Same bounding-box test as hitTestFunnel, over a flask's rotated
+   * outline. Checked last (see hitTest) because a flask's box is big enough
+   * to swallow a funnel or a tube knee standing inside it, and the small
+   * apparatus is what a click in there almost always means. */
+  private hitTestFlask(x: number, y: number): FlaskSnapshot | null {
+    for (const f of this.flasks) {
+      const bounds = flaskBounds(flaskShapeFor(f.facing, f.sizeScale, f.kind));
+      if (x >= f.x + bounds.minDx && x <= f.x + bounds.maxDx && y >= f.y + bounds.minDy && y <= f.y + bounds.maxDy) {
         return f;
       }
     }
@@ -148,8 +212,10 @@ export class ApparatusSelection {
   }
 
   /** Funnel bounding box first, then the nearest tube knee, then the
-   * nearest tube segment -- knee before segment so a click near a knee
-   * never accidentally grabs the segment it terminates instead. */
+   * nearest tube segment, then the (much larger) flask box -- knee before
+   * segment so a click near a knee never accidentally grabs the segment it
+   * terminates instead, and flask last so apparatus standing inside a
+   * vessel stays clickable. */
   hitTest(x: number, y: number): ApparatusHit {
     const funnel = this.hitTestFunnel(x, y);
     if (funnel) return { kind: 'funnel', id: funnel.id, anchorX: funnel.anchorX, anchorY: funnel.anchorY };
@@ -157,6 +223,8 @@ export class ApparatusSelection {
     if (knee) return { kind: 'tube-knee', tubeId: knee.tubeId, kneeIndex: knee.kneeIndex };
     const segment = this.hitTestTubeSegment(x, y);
     if (segment) return { kind: 'tube-segment', tubeId: segment.tubeId, segIndex: segment.segIndex };
+    const flask = this.hitTestFlask(x, y);
+    if (flask) return { kind: 'flask', id: flask.id, anchorX: flask.x, anchorY: flask.y };
     return { kind: 'none' };
   }
 
@@ -167,6 +235,7 @@ export class ApparatusSelection {
     this.draggingFunnelId = null;
     this.draggingTubeKnee = null;
     this.draggingTubeSegment = null;
+    this.draggingFlaskId = null;
 
     const hit = this.hitTest(x, y);
     if (hit.kind === 'funnel') {
@@ -182,9 +251,13 @@ export class ApparatusSelection {
       this.draggingTubeSegment = hit.segIndex;
       this.tubeSegmentDragLastX = x;
       this.tubeSegmentDragLastY = y;
+    } else if (hit.kind === 'flask') {
+      this.selectFlask(hit.id);
+      this.draggingFlaskId = hit.id;
+      this.flaskDragOffsetX = x - hit.anchorX;
+      this.flaskDragOffsetY = y - hit.anchorY;
     } else {
       this.selectFunnel(null);
-      this.selectTube(null);
     }
     return hit;
   }
@@ -208,6 +281,9 @@ export class ApparatusSelection {
       this.tubeSegmentDragLastY = y;
       return { type: 'moveTubeSegment', id: this.selectedTubeId, segIndex: this.draggingTubeSegment, dx, dy };
     }
+    if (this.draggingFlaskId !== null) {
+      return { type: 'moveFlask', id: this.draggingFlaskId, x: x - this.flaskDragOffsetX, y: y - this.flaskDragOffsetY };
+    }
     return null;
   }
 
@@ -215,5 +291,6 @@ export class ApparatusSelection {
     this.draggingFunnelId = null;
     this.draggingTubeKnee = null;
     this.draggingTubeSegment = null;
+    this.draggingFlaskId = null;
   }
 }

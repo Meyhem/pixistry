@@ -7,6 +7,7 @@
 import type { GrabState } from './grabber';
 import { EMPTY, type SimGrid } from './grid';
 import { funnelShapeFor } from './apparatus-shapes';
+import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
 import { kelvinToCelsius, massOf, temperatureOf } from './heat';
 import { rateFromIntervalTicks } from './funnel';
@@ -14,7 +15,7 @@ import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
 import type { TubeInstance } from './tube';
-import type { FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
+import type { FlaskSnapshot, FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
 
 export function computeTempGrid(grid: SimGrid, species: SpeciesTable): Float32Array {
   const temps = new Float32Array(grid.width * grid.height);
@@ -75,6 +76,18 @@ export function tubeSnapshots(tubes: readonly TubeInstance[]): TubeSnapshot[] {
   }));
 }
 
+export function flaskSnapshots(flasks: readonly FlaskInstance[]): FlaskSnapshot[] {
+  return flasks.map((f) => ({
+    id: f.id,
+    x: f.x,
+    y: f.y,
+    facing: f.facing,
+    sizeScale: f.sizeScale,
+    stirred: f.stirred,
+    kind: f.kind,
+  }));
+}
+
 /** Overlays held grabber cells (see grabber.ts) into an already-built frame's
  * arrays purely for display -- held cells are pulled out of `grid` entirely
  * while grabbed, so they'd otherwise render as empty. Mutates the three
@@ -104,6 +117,7 @@ export function overlayGrabbedCells(
 export interface FrameState {
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
+  readonly flasks: readonly FlaskInstance[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
   readonly ventCounter: SinkCounter;
@@ -144,6 +158,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     funnelFillSpecId,
     funnels: funnelSnapshots(state.funnels),
     tubes: tubeSnapshots(state.tubes),
+    flasks: flaskSnapshots(state.flasks),
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,
