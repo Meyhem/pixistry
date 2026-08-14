@@ -1,9 +1,13 @@
-// The floating HUD: the only chrome that stays on screen while you work.
-// It replaces the old always-docked toolbar card (~170px tall) and side panel
-// (260px wide) with two translucent strips that hover over the corners of a
-// full-bleed canvas -- top strip for identity/transport/modal entry points,
-// bottom strip for the two controls that genuinely get adjusted mid-experiment
-// (brush width and brush temperature) plus the temperature legend.
+// The floating HUD: one translucent strip along the top of the bench,
+// carrying identity, the active-tool readout, and the transport controls
+// (pause/step/speed) plus the bench menu.
+//
+// There was a second strip along the bottom holding brush width, brush
+// temperature and the temperature legend. All three moved into the settings
+// dock (side-panel.ts) once that became permanent furniture: the dock has
+// vertical room to spare, the sliders belong next to the rest of the active
+// tool's settings rather than in a different corner of the screen, and the
+// bottom of the bench is now free canvas.
 //
 // Per-tool configuration is the one thing that isn't behind a modal: it lives
 // in the settings dock on the right edge of the bench (side-panel.ts, mounted
@@ -13,7 +17,6 @@
 // modal, so no pixel of bench is spent on a control the player isn't using
 // right now.
 import { el } from './dom';
-import { formatCelsius } from './format';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4];
 
@@ -33,68 +36,11 @@ export interface HudCallbacks {
   onOpenBenchMenu(): void;
 
   campaign: boolean;
-
-  showBrushWidth: boolean;
-  brushWidth: number;
-  onSetBrushWidth(value: number): void;
-  showBrushTemp: boolean;
-  brushTempC: number;
-  onSetBrushTemp(value: number): void;
-
-  hotLabel: string;
-  coldLabel: string;
 }
 
-// Kept in lockstep with side-panel.ts's own constants: the same two values
-// are still editable there (in the settings dock) for tools whose panel
-// shows them, and a mismatched range would silently clamp differently
-// depending on which control the player happened to reach for.
-const MIN_RADIUS = 1;
-const MAX_RADIUS = 12;
-const MIN_TEMP_C = -250;
-const MAX_TEMP_C = 1500;
-const TEMP_STEP_C = 5;
-
-/** A compact labelled slider for the bottom strip. Unlike side-panel.ts's
- * `addSlider` this puts label, track and value on one line -- the strip is
- * ~34px tall and can't afford a stacked row. The value readout is patched in
- * place on input (never a rebuild), so dragging isn't interrupted. */
-function inlineSlider(
-  label: string,
-  value: number,
-  min: number,
-  max: number,
-  step: number,
-  format: (v: number) => string,
-  onInput: (v: number) => void,
-): HTMLDivElement {
-  const wrap = el('div', 'hud-slider');
-  const labelEl = el('span', 'hud-slider-label');
-  labelEl.textContent = label;
-  const input = el('input', 'hud-slider-input');
-  input.type = 'range';
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(value);
-  const valueEl = el('span', 'hud-slider-value');
-  valueEl.textContent = format(value);
-  input.oninput = () => {
-    const next = Number(input.value);
-    valueEl.textContent = format(next);
-    onInput(next);
-  };
-  wrap.appendChild(labelEl);
-  wrap.appendChild(input);
-  wrap.appendChild(valueEl);
-  return wrap;
-}
-
-export function buildHud(top: HTMLElement, bottom: HTMLElement, cb: HudCallbacks): void {
+export function buildHud(top: HTMLElement, cb: HudCallbacks): void {
   top.innerHTML = '';
-  bottom.innerHTML = '';
 
-  // --- top strip -----------------------------------------------------------
   const left = el('div', 'hud-cluster');
 
   const mark = el('div', 'hud-mark');
@@ -162,36 +108,6 @@ export function buildHud(top: HTMLElement, bottom: HTMLElement, cb: HudCallbacks
   right.appendChild(benchButton);
 
   top.appendChild(right);
-
-  // --- bottom strip --------------------------------------------------------
-  const brush = el('div', 'hud-cluster');
-  if (cb.showBrushWidth) {
-    brush.appendChild(
-      inlineSlider('Width', cb.brushWidth, MIN_RADIUS, MAX_RADIUS, 1, (v) => `${v}px`, cb.onSetBrushWidth),
-    );
-  }
-  if (cb.showBrushTemp) {
-    brush.appendChild(
-      inlineSlider('Temp', cb.brushTempC, MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, (v) => formatCelsius(v), cb.onSetBrushTemp),
-    );
-  }
-  // An empty cluster would still paint its background pill over the bench.
-  if (brush.childElementCount > 0) bottom.appendChild(brush);
-
-  const legend = el('div', 'hud-cluster hud-legend');
-  for (const [cls, text] of [
-    ['normal', 'NORMAL'],
-    ['hot', `HOT · >${cb.hotLabel}`],
-    ['cold', `COLD · <${cb.coldLabel}`],
-  ] as const) {
-    const item = el('div', 'legend-item');
-    item.appendChild(el('span', `legend-swatch ${cls}`));
-    const label = el('span', 'legend-label');
-    label.textContent = text;
-    item.appendChild(label);
-    legend.appendChild(item);
-  }
-  bottom.appendChild(legend);
 }
 
 export interface BenchMenuCallbacks {

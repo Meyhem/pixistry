@@ -390,9 +390,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   hudTop.className = 'hud hud-top';
   root.appendChild(hudTop);
 
-  const hudBottom = document.createElement('div');
-  hudBottom.className = 'hud hud-bottom';
-  root.appendChild(hudBottom);
 
   // The tool rail (tool-rail.ts) -- same "floats over the bench, sibling of
   // it" arrangement as the two HUD strips, pinned to the left edge between
@@ -426,14 +423,35 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     updateApparatusOverlay(lastHoverX, lastHoverY);
     updateSelectionBox();
   };
+  // Asks the worker for a grid whose shape matches the bench's, so cells stay
+  // square with only a sliver of letterboxing left over -- a fixed 160x100
+  // grid in a taller-than-16:10 window left a deep dead band above and below
+  // the canvas. The column count is the worker's (cells keep their width);
+  // only the row count follows the window. Sandbox only: a scenario's setup
+  // is authored against fixed coordinates, so the worker refuses to reshape a
+  // loaded one (see its 'resizeWorld' handler).
+  //
+  // Startup only, and at most once per height: reshaping wipes the world, so
+  // it can't chase a window the player is still dragging, and re-requesting a
+  // height the worker clamped would ping-pong 'ready' messages forever.
+  let requestedGridHeight: number | null = null;
+  function requestGridFit(): void {
+    const availW = Math.floor(canvasWrap.clientWidth);
+    const availH = Math.floor(canvasWrap.clientHeight);
+    if (availW <= 0 || availH <= 0 || gridWidth <= 0) return;
+    const height = Math.round((gridWidth * availH) / availW);
+    if (height === gridHeight || height === requestedGridHeight) return;
+    requestedGridHeight = height;
+    send({ type: 'resizeWorld', height });
+  }
+
   const resizeObserver = new ResizeObserver(fitCanvasWrap);
   resizeObserver.observe(bench);
   // canvasWrap as well as bench: folding the settings dock away (E) changes
-  // the wrap's inset, not the bench's size, and it does so over a 120ms
-  // transition -- a single fit at render() time would measure the old width
-  // and never re-fit. Safe from the write-then-re-observe loop the comment in
-  // fitCanvasWrap warns about, since the wrap is absolutely positioned and
-  // takes no size from the canvas it contains.
+  // the wrap's inset, not the bench's size, so bench alone never fires. Safe
+  // from the write-then-re-observe loop the comment in fitCanvasWrap warns
+  // about, since the wrap is absolutely positioned and takes no size from the
+  // canvas it contains.
   resizeObserver.observe(canvasWrap);
   window.addEventListener('resize', fitCanvasWrap);
 
@@ -1010,22 +1028,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     fitCanvasWrap();
   }
 
-  /** Whether the active tool has anything to configure beyond the two brush
-   * sliders the HUD already carries -- decides whether the settings dock is
-   * shown at all, so an Erase/Grab/Mix tool doesn't park an empty card on the
-   * bench. */
-  function hasToolSettings(meta: ToolMeta): boolean {
-    return (
-      meta.isSpecies ||
-      meta.isThermal ||
-      meta.funnelPanel !== 'none' ||
-      meta.tubePanel !== 'none' ||
-      meta.filterPanel !== 'none' ||
-      meta.flaskPanel !== 'none' ||
-      meta.glassPanel !== 'none' ||
-      meta.sinkPanel !== 'none'
-    );
-  }
 
   function isToolKindActive(kind: UiToolKind): boolean {
     if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && tool.flask === 'erlenmeyer';
@@ -1081,24 +1083,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         render();
       },
       campaign: options.mode === 'campaign',
-      showBrushWidth: meta.showBrushWidth,
-      brushWidth,
-      // No render() on either brush slider: a rebuild mid-drag would replace
-      // the input node under the browser's own drag gesture and kill it (same
-      // reasoning as side-panel.ts's addSlider). The slider updates its own
-      // readout in place.
-      onSetBrushWidth: (value) => {
-        brushWidth = value;
-      },
-      showBrushTemp: meta.showBrushTemp,
-      brushTempC,
-      onSetBrushTemp: (value) => {
-        brushTempC = value;
-      },
-      hotLabel: formatCelsius(kelvinToCelsius(hotK)),
-      coldLabel: formatCelsius(kelvinToCelsius(coldK)),
     };
-    buildHud(hudTop, hudBottom, hudCallbacks);
+    buildHud(hudTop, hudCallbacks);
   }
 
   function openChest(): void {
@@ -1437,16 +1423,15 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
       sinkGrandTotal: showingVent ? lastVentGrandTotal : lastSinkGrandTotal,
       onResetSinkCounts: () => send({ type: 'resetSinkCounts' }),
+      hotLabel: formatCelsius(kelvinToCelsius(hotK)),
+      coldLabel: formatCelsius(kelvinToCelsius(coldK)),
       onFoldDock: () => {
         settingsDockOpen = false;
         render();
       },
     };
-    // Brush width/temperature live permanently in the bottom HUD strip now,
-    // so the modal suppresses its own copies rather than showing the same two
-    // sliders twice (with the HUD's pair visible right behind the backdrop).
-    buildSidePanel(sidePanel, { ...meta, showBrushWidth: false, showBrushTemp: false }, sidePanelCallbacks);
-    renderSettingsDock(meta);
+    buildSidePanel(sidePanel, meta, sidePanelCallbacks);
+    renderSettingsDock();
 
     if (ptOpen) {
       ptOverlay.style.display = 'flex';
@@ -1501,13 +1486,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   /** Shows/hides the settings dock (one long-lived node -- see sidePanel's
-   * declaration for why it's never rebuilt from scratch). A tool with nothing
-   * left to configure once the HUD owns the brush sliders gets no dock at
-   * all, rather than an empty card parked on the bench. */
-  function renderSettingsDock(meta: ToolMeta): void {
-    const hasSettings = hasToolSettings(meta);
-    sidePanel.style.display = settingsDockOpen && hasSettings ? 'flex' : 'none';
-    dockToggle.style.display = !settingsDockOpen && hasSettings ? 'flex' : 'none';
+   * declaration for why it's never rebuilt from scratch). Every tool has
+   * something to show here now that the brush sliders and the temperature
+   * legend live in it, so this is purely the fold toggle. */
+  function renderSettingsDock(): void {
+    sidePanel.style.display = settingsDockOpen ? 'flex' : 'none';
+    dockToggle.style.display = settingsDockOpen ? 'none' : 'flex';
     // The bench reserves the dock's strip whenever the dock is *enabled*, not
     // whenever it happens to be filled: tying it to the active tool instead
     // would rescale the whole canvas every time you switched between a tool
@@ -1970,7 +1954,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       event.preventDefault();
       openChest();
     } else if (event.key === 'e' || event.key === 'E') {
-      if (!hasToolSettings(describeToolMeta(tool))) return;
       event.preventDefault();
       settingsDockOpen = !settingsDockOpen;
       render();
@@ -2036,6 +2019,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           funnelDraft.specId = initial.specId;
         }
         render();
+        // After the first render, never before: render() is what puts the
+        // settings dock on screen and narrows canvasWrap accordingly, and
+        // fitting the grid to the pre-dock width would leave exactly the
+        // letterbox band this is here to remove.
+        requestGridFit();
       }
     } else if (msg.type === 'frame') {
       lastSpecId = msg.specId;

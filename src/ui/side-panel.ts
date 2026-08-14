@@ -130,6 +130,12 @@ export interface SidePanelCallbacks {
   sinkTally: readonly SinkTallyEntry[];
   sinkGrandTotal: number;
   onResetSinkCounts(): void;
+  /** The renderer's hot/cold border-tint thresholds, for the legend at the
+   * foot of the dock -- it used to sit in the bottom HUD strip, which no
+   * longer exists (see hud.ts). Global information rather than a tool
+   * setting, hence its own divider at the very bottom. */
+  hotLabel: string;
+  coldLabel: string;
   /** Folds the dock away (app.ts's settingsDockOpen). Optional so the builder
    * stays usable outside the dock, but in practice always supplied -- the
    * header's » button is the only pointer-driven way back to a full-width
@@ -552,4 +558,25 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   addFlaskPanel(container, meta, cb);
   addGlassPanel(container, meta);
   addSinkPanel(container, meta, cb);
+  addTemperatureLegend(container, cb);
+}
+
+/** What the renderer's cell tinting means, at the foot of every tool's
+ * panel. */
+function addTemperatureLegend(container: HTMLElement, cb: SidePanelCallbacks): void {
+  addDivider(container);
+  const legend = el('div', 'dock-legend');
+  for (const [cls, text] of [
+    ['normal', 'NORMAL'],
+    ['hot', `HOT · >${cb.hotLabel}`],
+    ['cold', `COLD · <${cb.coldLabel}`],
+  ] as const) {
+    const item = el('div', 'legend-item');
+    item.appendChild(el('span', `legend-swatch ${cls}`));
+    const label = el('span', 'legend-label');
+    label.textContent = text;
+    item.appendChild(label);
+    legend.appendChild(item);
+  }
+  container.appendChild(legend);
 }

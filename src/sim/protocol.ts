@@ -156,6 +156,15 @@ export type MainToWorkerMessage =
   | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
   /** Zeroes both the sink and the vent tallies. */
   | { type: 'resetSinkCounts' }
+  /** Rebuilds the world at a new grid height (the column count is fixed --
+   * see worker.ts's WIDTH). Wipes everything exactly like 'resetWorld', since
+   * a differently-shaped grid can't carry the old one's contents across, and
+   * answers with a fresh 'ready' so the main thread rebuilds its renderer at
+   * the new size. Sent once at startup by app.ts to make cells square in the
+   * window it actually has; a no-op if the height already matches or a
+   * campaign scenario is loaded (whose setup coordinates assume the default
+   * shape). */
+  | { type: 'resizeWorld'; height: number }
   /** Wipes the whole grid/apparatus/sink state back to a blank sheet -- see
    * grid.ts's clearAll. Distinct from restoreWorld: this has no saved point
    * to go back to, it just starts over. */

@@ -197,7 +197,10 @@ probability gating, energy bookkeeping).
   than an empty card). It replaced a "⚙ Tool settings" button and the modal behind it, which put every
   per-tool control two clicks away and hid the fact that a tool had settings at all. The bench reserves
   the dock's strip the same way it reserves the rail's; `E` (or the header's » button) folds it away and
-  gives that width back, leaving a single ⚙ tab to bring it back. Its long "HOW IT WORKS" explainers are
+  gives that width back, leaving a single ⚙ tab to bring it back. The brush width/temperature sliders and
+  the temperature legend live in it too, which is what let the bottom HUD strip be deleted outright —
+  the dock has vertical room to spare and the sliders belong beside the rest of the active tool's
+  settings, not in the opposite corner of the screen. Its long "HOW IT WORKS" explainers are
   collapsed disclosures now (`ui/dom.ts`'s `hintBox`), since a permanent panel can't afford a paragraph
   per tool. Everything else is still a modal over the canvas: the periodic table, the bench menu, and
   comfort settings. Keyboard: `T` species chest, `E` fold/unfold the settings dock, `M` bench menu,

@@ -56,8 +56,18 @@ import { stampGlass } from './apparatus';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 import type { Point } from './tube-shapes';
 
+// The grid's default shape. The column count is fixed -- it sets how coarse
+// a cell is relative to the bench's width -- but the row count is a default
+// the main thread overrides at startup via 'resizeWorld', picking whatever
+// makes cells square in the window it actually has (see app.ts). 100 rows is
+// the 16:10-ish shape every campaign scenario's setup coordinates were
+// authored against, so scenarios keep it.
 const WIDTH = 160;
-const HEIGHT = 100;
+const DEFAULT_HEIGHT = 100;
+// Guard rails for a 'resizeWorld': a very tall or very wide window shouldn't
+// be able to ask for a grid that's absurd to simulate or to look at.
+const MIN_HEIGHT = 60;
+const MAX_HEIGHT = 240;
 const TICK_MS = 1000 / 60;
 const TICK_DT_SECONDS = TICK_MS / 1000;
 const MIN_SPEED = 0.25;
@@ -75,7 +85,10 @@ const BURST_CHUNK_TICKS = 200;
 
 const palette = buildPalette();
 const species = new SpeciesTable();
-const grid = new SimGrid(WIDTH, HEIGHT);
+// Rebound (not mutated) by 'resizeWorld' -- every consumer takes the grid as
+// an argument rather than capturing it, so swapping in a differently-shaped
+// SimGrid is just an assignment here.
+let grid = new SimGrid(WIDTH, DEFAULT_HEIGHT);
 const rng = mulberry32(12345);
 
 let tick = 0;
@@ -481,6 +494,28 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       sinkCounter.reset();
       ventCounter.reset();
       break;
+    case 'resizeWorld': {
+      // A campaign scenario's setup is authored against the default grid
+      // shape (fixed coordinates for its walls/pools/apparatus), so its world
+      // is never reshaped underneath it.
+      const height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(msg.height)));
+      if (activeScenario || height === grid.height) break;
+      grid = new SimGrid(WIDTH, height);
+      funnels = [];
+      tubes = [];
+      flasks = [];
+      sinkCounter.reset();
+      ventCounter.reset();
+      filterAllowSpecies = new Set();
+      grabState = null;
+      stirState = null;
+      // A snapshot of the old shape can't be restored into the new grid.
+      worldSnapshot = null;
+      tick = 0;
+      maxTempKObserved = 0;
+      post({ type: 'ready', width: grid.width, height: grid.height, palette });
+      break;
+    }
     case 'resetWorld':
       grid.clearAll();
       funnels = [];
@@ -570,7 +605,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   }
 };
 
-post({ type: 'ready', width: WIDTH, height: HEIGHT, palette });
+post({ type: 'ready', width: grid.width, height: grid.height, palette });
 
 setInterval(() => {
   // A Run Test burst drives its own ticking (via runBurstChunk's setTimeout

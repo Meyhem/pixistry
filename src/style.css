@@ -65,10 +65,6 @@ body {
   }
 }
 
-.comfort-reduce-motion .canvas-wrap {
-  transition: none;
-}
-
 @media (max-height: 860px) {
   :root {
     --rail-inset: 104px;
@@ -95,10 +91,6 @@ body {
 
 .hud-top {
   top: 0;
-}
-
-.hud-bottom {
-  bottom: 0;
 }
 
 .hud-cluster {
@@ -403,36 +395,6 @@ body {
   background: var(--panel-border);
 }
 
-.hud-slider {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.hud-slider-label {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.hud-slider-input {
-  width: 96px;
-  accent-color: var(--accent);
-}
-
-.hud-slider-value {
-  font-family: var(--mono);
-  font-size: 11px;
-  min-width: 46px;
-  color: var(--text);
-}
-
-.hud-legend {
-  gap: 14px;
-}
-
 .quick-item {
   position: relative;
   display: inline-flex;
@@ -570,10 +532,12 @@ body {
      letting the canvas run under it would put live bench pixels behind a
      control you can't paint through. */
   inset: 0 0 0 var(--rail-inset);
-  /* Widened back over the dock's strip whenever it's folded away (E) -- the
-     inset is tied to the dock being *enabled*, not to whether the active tool
-     happens to fill it, so switching tools never rescales the whole bench. */
-  transition: right 120ms ease;
+  /* The right edge moves back over the dock's strip whenever the dock is
+     folded away (E) -- tied to the dock being *enabled*, not to whether the
+     active tool happens to fill it, so switching tools never rescales the
+     whole bench. Deliberately not animated: the grid fit measures this width
+     synchronously (see app.ts's requestGridFit), and a transition would hand
+     it a stale one. */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -727,6 +691,15 @@ body {
 
 .settings-dock .side-panel-header {
   justify-content: space-between;
+}
+
+/* The temperature legend, now at the foot of the dock instead of in the
+   deleted bottom HUD strip -- stacked rows rather than a horizontal row of
+   three, since the dock is narrow and tall. */
+.dock-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .dock-fold-btn {
