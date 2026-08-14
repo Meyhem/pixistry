@@ -10,13 +10,15 @@ import { funnelShapeFor } from './apparatus-shapes';
 import type { FilterInstance } from './filter';
 import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
+import { glassPoints, type GlassInstance } from './glass';
+import type { RadiatorInstance } from './radiators';
 import { kelvinToCelsius, massOf, temperatureOf } from './heat';
 import { rateFromIntervalTicks } from './funnel';
 import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
 import type { TubeInstance } from './tube';
-import type { FilterSnapshot, FlaskSnapshot, FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
+import type { FilterSnapshot, FlaskSnapshot, FunnelSnapshot, GlassSnapshot, RadiatorSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
 
 export function computeTempGrid(grid: SimGrid, species: SpeciesTable): Float32Array {
   const temps = new Float32Array(grid.width * grid.height);
@@ -81,6 +83,26 @@ export function filterSnapshots(filters: readonly FilterInstance[]): FilterSnaps
   return filters.map((f) => ({ id: f.id, x0: f.x0, y0: f.y0, x1: f.x1, y1: f.y1, species: [...f.species] }));
 }
 
+export function radiatorSnapshots(radiators: readonly RadiatorInstance[]): RadiatorSnapshot[] {
+  return radiators.map((r) => ({
+    id: r.id,
+    x0: r.x0,
+    y0: r.y0,
+    x1: r.x1,
+    y1: r.y1,
+    radiationRadius: r.radius,
+    targetTempC: kelvinToCelsius(r.targetK),
+  }));
+}
+
+/** Sends each polygon's corners already rotated/translated (see glass.ts's
+ * glassPoints) rather than its as-drawn chain plus a transform -- the UI only
+ * ever needs where the corners are now, and resolving that here keeps one
+ * copy of the rotation math. */
+export function glassSnapshots(glass: readonly GlassInstance[]): GlassSnapshot[] {
+  return glass.map((g) => ({ id: g.id, points: glassPoints(g), rotation: g.rotation }));
+}
+
 export function flaskSnapshots(flasks: readonly FlaskInstance[]): FlaskSnapshot[] {
   return flasks.map((f) => ({
     id: f.id,
@@ -124,6 +146,8 @@ export interface FrameState {
   readonly tubes: readonly TubeInstance[];
   readonly flasks: readonly FlaskInstance[];
   readonly filters: readonly FilterInstance[];
+  readonly radiators: readonly RadiatorInstance[];
+  readonly glass: readonly GlassInstance[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
   readonly ventCounter: SinkCounter;
@@ -166,6 +190,8 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     tubes: tubeSnapshots(state.tubes),
     flasks: flaskSnapshots(state.flasks),
     filters: filterSnapshots(state.filters),
+    radiators: radiatorSnapshots(state.radiators),
+    glass: glassSnapshots(state.glass),
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,

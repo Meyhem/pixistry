@@ -52,17 +52,31 @@ import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from '
 import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import { moveFlaskInstance, placeFlaskInstance, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
-import { stampGlass } from './apparatus';
 import {
   filterAllowMap,
+  moveFilterEndpoint,
   moveFilterInstance,
   placeFilterInstance,
   pruneErasedFilters,
   updateFilterInstance,
   type FilterInstance,
 } from './filter';
+import {
+  moveGlassInstance,
+  placeGlassInstance,
+  pruneErasedGlass,
+  rotateGlassInstance,
+  type GlassInstance,
+} from './glass';
+import {
+  moveRadiatorEndpoint,
+  moveRadiatorInstance,
+  placeRadiatorInstance,
+  pruneErasedRadiators,
+  updateRadiatorInstance,
+  type RadiatorInstance,
+} from './radiators';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
-import type { Point } from './tube-shapes';
 
 // The grid's default shape. The column count is fixed -- it sets how coarse
 // a cell is relative to the bench's width -- but the row count is a default
@@ -143,6 +157,15 @@ let flasks: FlaskInstance[] = [];
 // id), so movement.ts can look the right allow-list up per filtered cell.
 let filters: FilterInstance[] = [];
 
+// Placed radiator lines (see radiators.ts) and hand-drawn glass polygons (see
+// glass.ts) -- tracked for the same reason as everything above, even though
+// both are fully represented on the grid itself (the radiator by its two
+// per-cell fields, the polygon by plain glass wall cells): the grid says what
+// each cell does, not which drag put it there, so without an instance list
+// neither could be picked back up, moved, rotated or re-configured.
+let radiators: RadiatorInstance[] = [];
+let glassPolys: GlassInstance[] = [];
+
 // The Sink apparatus's global tally (see sink.ts) -- one counter shared by
 // every sink line drawn on the grid, not per-instance. The Vent gets a
 // second counter of the same type rather than sharing this one: both ports
@@ -214,6 +237,16 @@ function withFlask(id: number, fn: (instance: FlaskInstance) => void): void {
   if (instance) fn(instance);
 }
 
+function withRadiator(id: number, fn: (instance: RadiatorInstance) => void): void {
+  const instance = radiators.find((r) => r.id === id);
+  if (instance) fn(instance);
+}
+
+function withGlass(id: number, fn: (instance: GlassInstance) => void): void {
+  const instance = glassPolys.find((g) => g.id === id);
+  if (instance) fn(instance);
+}
+
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
   stepMovement(grid, species, rng, tick++, filterAllowMap(filters));
@@ -238,7 +271,20 @@ function runOneTick(): void {
 }
 
 function postFrame(): void {
-  const frame = buildFrame(grid, species, { funnels, tubes, flasks, filters, grabState, sinkCounter, ventCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
+  const frame = buildFrame(grid, species, {
+    funnels,
+    tubes,
+    flasks,
+    filters,
+    radiators,
+    glass: glassPolys,
+    grabState,
+    sinkCounter,
+    ventCounter,
+    hasSnapshot: worldSnapshot !== null,
+    tick,
+    objectives: [],
+  });
   if (activeScenario) {
     for (let i = 0; i < frame.tempK.length; i++) {
       const t = frame.tempK[i] as number;
@@ -309,20 +355,31 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'paintRadiatorLine': {
       if (!isToolAllowed(activeRestrictions, 'radiator')) break;
-      // A radiator is drawn as one bare one-cell-wide line (the same drag
-      // the sink/filter tools use), not a brush splat: the radiation radius
-      // slider already controls how far a placement reaches, so a second
-      // "how thick is the emitter itself" width was just a second way to
-      // spend heat.
-      const targetK = celsiusToKelvin(msg.targetTempC);
-      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, 0)) {
-        if (!grid.inBounds(x, y)) continue;
-        const idx = grid.index(x, y);
-        grid.radiatorRadius[idx] = msg.radiationRadius;
-        grid.radiatorTargetK[idx] = targetK;
-      }
+      // The drawn line becomes a tracked instance carrying the reach/target
+      // the tool was configured with, captured once at placement time -- same
+      // "settings are a snapshot, not a live global" convention as the
+      // funnel's species and the filter line's allow-list.
+      radiators.push(
+        placeRadiatorInstance(grid, {
+          x0: msg.x0,
+          y0: msg.y0,
+          x1: msg.x1,
+          y1: msg.y1,
+          radius: msg.radiationRadius,
+          targetK: celsiusToKelvin(msg.targetTempC),
+        }),
+      );
       break;
     }
+    case 'updateRadiator':
+      withRadiator(msg.id, (instance) => updateRadiatorInstance(grid, instance, msg.radiationRadius, celsiusToKelvin(msg.targetTempC)));
+      break;
+    case 'moveRadiator':
+      withRadiator(msg.id, (instance) => moveRadiatorInstance(grid, radiators, instance, msg.dx, msg.dy));
+      break;
+    case 'moveRadiatorEndpoint':
+      withRadiator(msg.id, (instance) => moveRadiatorEndpoint(grid, radiators, instance, msg.endIndex, msg.x, msg.y));
+      break;
     case 'paintCatalyst':
       if (!isToolAllowed(activeRestrictions, 'catalyst')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
@@ -348,6 +405,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'moveFilter':
       withFilter(msg.id, (filter) => moveFilterInstance(grid, filter, msg.dx, msg.dy));
+      break;
+    case 'moveFilterEndpoint':
+      withFilter(msg.id, (filter) => moveFilterEndpoint(grid, filter, msg.endIndex, msg.x, msg.y));
       break;
     case 'erase':
       if (!isToolAllowed(activeRestrictions, 'erase')) break;
@@ -379,7 +439,11 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // anchor, so erasing part of one leaves the rest working; the instance
       // only goes away once the brush has taken its last cell (see
       // pruneErasedFilters).
+      // Same "a drawn line/polygon dies only once its last cell is gone"
+      // rule for the radiator lines and hand-drawn glass polygons.
       filters = pruneErasedFilters(grid, filters);
+      radiators = pruneErasedRadiators(grid, radiators);
+      glassPolys = pruneErasedGlass(grid, glassPolys);
       flasks = flasks.filter((f) => {
         if (!withinRadius(msg.x, msg.y, f.x, f.y, msg.radius)) return true;
         unstampFlask(grid, f);
@@ -442,7 +506,13 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'updateFunnel':
       if (!isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
       withFunnel(msg.id, (instance) =>
-        updateFunnelInstance(instance, { specId: msg.specId, tempC: msg.tempC, ratePerMinute: msg.ratePerMinute, total: msg.total }),
+        updateFunnelInstance(grid, species, instance, {
+          specId: msg.specId,
+          tempC: msg.tempC,
+          ratePerMinute: msg.ratePerMinute,
+          total: msg.total,
+          facing: msg.facing,
+        }),
       );
       break;
     case 'resetFunnel':
@@ -495,20 +565,19 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     case 'moveFlask':
       withFlask(msg.id, (instance) => moveFlaskInstance(grid, species, instance, msg.x, msg.y));
       break;
-    case 'placeGlassPolyline': {
+    case 'placeGlassPolyline':
       // Glass is a paintable wall material, not a ToolKind of its own, so
       // this is gated by the same isPaintAllowed check the free-draw brush
       // used to go through as an ordinary 'paint' message.
       if (!isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID)) break;
-      const cells: Point[] = [];
-      for (let i = 0; i + 1 < msg.points.length; i++) {
-        const a = msg.points[i] as Point;
-        const b = msg.points[i + 1] as Point;
-        cells.push(...sinkLineCells(a.x, a.y, b.x, b.y, 0));
-      }
-      stampGlass(grid, species, cells);
+      glassPolys.push(placeGlassInstance(grid, species, msg.points));
       break;
-    }
+    case 'moveGlass':
+      withGlass(msg.id, (instance) => moveGlassInstance(grid, species, glassPolys, instance, msg.dx, msg.dy));
+      break;
+    case 'rotateGlass':
+      withGlass(msg.id, (instance) => rotateGlassInstance(grid, species, glassPolys, instance, msg.rotation));
+      break;
     case 'paintSinkLine':
       if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;
       for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
@@ -532,6 +601,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       sinkCounter.reset();
       ventCounter.reset();
       filters = [];
+      radiators = [];
+      glassPolys = [];
       grabState = null;
       stirState = null;
       // A snapshot of the old shape can't be restored into the new grid.
@@ -549,6 +620,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       sinkCounter.reset();
       ventCounter.reset();
       filters = [];
+      radiators = [];
+      glassPolys = [];
       grabState = null;
       stirState = null;
       tick = 0;
@@ -564,6 +637,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       sinkCounter.reset();
       ventCounter.reset();
       filters = [];
+      radiators = [];
+      glassPolys = [];
       grabState = null;
       stirState = null;
       tick = 0;
@@ -573,7 +648,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       applyScenarioSetup(grid, species, funnels, msg.scenario);
       break;
     case 'snapshotWorld':
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, radiators, glassPolys, sinkCounter, ventCounter, tick);
       break;
     case 'restoreWorld': {
       if (!worldSnapshot) break;
@@ -582,6 +657,8 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       tubes = restored.tubes;
       flasks = restored.flasks;
       filters = restored.filters;
+      radiators = restored.radiators;
+      glassPolys = restored.glass;
       tick = restored.tick;
       // A restore is also a fresh start for anything mid-drag -- a held
       // grab/stir brush referencing cells that may no longer be what it
@@ -592,7 +669,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'runBurst': {
       if (burst) break;
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, radiators, glassPolys, sinkCounter, ventCounter, tick);
       sinkCounter.reset();
       ventCounter.reset();
       burst = { ticksTotal: msg.ticks, ticksRemaining: msg.ticks };
@@ -611,7 +688,10 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
         funnels = restored.funnels;
         tubes = restored.tubes;
+        flasks = restored.flasks;
         filters = restored.filters;
+        radiators = restored.radiators;
+        glassPolys = restored.glass;
         tick = restored.tick;
         grabState = null;
         stirState = null;

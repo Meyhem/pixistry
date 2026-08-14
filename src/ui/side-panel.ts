@@ -1,6 +1,6 @@
 // The settings dock's contents: the card describing the active tool --
 // swatch/label/category chip, species melt/boil/phase readout when relevant,
-// brush width, brush temperature, and (for the radiator tool) radiation radius + target
+// brush width, brush temperature, and (for the radiator) radiation radius + target
 // temperature. The addition-funnel tool and the select-apparatus tool
 // (see app.ts) share a "funnel panel" section here -- the same field set is
 // used both to configure a funnel before placement and to live-edit an
@@ -23,7 +23,11 @@ export interface ToolMeta {
   meltLabel: string;
   boilLabel: string;
   phaseLabel: string;
-  isThermal: boolean;
+  /** The radiator's reach/target sliders -- same 3-state convention as
+   * funnelPanel: 'config' is the next-line-drawn draft, 'edit' is a placed
+   * radiator selected with the select-apparatus tool (whose edits go live
+   * immediately, see radiators.ts's updateRadiatorInstance). */
+  radiatorPanel: 'none' | 'config' | 'edit';
   showBrushTemp: boolean;
   showBrushWidth: boolean;
   /** 'none': no funnel section. 'config': pre-placement settings (the
@@ -48,8 +52,10 @@ export interface ToolMeta {
   flaskPanel: 'none' | 'config' | 'edit';
   /** The Glass tool's polygon-draw panel -- explains the click/right-click
    * interaction, which is the tool's only "setting" (glass lines are always
-   * one cell wide and stamped at ambient temperature). */
-  glassPanel: 'none' | 'config';
+   * one cell wide and stamped at ambient temperature). 'edit' is a placed
+   * polygon selected with the select-apparatus tool, which has no settings
+   * either: it moves and rotates, and that's all. */
+  glassPanel: 'none' | 'config' | 'edit';
   /** The Sink tool's live tally panel -- same 2-state convention as
    * filterPanel/flaskPanel: a sink line isn't a tracked instance (there's
    * one global counter shared by every sink drawn on the grid, see
@@ -310,7 +316,7 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
     hintBox(
       meta.funnelPanel === 'config'
         ? 'Rotate with the scroll wheel while hovering the grid, then click to place. A placed funnel starts Stopped -- switch it to Running here once placed. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
-        : "Editing a placed funnel's settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it, without changing Running/Stopped.",
+        : "Drag the funnel to move it, or rotate it with the scroll wheel over the grid, same as before placement. Editing its settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it, without changing Running/Stopped.",
       'HOW IT WORKS',
     ),
   );
@@ -367,7 +373,7 @@ function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
     hintBox(
       meta.filterPanel === 'config'
         ? 'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. Each line keeps the list it was drawn with -- pick it up with the Select tool to change it later.'
-        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it somewhere else; erase any part of it to take it out (the rest keeps filtering until the last cell is gone).",
+        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it, or drag either end to re-aim it; erase any part of it to take it out (the rest keeps filtering until the last cell is gone).",
       'HOW IT WORKS',
     ),
   );
@@ -438,7 +444,9 @@ function addGlassPanel(container: HTMLElement, meta: ToolMeta): void {
   addDivider(container);
   container.appendChild(
     hintBox(
-      'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.',
+      meta.glassPanel === 'config'
+        ? 'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.'
+        : 'Drag any wall to slide the whole shape, or rotate it with the scroll wheel over the grid (45-degree steps about its own middle). Whatever it was holding stays where it is, so a big turn can leave contents outside the new outline. Erase any part of it to take it out -- the rest stays until the last cell is gone.',
       'HOW IT WORKS',
     ),
   );
@@ -536,7 +544,7 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     addSlider(container, 'Brush temperature', MIN_TEMP_C, MAX_TEMP_C, TEMP_STEP_C, cb.brushTempC, formatCelsius, cb.onSetBrushTemp);
   }
 
-  if (meta.isThermal) {
+  if (meta.radiatorPanel !== 'none') {
     addSlider(
       container,
       'Radiation radius',
@@ -551,7 +559,9 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
 
     container.appendChild(
       hintBox(
-        "Radiates toward the target temperature every tick, within the radiation radius -- heats cells below it, cools cells above it. Pure radiation, no collision. These settings are captured when you paint, so changing them afterward won't affect radiators already placed.",
+        meta.radiatorPanel === 'config'
+          ? "Drag from one end to the other to draw a single one-cell-wide line. Every cell of it radiates toward the target temperature each tick, within the radiation radius -- heating cells below it, cooling cells above it. Pure radiation, no collision. These settings are captured when you draw, so changing them afterward won't affect radiators already placed -- pick one up with the Select tool to change it."
+          : "This radiator's own settings, applied the moment you move a slider. Drag the line to slide it, or drag either end to re-aim it; erase any part of it to take it out (the rest keeps radiating until the last cell is gone).",
         'HOW IT WORKS',
       ),
     );

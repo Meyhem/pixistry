@@ -174,7 +174,7 @@ describe('funnel', () => {
   it('updateFunnelInstance changes species/rate/temp and clamps remaining to a lowered total', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, { total: 10 });
-    updateFunnelInstance(instance, { specId: SpeciesId.NaCl, tempC: 100, ratePerMinute: 60, total: 3 });
+    updateFunnelInstance(grid, species, instance, { specId: SpeciesId.NaCl, tempC: 100, ratePerMinute: 60, total: 3, facing: instance.facing });
 
     expect(instance.specId).toBe(SpeciesId.NaCl);
     expect(instance.total).toBe(3);
@@ -185,9 +185,36 @@ describe('funnel', () => {
   it('updateFunnelInstance switching to infinite clears the remaining budget', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, { total: 5 });
-    updateFunnelInstance(instance, { specId: instance.specId, tempC: 21, ratePerMinute: 60, total: null });
+    updateFunnelInstance(grid, species, instance, { specId: instance.specId, tempC: 21, ratePerMinute: 60, total: null, facing: instance.facing });
     expect(instance.total).toBeNull();
     expect(instance.remaining).toBeNull();
+  });
+
+  it('updateFunnelInstance re-stamps the glass outline when the facing changes', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid);
+    const before = funnelShapeFor('down');
+    const after = funnelShapeFor('right');
+    // A cell the down-facing outline occupies and the right-facing one
+    // doesn't -- what a rotation has to clear rather than leave behind.
+    const stale = before.cells.find(
+      (cell) => !after.cells.some((other) => other.dx === cell.dx && other.dy === cell.dy),
+    );
+    if (!stale) throw new Error('expected the two facings to differ somewhere');
+
+    updateFunnelInstance(grid, species, instance, {
+      specId: instance.specId,
+      tempC: 21,
+      ratePerMinute: 60,
+      total: instance.total,
+      facing: 'right',
+    });
+
+    expect(instance.facing).toBe('right');
+    expect(grid.specId[grid.index(instance.anchorX + stale.dx, instance.anchorY + stale.dy)]).not.toBe(GLASS_WALL_SPEC_ID);
+    for (const cell of after.cells) {
+      expect(grid.specId[grid.index(instance.anchorX + cell.dx, instance.anchorY + cell.dy)]).toBe(GLASS_WALL_SPEC_ID);
+    }
   });
 
   it('moveFunnelInstance clears the old glass outline, stamps it at the new anchor, and updates the instance', () => {

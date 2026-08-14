@@ -14,6 +14,8 @@ import type { SimGrid } from './grid';
 import type { FilterInstance } from './filter';
 import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
+import type { GlassInstance } from './glass';
+import type { RadiatorInstance } from './radiators';
 import type { SinkCounter } from './sink';
 import type { TubeInstance } from './tube';
 
@@ -33,6 +35,8 @@ export interface WorldSnapshot {
   readonly tubes: readonly TubeInstance[];
   readonly flasks: readonly FlaskInstance[];
   readonly filters: readonly FilterInstance[];
+  readonly radiators: readonly RadiatorInstance[];
+  readonly glass: readonly GlassInstance[];
   readonly sinkTotals: Uint32Array;
   readonly sinkGrandTotal: number;
   readonly sinkHistory: SinkCounter['history'];
@@ -54,6 +58,8 @@ export function captureWorldSnapshot(
   tubes: readonly TubeInstance[],
   flasks: readonly FlaskInstance[],
   filters: readonly FilterInstance[],
+  radiators: readonly RadiatorInstance[],
+  glass: readonly GlassInstance[],
   sinkCounter: SinkCounter,
   ventCounter: SinkCounter,
   tick: number,
@@ -74,6 +80,8 @@ export function captureWorldSnapshot(
     tubes: structuredClone(tubes as TubeInstance[]),
     flasks: structuredClone(flasks as FlaskInstance[]),
     filters: structuredClone(filters as FilterInstance[]),
+    radiators: structuredClone(radiators as RadiatorInstance[]),
+    glass: structuredClone(glass as GlassInstance[]),
     sinkTotals: sinkCounter.totals.slice(),
     sinkGrandTotal: sinkCounter.grandTotal,
     sinkHistory: structuredClone(sinkCounter.history),
@@ -91,6 +99,8 @@ export interface RestoredWorld {
   readonly tubes: TubeInstance[];
   readonly flasks: FlaskInstance[];
   readonly filters: FilterInstance[];
+  readonly radiators: RadiatorInstance[];
+  readonly glass: GlassInstance[];
   readonly tick: number;
 }
 
@@ -121,6 +131,8 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ve
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),
     flasks: structuredClone(snapshot.flasks as FlaskInstance[]),
     filters: structuredClone(snapshot.filters as FilterInstance[]),
+    radiators: structuredClone(snapshot.radiators as RadiatorInstance[]),
+    glass: structuredClone(snapshot.glass as GlassInstance[]),
     tick: snapshot.tick,
   };
 }

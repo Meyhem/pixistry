@@ -21,7 +21,10 @@ export interface FunnelInstance {
   readonly id: number;
   anchorX: number;
   anchorY: number;
-  readonly facing: FunnelFacing;
+  /** Mutable after placement: a selected funnel rotates on the scroll wheel
+   * exactly like an unplaced one does (see updateFunnelInstance, which
+   * re-stamps the glass outline when this changes). */
+  facing: FunnelFacing;
   specId: number;
   tempK: number;
   intervalTicks: number;
@@ -92,24 +95,36 @@ export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placem
   };
 }
 
-/** Moves a placed funnel to a new anchor: clears the glass outline at its
- * current position, re-stamps it at the new one (overwriting whatever's
- * there, same as placeFunnelInstance), and updates the instance's anchor in
- * place. Facing is unchanged -- the select-apparatus tool's drag only
- * translates, it doesn't rotate. */
-export function moveFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, x: number, y: number): void {
+/** Clears the glass outline a funnel currently occupies -- the inverse of the
+ * stamp placeFunnelInstance does, shared by the move and the facing change
+ * below (both of which redraw the outline somewhere the old one isn't). */
+function unstampFunnel(grid: SimGrid, instance: FunnelInstance): void {
   const shape = funnelShapeFor(instance.facing);
   clearCells(
     grid,
     shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy })),
   );
+}
+
+function stampFunnel(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance): void {
+  const shape = funnelShapeFor(instance.facing);
   stampGlass(
     grid,
     species,
-    shape.cells.map((cell) => ({ x: x + cell.dx, y: y + cell.dy })),
+    shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy })),
   );
+}
+
+/** Moves a placed funnel to a new anchor: clears the glass outline at its
+ * current position, re-stamps it at the new one (overwriting whatever's
+ * there, same as placeFunnelInstance), and updates the instance's anchor in
+ * place. Facing is unchanged -- the select-apparatus tool's drag only
+ * translates; rotating is the scroll wheel's job (see updateFunnelInstance). */
+export function moveFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, x: number, y: number): void {
+  unstampFunnel(grid, instance);
   instance.anchorX = x;
   instance.anchorY = y;
+  stampFunnel(grid, species, instance);
 }
 
 export interface FunnelConfig {
@@ -117,16 +132,25 @@ export interface FunnelConfig {
   readonly tempC: number;
   readonly ratePerMinute: number;
   readonly total: number | null;
+  readonly facing: FunnelFacing;
 }
 
-/** Live-edits a placed funnel's species/temperature/rate/total (the select-
- * apparatus tool's edit panel) -- facing never changes after placement, and
+/** Live-edits a placed funnel's species/temperature/rate/total/facing (the
+ * select-apparatus tool's edit panel and its scroll-wheel rotation) --
  * position only ever changes via moveFunnelInstance (dragging), never here.
- * Doesn't refill `remaining` on its own (see resetFunnelInstance
- * for that): lowering `total` below the current remaining budget clamps it
- * down, raising it (or switching to infinite) leaves the current progress
- * alone rather than granting a surprise refill. */
-export function updateFunnelInstance(instance: FunnelInstance, config: FunnelConfig): void {
+ * A facing change re-stamps the glass outline the same way a move does, so a
+ * rotated funnel doesn't leave its previous outline behind; the reservoir's
+ * contents (which aren't matter -- see frame.ts's computeFunnelFill) follow
+ * the new shape on the next frame. Doesn't refill `remaining` on its own (see
+ * resetFunnelInstance for that): lowering `total` below the current remaining
+ * budget clamps it down, raising it (or switching to infinite) leaves the
+ * current progress alone rather than granting a surprise refill. */
+export function updateFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, config: FunnelConfig): void {
+  if (config.facing !== instance.facing) {
+    unstampFunnel(grid, instance);
+    instance.facing = config.facing;
+    stampFunnel(grid, species, instance);
+  }
   instance.specId = config.specId;
   instance.tempK = celsiusToKelvin(config.tempC);
   instance.intervalTicks = intervalTicksForRate(config.ratePerMinute);

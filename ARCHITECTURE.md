@@ -97,13 +97,16 @@ probability gating, energy bookkeeping).
   calls it once per cell with a nonzero `grid.radiatorRadius` (a per-cell overlay field, not a wall
   material — see `radiators.ts` and `grid.ts` — so a placed radiator has no collision and doesn't
   occupy `grid.specId` at all), driving it toward that cell's own `grid.radiatorTargetK`. Both fields
-  are a snapshot of the side panel's sliders captured once at paint time, so a placed radiator keeps
+  are a snapshot of the side panel's sliders captured once at placement time, so a placed radiator keeps
   radiating exactly as configured for as long as it's on the grid, regardless of what the sliders do
-  afterward.
+  afterward — the way to change one is to select it, which edits that instance's own copy (see
+  `radiators.ts`).
 - **`rng.ts`** — `mulberry32`, a small deterministic PRNG shared by movement (for reproducible ticks/tests).
-- **`walls.ts`** (M4) — glass/insulator, a small fixed table of synthetic pseudo-species, *not*
-  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry). specIds are reserved
-  in a disjoint range (`0xff00..0xff01`, below the `EMPTY`
+- **`walls.ts`** (M4) — glass, a small fixed table (one entry) of synthetic pseudo-species, *not*
+  chemistry species: the v1 element set has no silicon (so glass/SiO2 has no entry). An "insulator" wall
+  lived here too until it was cut: it was a second wall you drew exactly like glass but couldn't shape,
+  select or see through, so every vessel worth building got built out of glass anyway. specIds are reserved
+  in a disjoint range (`0xff00..0xfffe`, below the `EMPTY`
   sentinel `0xffff` and above the highest `species-data.ts` index), so `grid.specId` stays one flat
   `Uint16Array` and `SpeciesTable`/`movement.ts` only need one range check (`isWallSpecId`) to branch to
   the wall table instead of `SPECIES`. Walls never melt/vaporize in v1 — `meltK` is set absurdly high so
@@ -160,12 +163,28 @@ probability gating, energy bookkeeping).
   (`filterMask` was a 0/1 flag), which meant a placed filter could never be selected, reconfigured or
   moved. Erasing part of a line leaves the rest filtering — it's a drawn membrane, not an object with an
   anchor — and the instance is dropped only once its last cell is gone (`pruneErasedFilters`).
+- **`radiators.ts`** — the radiator apparatus: the two per-cell fields above are what the physics reads,
+  and this module is the tracked instance list layered over them — a drawn line remembers its own
+  endpoints, reach and target so the select tool can slide it, drag either end to re-aim it, or edit its
+  reach/target live (which re-stamps its cells in place). Same "a drawn line dies only once its last cell
+  is gone" erase rule as `filter.ts`, and the same crossing rule: unstamping a line puts back any cell
+  another tracked line also covers.
+- **`glass.ts`** — hand-drawn glass polygons: the corner chain the Glass tool draws, tracked so the select
+  tool can pick a vessel back up. The cells themselves are ordinary glass wall matter (there's no mask to
+  own them, unlike a filter's), so the instance keeps the corners *as drawn* plus a rotation step and a
+  translation, and resolves them on demand (`glassPoints`) — 8 wheel notches therefore return the exact
+  cells drawn, where folding each turn back into the stored corners would smear the outline a little
+  further off true every time. Rotation is 45° a step about the chain's own centroid, the same
+  granularity a flask has.
 - **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> radiate -> conduct -> react`, per
   the design doc's order — `stepRadiators` takes the point-heat-source slot conduction previously shared
   with the cursor-driven burner/coolant tool), and talks to the main thread over `postMessage`. Paint
   messages carry only a `specId`; the worker derives the painted cell's initial `U`/phase from ambient
-  temperature via `heat.ts`. A radiator is placed via a separate `paintRadiator` message into
+  temperature via `heat.ts`. A radiator is placed via a separate `paintRadiatorLine` message into
   `grid.radiatorRadius`/`radiatorTargetK` instead, since it's a non-physical overlay, not a wall specId.
+  Alongside the grid it holds one instance list per placeable apparatus (funnels, tubes, flasks, filters,
+  radiators, glass polygons) — the grid says what each cell *does*, never which drag put it there, so
+  those lists are what makes any of it selectable, movable and editable after the fact.
   M4 adds: `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x —
   implemented as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling
   `TICK_MS`, which would make the swap-probability-per-tick physics run at different real rates instead of
@@ -224,7 +243,7 @@ probability gating, energy bookkeeping).
   Tool-specific settings rebuild to match the selected tool: every tool gets a brush-width slider (the
   same `radius` used for paint/erase/stir/grab) — permanently in the HUD, so the settings dock
   suppresses its own copy — and the radiator tool additionally shows radiation-radius and
-  target-temperature sliders, sent to the worker via a `paintRadiator` message rather than the plain
+  target-temperature sliders, sent to the worker via a `paintRadiatorLine` message rather than the plain
   `paint` message — this
   replaced an earlier fixed toolbar radius slider plus a separate burner/coolant tool pair that injected
   heat at the cursor only while held down, and (later) a heater-glass/cooler-glass wall-material design;

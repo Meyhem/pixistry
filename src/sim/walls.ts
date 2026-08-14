@@ -1,9 +1,16 @@
-// Synthetic wall materials (glass/insulator) -- M4. These are NOT
-// chemistry molecules: the v1 element set has no silicon (so "glass"/SiO2
-// can't be interned). They live as a small fixed table with their own
-// thermal/physical constants, with no InternedPool/MoleculeGraph involvement
-// at all. (A "steel" wall material used to live here too; removed since it
-// wasn't a real compound and had no gameplay role distinct from insulator.)
+// Synthetic wall materials -- M4. These are NOT chemistry molecules: the v1
+// element set has no silicon (so "glass"/SiO2 can't be interned). They live
+// as a small fixed table with their own thermal/physical constants, with no
+// InternedPool/MoleculeGraph involvement at all. (A "steel" and an
+// "insulator" material used to live here too; both are gone -- steel wasn't a
+// real compound, and the insulator was a second wall you drew exactly like
+// glass but couldn't shape, select or see through, so every vessel worth
+// building got built out of glass anyway.)
+//
+// One material is left, and the table stays a table rather than collapsing
+// into a bare constant: the specId range, getWall and wallThermalProfile are
+// all shaped around "some fixed set of wall materials", and a future
+// material would otherwise have to reintroduce all of it.
 //
 // Heater/cooler apparatus used to live here too (as heater-glass/
 // cooler-glass wall materials), occupying grid.specId and blocking movement
@@ -20,7 +27,7 @@ import type { ThermalProfile } from './species';
 
 export const WALL_SPEC_BASE = 0xff00;
 
-export type WallKind = 'glass' | 'insulator';
+export type WallKind = 'glass';
 
 export interface WallMaterial {
   readonly specId: number;
@@ -46,15 +53,6 @@ const WALLS: readonly WallMaterial[] = [
     meltK: NEVER_MELTS_K,
     thermalConductivity: 1.0,
     density: 2.5,
-  },
-  {
-    specId: WALL_SPEC_BASE + 1,
-    kind: 'insulator',
-    label: 'Insulator',
-    color: '#5a4632',
-    meltK: NEVER_MELTS_K,
-    thermalConductivity: 0.03,
-    density: 1.5,
   },
 ];
 

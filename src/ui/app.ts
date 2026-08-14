@@ -29,8 +29,9 @@ import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
+import { glassChainCells, GLASS_ROTATION_STEPS } from '../sim/glass';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
-import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
+import { funnelBounds, funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolChest, type ToolChestCallbacks } from './tool-chest';
@@ -47,7 +48,14 @@ import {
 import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
-import { ApparatusSelection, type FilterEditDraft, type FlaskEditDraft, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
+import {
+  ApparatusSelection,
+  type FilterEditDraft,
+  type FlaskEditDraft,
+  type FunnelEditDraft,
+  type RadiatorEditDraft,
+  type TubeEditDraft,
+} from './apparatus-selection';
 import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
 import { loadProgress, recordCompletion, recordDiscovery, saveProgress, starsForCompletion, unlockAchievement } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
@@ -77,6 +85,12 @@ const DEFAULT_BRUSH_TEMP_C = 21;
 const DEFAULT_FUNNEL_RATE_PER_MINUTE = 60;
 const DEFAULT_FUNNEL_TOTAL_AMOUNT = 100;
 const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C', 'Ag'];
+// Grab-dot colors for the apparatus overlay: yellow while a shape is still
+// being drawn, the select tool's own blue on whatever is selected, and a
+// muted version of that for everything else that could be grabbed.
+const DRAFT_HANDLE_COLOR = '#f2d94e';
+const SELECTED_HANDLE_COLOR = SELECT_APPARATUS_COLOR;
+const IDLE_HANDLE_COLOR = 'rgba(77, 163, 255, 0.45)';
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 
 type Tool =
@@ -186,7 +200,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   meltLabel: '',
   boilLabel: '',
   phaseLabel: '',
-  isThermal: false,
+  radiatorPanel: 'none',
   showBrushTemp: false,
   showBrushWidth: true,
   funnelPanel: 'none',
@@ -617,13 +631,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     ratePerMinute: DEFAULT_FUNNEL_RATE_PER_MINUTE,
     totalMode: 'finite',
     totalAmount: DEFAULT_FUNNEL_TOTAL_AMOUNT,
+    facing: 'down',
   };
-  let funnelFacing: FunnelFacing = 'down';
   let lastHoverX = 0;
   let lastHoverY = 0;
 
   // Flask apparatus config (pre-placement) -- same "captured at placement
-  // time" convention as funnelFacing/funnelDraft above. Facing rotates in
+  // time" convention as funnelDraft above. Facing rotates in
   // 45-degree steps (8 facings), unlike the funnel's 4.
   let flaskFacing: FlaskFacing = 'up';
   let flaskSizeScale = DEFAULT_FLASK_SIZE_SCALE;
@@ -730,7 +744,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (t.kind === 'radiator') {
       // Drawn as a one-cell-wide line drag -- the radiation radius slider
       // already sets how far it reaches, so there's no brush width to show.
-      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', isThermal: true, showBrushWidth: false };
+      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', radiatorPanel: 'config', showBrushWidth: false };
     }
     if (t.kind === 'funnel') {
       return {
@@ -786,40 +800,50 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       const selectedTube = apparatusSelection.findTube(apparatusSelection.selectedTubeId);
       const selectedFlask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
       const selectedFilter = apparatusSelection.findFilter(apparatusSelection.selectedFilterId);
-      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask && !selectedFilter;
+      const selectedRadiator = apparatusSelection.findRadiator(apparatusSelection.selectedRadiatorId);
+      const selectedGlass = apparatusSelection.findGlass(apparatusSelection.selectedGlassId);
+      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask && !selectedFilter && !selectedRadiator && !selectedGlass;
+      // Whichever apparatus is selected lends the HUD chip its own name and
+      // swatch, so the chip reads as "the thing you're holding" rather than
+      // as the tool. At most one is ever selected (see
+      // ApparatusSelection.clearSelections), so this chain resolves to
+      // exactly one entry.
+      const identity = selectedFunnel
+        ? { label: FUNNEL_LABEL, color: FUNNEL_COLOR }
+        : selectedTube
+          ? { label: TUBE_LABEL, color: TUBE_COLOR }
+          : selectedFilter
+            ? { label: FILTER_LABEL, color: FILTER_COLOR }
+            : selectedRadiator
+              ? { label: RADIATOR_LABEL, color: RADIATOR_COLOR }
+              : selectedGlass
+                ? { label: `${getWall(GLASS_WALL_SPEC_ID).label} (polygon)`, color: getWall(GLASS_WALL_SPEC_ID).color }
+                : selectedFlask
+                  ? {
+                      // Prefer the live edit draft over the worker's snapshot:
+                      // the snapshot only catches up a frame later, and the HUD
+                      // chip isn't rebuilt per frame, so a shape/stirred toggle
+                      // would otherwise keep reading stale until some unrelated
+                      // render.
+                      label: flaskLabel(
+                        apparatusSelection.flaskEditDraft?.kind ?? selectedFlask.kind,
+                        apparatusSelection.flaskEditDraft?.stirred ?? selectedFlask.stirred,
+                      ),
+                      color: FLASK_COLOR,
+                    }
+                  : { label: SELECT_APPARATUS_LABEL, color: SELECT_APPARATUS_COLOR };
       return {
         ...TOOL_META_DEFAULTS,
-        label: selectedFunnel
-          ? FUNNEL_LABEL
-          : selectedTube
-            ? TUBE_LABEL
-            : selectedFilter
-              ? FILTER_LABEL
-              : selectedFlask
-              ? // Prefer the live edit draft over the worker's snapshot: the
-                // snapshot only catches up a frame later, and the HUD chip
-                // isn't rebuilt per frame, so a shape/stirred toggle would
-                // otherwise keep reading stale until some unrelated render.
-                flaskLabel(
-                  apparatusSelection.flaskEditDraft?.kind ?? selectedFlask.kind,
-                  apparatusSelection.flaskEditDraft?.stirred ?? selectedFlask.stirred,
-                )
-              : SELECT_APPARATUS_LABEL,
-        color: selectedFunnel
-          ? FUNNEL_COLOR
-          : selectedTube
-            ? TUBE_COLOR
-            : selectedFilter
-              ? FILTER_COLOR
-              : selectedFlask
-                ? FLASK_COLOR
-                : SELECT_APPARATUS_COLOR,
+        label: identity.label,
+        color: identity.color,
         category: nothingSelected ? 'TOOL' : 'APPARATUS',
         showBrushWidth: false,
         funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
         tubePanel: selectedTube ? 'edit' : 'none',
         filterPanel: selectedFilter ? 'edit' : 'none',
         flaskPanel: selectedFlask ? 'edit' : 'none',
+        radiatorPanel: selectedRadiator ? 'edit' : 'none',
+        glassPanel: selectedGlass ? 'edit' : 'none',
       };
     }
     const info = SIMPLE_TOOL_META[t.kind];
@@ -863,7 +887,19 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       tempC: editDraft.tempC,
       ratePerMinute: editDraft.ratePerMinute,
       total: editDraft.totalMode === 'infinite' ? null : editDraft.totalAmount,
+      facing: editDraft.facing,
     });
+  }
+
+  /** Pushes the selected radiator's edited reach/target to the worker, which
+   * re-stamps its cells -- the radiator counterpart of sendFunnelUpdate.
+   * Unlike the pre-placement sliders (whose values are only ever read at
+   * placement time), these take effect the moment they move. */
+  function sendRadiatorUpdate(): void {
+    const id = apparatusSelection.selectedRadiatorId;
+    const draft = apparatusSelection.radiatorEditDraft;
+    if (id === null || !draft) return;
+    send({ type: 'updateRadiator', id, radiationRadius: draft.radiationRadius, targetTempC: draft.targetTempC });
   }
 
   /** Pushes a selected flask's whole config to the worker, which re-stamps
@@ -879,6 +915,62 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       stirred: flaskEditDraft.stirred,
       kind: flaskEditDraft.kind,
     });
+  }
+
+  /** The scroll wheel's job while the select tool holds something: turns
+   * whichever selected apparatus can be rotated -- a flask or a glass polygon
+   * in 45-degree steps, a funnel through its four facings. Leaves the event
+   * alone (no preventDefault) when nothing rotatable is selected, so the
+   * wheel keeps doing whatever it normally would. */
+  function rotateSelectedApparatus(step: 1 | -1, event: WheelEvent): void {
+    const flask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
+    if (flask) {
+      event.preventDefault();
+      const draft = apparatusSelection.flaskEditDraft;
+      const facing = nextFlaskFacing(draft?.facing ?? flask.facing, step);
+      if (draft) draft.facing = facing;
+      send({
+        type: 'updateFlask',
+        id: flask.id,
+        facing,
+        sizeScale: draft?.sizeScale ?? flask.sizeScale,
+        stirred: draft?.stirred ?? flask.stirred,
+        kind: draft?.kind ?? flask.kind,
+      });
+      return;
+    }
+    const funnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
+    if (funnel) {
+      event.preventDefault();
+      // Sent as a whole config (same convention as every other funnel edit --
+      // see FunnelEditDraft) rather than a facing-only message, falling back
+      // to the worker's snapshot for the fields the draft hasn't been seeded
+      // with yet.
+      const draft = apparatusSelection.editDraft;
+      const facing = nextFunnelFacing(draft?.facing ?? funnel.facing, step);
+      if (draft) draft.facing = facing;
+      send({
+        type: 'updateFunnel',
+        id: funnel.id,
+        specId: draft?.specId ?? funnel.specId,
+        tempC: draft?.tempC ?? funnel.tempC,
+        ratePerMinute: draft?.ratePerMinute ?? funnel.ratePerMinute,
+        total: draft ? (draft.totalMode === 'infinite' ? null : draft.totalAmount) : funnel.total,
+        facing,
+      });
+      return;
+    }
+    const glass = apparatusSelection.findGlass(apparatusSelection.selectedGlassId);
+    if (glass) {
+      event.preventDefault();
+      // Absolute, and counted off the local draft rather than the snapshot --
+      // see the 'rotateGlass' message's doc comment for why it's absolute, and
+      // glassRotationDraft's for why the snapshot can't be the thing it counts
+      // from.
+      const rotation = ((apparatusSelection.glassRotationDraft ?? glass.rotation) + step + GLASS_ROTATION_STEPS) % GLASS_ROTATION_STEPS;
+      apparatusSelection.glassRotationDraft = rotation;
+      send({ type: 'rotateGlass', id: glass.id, rotation });
+    }
   }
 
   function sendTubeUpdate(): void {
@@ -1220,6 +1312,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const selectedTube = isEditMode ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
     const selectedFlask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
     const selectedFilter = isEditMode ? apparatusSelection.findFilter(apparatusSelection.selectedFilterId) : undefined;
+    const selectedRadiator = isEditMode ? apparatusSelection.findRadiator(apparatusSelection.selectedRadiatorId) : undefined;
     if (isEditMode && selectedFunnel && !apparatusSelection.editDraft) {
       apparatusSelection.editDraft = {
         specId: selectedFunnel.specId,
@@ -1227,6 +1320,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         ratePerMinute: selectedFunnel.ratePerMinute,
         totalMode: selectedFunnel.total === null ? 'infinite' : 'finite',
         totalAmount: selectedFunnel.total ?? funnelDraft.totalAmount,
+        facing: selectedFunnel.facing,
       };
     }
     if (isEditMode && selectedTube && !apparatusSelection.tubeEditDraft) {
@@ -1243,8 +1337,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         kind: selectedFlask.kind,
       };
     }
+    if (isEditMode && selectedRadiator && !apparatusSelection.radiatorEditDraft) {
+      apparatusSelection.radiatorEditDraft = {
+        radiationRadius: selectedRadiator.radiationRadius,
+        targetTempC: selectedRadiator.targetTempC,
+      };
+    }
     const isTubeEditMode = isEditMode && !!selectedTube;
     const isFlaskEditMode = isEditMode && !!selectedFlask;
+    // Editing a placed radiator edits its own draft (pushed straight to the
+    // worker, which re-stamps its cells); otherwise these two sliders
+    // configure what the *next* line drawn will radiate.
+    const isRadiatorEditMode = isEditMode && !!selectedRadiator;
+    const radiatorFields: RadiatorEditDraft =
+      isRadiatorEditMode && apparatusSelection.radiatorEditDraft ? apparatusSelection.radiatorEditDraft : { radiationRadius, targetTempC };
     const flaskFields: FlaskEditDraft =
       isFlaskEditMode && apparatusSelection.flaskEditDraft
         ? apparatusSelection.flaskEditDraft
@@ -1333,6 +1439,23 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return next.size === 0 ? null : next;
     }
 
+    /** Same convention as funnelSetter, for the radiator's two sliders --
+     * with the difference that a placed radiator's edits go live immediately
+     * (there's nothing to "apply"), while the pre-placement values are only
+     * ever read when a new line is drawn. */
+    function radiatorSetter(key: keyof RadiatorEditDraft): (value: number) => void {
+      return (value) => {
+        if (isRadiatorEditMode && apparatusSelection.radiatorEditDraft) {
+          apparatusSelection.radiatorEditDraft[key] = value;
+          sendRadiatorUpdate();
+        } else if (key === 'radiationRadius') {
+          radiationRadius = value;
+        } else {
+          targetTempC = value;
+        }
+      };
+    }
+
     /** Same convention as funnelSetter, for the tube tool's coneSize/filter
      * fields. */
     function tubeSetter<K extends keyof TubeEditDraft>(key: K, opts: { render?: boolean } = {}): (value: TubeEditDraft[K]) => void {
@@ -1374,14 +1497,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetBrushTemp: (value) => {
         brushTempC = value;
       },
-      radiationRadius,
-      onSetRadiationRadius: (value) => {
-        radiationRadius = value;
-      },
-      targetTempC,
-      onSetTargetTemp: (value) => {
-        targetTempC = value;
-      },
+      radiationRadius: radiatorFields.radiationRadius,
+      onSetRadiationRadius: radiatorSetter('radiationRadius'),
+      targetTempC: radiatorFields.targetTempC,
+      onSetTargetTemp: radiatorSetter('targetTempC'),
       funnelFields,
       onOpenFunnelSpeciesPicker: () => {
         ptTarget = isEditMode ? 'funnel-edit' : 'funnel-config';
@@ -1560,25 +1679,35 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     brushOutline.style.height = `${diameterY}px`;
   }
 
-  /** Draws the Glass tool's in-progress polygon: the exact one-cell-wide
-   * cells the commit will stamp (the same Bresenham rasterization the worker
-   * runs, via sinkLineCells), plus a handle dot on every clicked corner. */
-  function drawGlassGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number): void {
-    ctx.fillStyle = 'rgba(169, 214, 232, 0.75)';
-    for (let i = 0; i + 1 < points.length; i++) {
-      const a = points[i] as Point;
-      const b = points[i + 1] as Point;
-      for (const cell of sinkLineCells(a.x, a.y, b.x, b.y, 0)) {
-        ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
-      }
+  /** Fills one translucent rectangle per grid cell -- the half-pixel overdraw
+   * closes the hairline seams that fractional cell sizes otherwise leave
+   * between neighbouring cells. */
+  function drawGhostCells(ctx: CanvasRenderingContext2D, cells: readonly Point[], cellPxX: number, cellPxY: number, color: string): void {
+    ctx.fillStyle = color;
+    for (const cell of cells) {
+      ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
     }
-    ctx.fillStyle = '#f2d94e';
+  }
+
+  /** A grab dot on each of `points` -- the shared vocabulary for "this can be
+   * dragged", used for a tube's knees, a filter/radiator line's two ends, and
+   * a glass polygon's corners alike. */
+  function drawHandleDots(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number, color: string): void {
+    ctx.fillStyle = color;
     const handleR = Math.max(3, Math.min(cellPxX, cellPxY) * 0.7);
     for (const p of points) {
       ctx.beginPath();
       ctx.arc((p.x + 0.5) * cellPxX, (p.y + 0.5) * cellPxY, handleR, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  /** Draws the Glass tool's in-progress polygon: the exact one-cell-wide
+   * cells the commit will stamp (the same rasterization the worker runs, via
+   * glass.ts), plus a handle dot on every clicked corner. */
+  function drawGlassGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number): void {
+    drawGhostCells(ctx, glassChainCells(points), cellPxX, cellPxY, 'rgba(169, 214, 232, 0.75)');
+    drawHandleDots(ctx, points, cellPxX, cellPxY, DRAFT_HANDLE_COLOR);
   }
 
   /** Draws a tube's lumen (translucent species-blue) and wall ring
@@ -1589,20 +1718,48 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function drawTubeGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number, isDraft: boolean): void {
     if (points.length === 0) return;
     const lumen = polylineToLumenPath(points);
-    ctx.fillStyle = isDraft ? 'rgba(169, 214, 232, 0.45)' : 'rgba(169, 214, 232, 0.3)';
-    for (const cell of lumen) {
-      ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+    drawGhostCells(ctx, lumen, cellPxX, cellPxY, isDraft ? 'rgba(169, 214, 232, 0.45)' : 'rgba(169, 214, 232, 0.3)');
+    drawGhostCells(ctx, lumenWallCells(lumen), cellPxX, cellPxY, 'rgba(210, 210, 210, 0.55)');
+    drawHandleDots(ctx, points, cellPxX, cellPxY, isDraft ? DRAFT_HANDLE_COLOR : SELECTED_HANDLE_COLOR);
+  }
+
+  /** Every draggable point on the bench, drawn whenever the Select tool is
+   * active: a grab dot on each tube knee, each filter/radiator line end and
+   * each glass corner, with the selected apparatus's own cells washed in its
+   * color underneath. Drawn for *every* placed instance, not just the
+   * selected one, because the alternative is a bench where nothing looks
+   * grabbable until you've already guessed right and clicked it. */
+  function drawSelectionHandles(ctx: CanvasRenderingContext2D, cellPxX: number, cellPxY: number): void {
+    for (const tube of apparatusSelection.allTubes()) {
+      // A selected tube gets its full lumen/wall ghost (that's what makes a
+      // knee drag legible); the rest just get their knees marked.
+      if (tube.id === apparatusSelection.selectedTubeId) drawTubeGhost(ctx, tube.points, cellPxX, cellPxY, false);
+      else drawHandleDots(ctx, tube.points, cellPxX, cellPxY, IDLE_HANDLE_COLOR);
     }
-    ctx.fillStyle = 'rgba(210, 210, 210, 0.55)';
-    for (const cell of lumenWallCells(lumen)) {
-      ctx.fillRect(cell.x * cellPxX, cell.y * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
+    for (const filter of apparatusSelection.allFilters()) {
+      const selected = filter.id === apparatusSelection.selectedFilterId;
+      if (selected) drawGhostCells(ctx, sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0), cellPxX, cellPxY, 'rgba(140, 224, 150, 0.5)');
+      const ends = [
+        { x: filter.x0, y: filter.y0 },
+        { x: filter.x1, y: filter.y1 },
+      ];
+      drawHandleDots(ctx, ends, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
     }
-    ctx.fillStyle = isDraft ? '#f2d94e' : '#4da3ff';
-    const handleR = Math.max(3, Math.min(cellPxX, cellPxY) * 0.7);
-    for (const p of points) {
-      ctx.beginPath();
-      ctx.arc((p.x + 0.5) * cellPxX, (p.y + 0.5) * cellPxY, handleR, 0, Math.PI * 2);
-      ctx.fill();
+    for (const radiator of apparatusSelection.allRadiators()) {
+      const selected = radiator.id === apparatusSelection.selectedRadiatorId;
+      if (selected) {
+        drawGhostCells(ctx, sinkLineCells(radiator.x0, radiator.y0, radiator.x1, radiator.y1, 0), cellPxX, cellPxY, 'rgba(255, 157, 92, 0.55)');
+      }
+      const ends = [
+        { x: radiator.x0, y: radiator.y0 },
+        { x: radiator.x1, y: radiator.y1 },
+      ];
+      drawHandleDots(ctx, ends, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
+    }
+    for (const glass of apparatusSelection.allGlass()) {
+      const selected = glass.id === apparatusSelection.selectedGlassId;
+      if (selected) drawGhostCells(ctx, glassChainCells(glass.points), cellPxX, cellPxY, 'rgba(169, 214, 232, 0.5)');
+      drawHandleDots(ctx, glass.points, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
     }
   }
 
@@ -1618,8 +1775,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const showFlaskGhost = tool?.kind === 'flask';
     const showPolyDraw = isPolygonTool(tool) && polyDrawPoints.length > 0;
     const showLineDraw = isLineDragTool(tool) && lineDrawStart !== null;
-    const editingTube = tool?.kind === 'select-apparatus' ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
-    if ((!showFunnelGhost && !showFlaskGhost && !showPolyDraw && !showLineDraw && !editingTube) || gridWidth === 0 || gridHeight === 0) {
+    const showHandles =
+      tool?.kind === 'select-apparatus' &&
+      (apparatusSelection.allTubes().length > 0 ||
+        apparatusSelection.allFilters().length > 0 ||
+        apparatusSelection.allRadiators().length > 0 ||
+        apparatusSelection.allGlass().length > 0);
+    if ((!showFunnelGhost && !showFlaskGhost && !showPolyDraw && !showLineDraw && !showHandles) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
     }
@@ -1643,7 +1805,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     if (showFunnelGhost) {
       previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
-      const shape = funnelShapeFor(funnelFacing);
+      const shape = funnelShapeFor(funnelDraft.facing);
       for (const cell of shape.cells) {
         const px = x + cell.dx;
         const py = y + cell.dy;
@@ -1672,8 +1834,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       }
     }
 
-    if (editingTube) {
-      drawTubeGhost(previewCtx, editingTube.points, cellPxX, cellPxY, false);
+    if (showHandles) {
+      drawSelectionHandles(previewCtx, cellPxX, cellPxY);
     }
 
     if (showLineDraw && lineDrawStart) {
@@ -1720,16 +1882,34 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   /** Positions the select-apparatus tool's corner-bracket overlay over the
-   * selected funnel's bounding box, or hides it. */
+   * selected apparatus's bounding box, or hides it. Only the shapes with a
+   * real footprint get brackets -- a selected filter or radiator is a bare
+   * line, and its own highlighted cells and end handles say "selected"
+   * better than a bracket box drawn around a diagonal would. */
   function updateSelectionBox(): void {
     const isEditMode = tool?.kind === 'select-apparatus';
     const funnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
     const flask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
+    const glass = isEditMode ? apparatusSelection.findGlass(apparatusSelection.selectedGlassId) : undefined;
     const box = funnel
       ? { anchorX: funnel.anchorX, anchorY: funnel.anchorY, bounds: funnelBounds(funnelShapeFor(funnel.facing)) }
       : flask
         ? { anchorX: flask.x, anchorY: flask.y, bounds: flaskBounds(flaskShapeFor(flask.facing, flask.sizeScale, flask.kind)) }
-        : null;
+        : glass && glass.points.length > 0
+          ? // A polygon's corners are already absolute grid coordinates (see
+            // the GlassSnapshot), so its "anchor" is the grid origin and the
+            // bounds are the corners' own extent.
+            {
+              anchorX: 0,
+              anchorY: 0,
+              bounds: {
+                minDx: Math.min(...glass.points.map((p) => p.x)),
+                maxDx: Math.max(...glass.points.map((p) => p.x)),
+                minDy: Math.min(...glass.points.map((p) => p.y)),
+                maxDy: Math.max(...glass.points.map((p) => p.y)),
+              },
+            }
+          : null;
     if (!box || gridWidth === 0 || gridHeight === 0) {
       selectBox.style.display = 'none';
       return;
@@ -1806,7 +1986,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           type: 'placeFunnel',
           x,
           y,
-          facing: funnelFacing,
+          facing: funnelDraft.facing,
           specId: funnelDraft.specId,
           tempC: funnelDraft.tempC,
           ratePerMinute: funnelDraft.ratePerMinute,
@@ -1907,32 +2087,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   canvas.addEventListener(
     'wheel',
     (event) => {
+      const step = event.deltaY > 0 ? 1 : -1;
       if (tool?.kind === 'funnel') {
         event.preventDefault();
-        funnelFacing = nextFunnelFacing(funnelFacing, event.deltaY > 0 ? 1 : -1);
+        funnelDraft.facing = nextFunnelFacing(funnelDraft.facing, step);
         updateApparatusOverlay(lastHoverX, lastHoverY);
       } else if (tool?.kind === 'flask') {
         event.preventDefault();
-        flaskFacing = nextFlaskFacing(flaskFacing, event.deltaY > 0 ? 1 : -1);
+        flaskFacing = nextFlaskFacing(flaskFacing, step);
         updateApparatusOverlay(lastHoverX, lastHoverY);
       } else if (tool?.kind === 'select-apparatus') {
-        // A selected flask rotates on the wheel exactly like an unplaced one
-        // does -- the same gesture before and after placement, rather than a
-        // button that only exists in the edit panel.
-        const selected = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
-        if (!selected) return;
-        event.preventDefault();
-        const draft = apparatusSelection.flaskEditDraft;
-        const facing = nextFlaskFacing(draft?.facing ?? selected.facing, event.deltaY > 0 ? 1 : -1);
-        if (draft) draft.facing = facing;
-        send({
-          type: 'updateFlask',
-          id: selected.id,
-          facing,
-          sizeScale: draft?.sizeScale ?? selected.sizeScale,
-          stirred: draft?.stirred ?? selected.stirred,
-          kind: draft?.kind ?? selected.kind,
-        });
+        // Every rotatable apparatus turns on the wheel once selected, exactly
+        // as an unplaced one does -- the same gesture before and after
+        // placement, rather than a button that only exists in the edit panel.
+        rotateSelectedApparatus(step, event);
       }
     },
     { passive: false },
@@ -2086,6 +2254,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       apparatusSelection.setTubes(msg.tubes);
       apparatusSelection.setFlasks(msg.flasks);
       apparatusSelection.setFilters(msg.filters);
+      apparatusSelection.setRadiators(msg.radiators);
+      apparatusSelection.setGlass(msg.glass);
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,

@@ -117,7 +117,6 @@ function wallSlot(label: string, description: string, icon: IconName, wall: Wall
  * rather than flow because that's what a player reaches for it *for*. */
 function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): RailSlot[][] {
   const glassWall = walls.find((w) => w.kind === 'glass');
-  const insulatorWall = walls.find((w) => w.kind === 'insulator');
 
   // The everyday five, in the order a hand reaches for them: point at
   // something, put matter down, take it away, then the two that rearrange
@@ -129,7 +128,7 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
     // ToolKind for it to be checked against.
     toolSlot(
       SELECT_APPARATUS_LABEL,
-      'Click a placed funnel, tube or flask to move it or change its settings.',
+      'Click any placed apparatus to move it, reshape it by its handles, scroll to rotate it, or change its settings.',
       SELECT_APPARATUS_COLOR,
       'select',
       'select-apparatus',
@@ -152,7 +151,7 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
     glassware.push(
       wallSlot(
         `${glassWall.label} (polygon)`,
-        'Draw your own vessel: click each corner, right-click to finish.',
+        'Draw your own vessel: click each corner, right-click to finish. Pick it up later with the Select tool to move or rotate it.',
         'glass',
         glassWall,
         cb,
@@ -160,14 +159,10 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
     );
   }
 
-  const thermal: RailSlot[] = [];
-  if (insulatorWall) {
-    thermal.push(wallSlot(insulatorWall.label, 'A wall that barely conducts heat -- keeps a reaction warm.', 'insulator', insulatorWall, cb));
-  }
-  thermal.push(
+  const thermal: RailSlot[] = [
     toolSlot(
       RADIATOR_LABEL,
-      'Drives everything in its radius toward a target temperature -- heats or cools, and nothing collides with it.',
+      'Drag a line that drives everything in its radius toward a target temperature -- heats or cools, and nothing collides with it.',
       RADIATOR_COLOR,
       'radiator',
       'radiator',
@@ -181,7 +176,7 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
       'stirrer',
       cb,
     ),
-  );
+  ];
 
   const flow: RailSlot[] = [
     toolSlot(FUNNEL_LABEL, 'Drips one species at a set rate, from a finite or endless supply.', FUNNEL_COLOR, 'funnel', 'funnel', cb),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterAllowMap,
+  moveFilterEndpoint,
   moveFilterInstance,
   nearestFilter,
   placeFilterInstance,
@@ -119,6 +120,20 @@ describe('filter instances', () => {
     for (let x = 0; x <= 4; x++) grid.filterMask[grid.index(x, 2)] = 0;
     expect(pruneErasedFilters(grid, filters)).toHaveLength(0);
     expect(filter.id).toBe(1);
+  });
+
+  it('drags one end without moving the other', () => {
+    const grid = new SimGrid(20, 20);
+    const filters: FilterInstance[] = [];
+    const filter = place(grid, filters, 4, 10, 8, 10, []);
+
+    moveFilterEndpoint(grid, filter, 1, 8, 16);
+
+    expect([filter.x0, filter.y0]).toEqual([4, 10]);
+    expect([filter.x1, filter.y1]).toEqual([8, 16]);
+    expect(grid.filterMask[grid.index(4, 10)]).toBe(filter.id);
+    expect(grid.filterMask[grid.index(8, 16)]).toBe(filter.id);
+    expect(grid.filterMask[grid.index(7, 10)]).toBe(0); // no longer on the line
   });
 
   it('hit-tests the nearest line within the radius, and nothing beyond it', () => {

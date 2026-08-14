@@ -42,6 +42,30 @@ export interface FilterSnapshot {
   species: number[];
 }
 
+export interface RadiatorSnapshot {
+  id: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** How far each of this line's cells radiates, and what it drives cells
+   * within that reach toward -- this instance's own captured copy of the
+   * side panel's sliders (see radiators.ts). */
+  radiationRadius: number;
+  targetTempC: number;
+}
+
+export interface GlassSnapshot {
+  id: number;
+  /** The polygon's corners where they currently sit -- already rotated and
+   * translated (see glass.ts's glassPoints), so the UI hit-tests and draws
+   * handles against these without redoing the math. */
+  points: Point[];
+  /** 0..7, 45 degrees a step -- the wheel's current position, so the UI can
+   * send an absolute rotation rather than a delta. */
+  rotation: number;
+}
+
 export interface FlaskSnapshot {
   id: number;
   x: number;
@@ -70,6 +94,8 @@ export type WorkerToMainMessage =
       tubes: TubeSnapshot[];
       flasks: FlaskSnapshot[];
       filters: FilterSnapshot[];
+      radiators: RadiatorSnapshot[];
+      glass: GlassSnapshot[];
       sinkMask: Uint8Array;
       /** Indexed by specId (see species-data.ts's SPECIES array) -- how many
        * pixels of each species every sink line on the grid has ever
@@ -111,7 +137,20 @@ export type WorkerToMainMessage =
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
+  /** Draws a one-cell-wide radiator line, which becomes a tracked instance
+   * carrying the reach/target it was drawn with (see radiators.ts) -- same
+   * "settings are a snapshot captured at placement time" convention as the
+   * filter line's allow-list. */
   | { type: 'paintRadiatorLine'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
+  /** Replaces one placed radiator's reach/target (the select tool's radiator
+   * edit panel), re-stamping its cells in place. */
+  | { type: 'updateRadiator'; id: number; radiationRadius: number; targetTempC: number }
+  /** Slides a placed radiator line by (dx, dy), keeping its length and
+   * angle. */
+  | { type: 'moveRadiator'; id: number; dx: number; dy: number }
+  /** Drags one end of a placed radiator line to (x, y), leaving the other
+   * where it is. */
+  | { type: 'moveRadiatorEndpoint'; id: number; endIndex: 0 | 1; x: number; y: number }
   | { type: 'paintStirrer'; x: number; y: number; radius: number }
   /** Paints a catalyst pad (see grid.ts's catalystStrength). `strength` is
    * the whole-number reaction-rate multiplier; 0 is a no-op rather than an
@@ -130,6 +169,9 @@ export type MainToWorkerMessage =
    * -- a membrane is one segment with no knees, so this is its only
    * reshaping. */
   | { type: 'moveFilter'; id: number; dx: number; dy: number }
+  /** Drags one end of a placed filter line to (x, y), leaving the other
+   * where it is -- the reshaping a membrane has instead of a tube's knees. */
+  | { type: 'moveFilterEndpoint'; id: number; endIndex: 0 | 1; x: number; y: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
@@ -150,7 +192,7 @@ export type MainToWorkerMessage =
       ratePerMinute: number;
       total: number | null;
     }
-  | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null }
+  | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null; facing: FunnelFacing }
   | { type: 'resetFunnel'; id: number }
   | { type: 'setFunnelEnabled'; id: number; enabled: boolean }
   | { type: 'moveFunnel'; id: number; x: number; y: number }
@@ -167,8 +209,16 @@ export type MainToWorkerMessage =
   /** Stamps a one-cell-wide glass polyline through `points` (each pair of
    * consecutive points joined by a Bresenham line) -- the Glass tool draws
    * vessel walls as a clicked polygon chain, the same interaction as the
-   * conveyor tube, rather than as a free-draw brush. */
+   * conveyor tube, rather than as a free-draw brush. The chain becomes a
+   * tracked instance (see glass.ts) so the Select tool can pick it back up. */
   | { type: 'placeGlassPolyline'; points: Point[] }
+  /** Slides a placed glass polygon by (dx, dy), keeping its shape. */
+  | { type: 'moveGlass'; id: number; dx: number; dy: number }
+  /** Turns a placed glass polygon to an absolute rotation step (0..7, 45
+   * degrees each) about its own centroid -- absolute rather than a delta so a
+   * dropped wheel message can't leave the instance a notch off what the UI
+   * is drawing. */
+  | { type: 'rotateGlass'; id: number; rotation: number }
   /** Draws a collection port line -- a Sink or a Vent, which differ only in
    * which tally they feed (see grid.ts's SinkMaskValue). One message for
    * both, since the drawn geometry is identical. */

@@ -13,7 +13,6 @@ export type IconName =
   | 'erlenmeyer'
   | 'beaker'
   | 'glass'
-  | 'insulator'
   | 'radiator'
   | 'stirrer'
   | 'funnel'
@@ -40,7 +39,6 @@ const ICONS: Record<IconName, string> = {
   beaker: '<path d="M5.6 3.6v13.6A3.6 3.6 0 0 0 9.2 20.8h5.6a3.6 3.6 0 0 0 3.6-3.6V3.6"/><path d="M4.2 3.6h15.6"/><path d="M5.6 14h12.8"/>',
   // A drawn polygon: the segments plus the corners you click to place them.
   glass: '<path d="M4.4 20V9.4l7.6-5 7.6 5V20"/><circle cx="4.4" cy="9.4" r="1.5"/><circle cx="12" cy="4.4" r="1.5"/><circle cx="19.6" cy="9.4" r="1.5"/>',
-  insulator: '<rect x="3.6" y="5" width="16.8" height="14" rx="2"/><path d="M6.2 17.4 12.6 11M10.4 18.6 17.8 11.2M4.6 12.6 11.4 5.8M14.8 18.6l3-3"/>',
   radiator:
     '<circle cx="12" cy="12" r="3.3"/>' +
     '<path d="M12 3.2v3.1M12 17.7v3.1M3.2 12h3.1M17.7 12h3.1"/>' +

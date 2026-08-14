@@ -105,9 +105,7 @@ export function placeFilterInstance(
   return filter;
 }
 
-/** Slides a whole line by (dx, dy), keeping its length and angle -- the only
- * reshaping a filter supports, since a membrane is a single segment with no
- * knees to drag. */
+/** Slides a whole line by (dx, dy), keeping its length and angle. */
 export function moveFilterInstance(grid: SimGrid, filter: FilterInstance, dx: number, dy: number): void {
   if (dx === 0 && dy === 0) return;
   unstampFilter(grid, filter);
@@ -115,6 +113,25 @@ export function moveFilterInstance(grid: SimGrid, filter: FilterInstance, dx: nu
   filter.y0 += dy;
   filter.x1 += dx;
   filter.y1 += dy;
+  stampFilter(grid, filter);
+}
+
+/** Drags one end of the line to (x, y), leaving the other where it is -- the
+ * reshaping a membrane has instead of a tube's knees, so a line drawn a
+ * little short (or at the wrong angle) can be stretched into place rather
+ * than erased and redrawn. */
+export function moveFilterEndpoint(grid: SimGrid, filter: FilterInstance, endIndex: 0 | 1, x: number, y: number): void {
+  const cx = endIndex === 0 ? filter.x0 : filter.x1;
+  const cy = endIndex === 0 ? filter.y0 : filter.y1;
+  if (cx === x && cy === y) return;
+  unstampFilter(grid, filter);
+  if (endIndex === 0) {
+    filter.x0 = x;
+    filter.y0 = y;
+  } else {
+    filter.x1 = x;
+    filter.y1 = y;
+  }
   stampFilter(grid, filter);
 }
 
