@@ -15,6 +15,12 @@
 // independently testable) -- this module is just the live grid/instance
 // state and the tick loop/message dispatch that mutate it.
 import { SimGrid, SinkMaskValue } from './grid';
+import {
+  editApparatus as repairingApparatus,
+  refreshTubeOverlays,
+  type ApparatusRef,
+  type PlacedApparatus,
+} from './apparatus-repair';
 import { forEachCellInRadius, withinRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import { buildFrame } from './frame';
@@ -50,7 +56,16 @@ import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
-import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
+import {
+  coneHoldMap,
+  moveTubeKnee,
+  moveTubeSegment,
+  placeTubeInstance,
+  stepTubes,
+  unstampTube,
+  updateTubeInstance,
+  type TubeInstance,
+} from './tube';
 import { moveFlaskInstance, placeFlaskInstance, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
 import {
   filterAllowMap,
@@ -247,9 +262,21 @@ function withGlass(id: number, fn: (instance: GlassInstance) => void): void {
   if (instance) fn(instance);
 }
 
+/** The bench as apparatus-repair.ts wants it -- a thunk, since the lists it
+ * reads are mutated (and `tubes` rebound) by the edits it wraps. */
+function placedApparatus(): PlacedApparatus {
+  return { funnels, tubes, flasks, glass: glassPolys };
+}
+
+/** Runs an apparatus placement/move/resize with the cross-apparatus repair
+ * around it -- see apparatus-repair.ts for what gets repaired and why. */
+function editApparatus(exclude: ApparatusRef | null, edit: () => void): void {
+  repairingApparatus(grid, species, placedApparatus, exclude, edit);
+}
+
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
-  stepMovement(grid, species, rng, tick++, filterAllowMap(filters));
+  stepMovement(grid, species, rng, tick++, filterAllowMap(filters), coneHoldMap(grid, tubes));
   stepTubes(grid, tubes);
   if (tick % STIR_INTERVAL_TICKS === 0) {
     if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
@@ -430,7 +457,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // deletes the whole instance (there's no dedicated delete button
       // here either), rather than leaving a stale tracked path behind
       // whenever the eraser only grazes a wall/lumen cell in its middle.
-      tubes = tubes.filter((t) => !t.points.some((p) => withinRadius(msg.x, msg.y, p.x, p.y, msg.radius)));
+      // The whole tube comes off the grid with it -- glass and overlay, not
+      // just the cells the brush physically covered (see tube.ts's
+      // unstampTube).
+      tubes = tubes.filter((t) => {
+        if (!t.points.some((p) => withinRadius(msg.x, msg.y, p.x, p.y, msg.radius))) return true;
+        unstampTube(grid, t);
+        return false;
+      });
       // Same convention again for a flask, keyed on its anchor (the middle
       // of its base): erasing there drops the whole vessel -- glass, masks
       // and tracked instance together -- rather than leaving a tracked
@@ -449,6 +483,12 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         unstampFlask(grid, f);
         return false;
       });
+      // A tube the brush only grazed is still on the bench, but the mask wipe
+      // above just took its lumen protection away wherever the brush landed
+      // -- put it back, or the survivor spends the rest of its life leaking
+      // cargo out through the gap. Its glass is not put back: the eraser is
+      // the one tool that's meant to be able to take glassware off the grid.
+      refreshTubeOverlays(grid, tubes);
       break;
     case 'setRunning':
       running = msg.running;
@@ -491,28 +531,32 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'placeFunnel':
       if (!isToolAllowed(activeRestrictions, 'funnel') || !isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      funnels.push(
-        placeFunnelInstance(grid, species, {
-          x: msg.x,
-          y: msg.y,
-          facing: msg.facing,
-          specId: msg.specId,
-          tempC: msg.tempC,
-          ratePerMinute: msg.ratePerMinute,
-          total: msg.total,
-        }),
+      editApparatus(null, () =>
+        funnels.push(
+          placeFunnelInstance(grid, species, {
+            x: msg.x,
+            y: msg.y,
+            facing: msg.facing,
+            specId: msg.specId,
+            tempC: msg.tempC,
+            ratePerMinute: msg.ratePerMinute,
+            total: msg.total,
+          }),
+        ),
       );
       break;
     case 'updateFunnel':
       if (!isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      withFunnel(msg.id, (instance) =>
-        updateFunnelInstance(grid, species, instance, {
-          specId: msg.specId,
-          tempC: msg.tempC,
-          ratePerMinute: msg.ratePerMinute,
-          total: msg.total,
-          facing: msg.facing,
-        }),
+      editApparatus({ kind: 'funnel', id: msg.id }, () =>
+        withFunnel(msg.id, (instance) =>
+          updateFunnelInstance(grid, species, instance, {
+            specId: msg.specId,
+            tempC: msg.tempC,
+            ratePerMinute: msg.ratePerMinute,
+            total: msg.total,
+            facing: msg.facing,
+          }),
+        ),
       );
       break;
     case 'resetFunnel':
@@ -522,61 +566,75 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       withFunnel(msg.id, (instance) => setFunnelEnabledInstance(instance, msg.enabled));
       break;
     case 'moveFunnel':
-      withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y));
+      editApparatus({ kind: 'funnel', id: msg.id }, () => withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y)));
       break;
     case 'placeTube':
       if (!isToolAllowed(activeRestrictions, 'tube')) break;
-      tubes.push(
-        placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
+      editApparatus(null, () =>
+        tubes.push(
+          placeTubeInstance(grid, species, { points: msg.points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }),
+        ),
       );
       break;
     case 'moveTubeKnee':
-      withTube(msg.id, (instance) => moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y }));
+      editApparatus({ kind: 'tube', id: msg.id }, () =>
+        withTube(msg.id, (instance) => moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y })),
+      );
       break;
     case 'moveTubeSegment':
-      withTube(msg.id, (instance) => moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy));
+      editApparatus({ kind: 'tube', id: msg.id }, () => withTube(msg.id, (instance) => moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy)));
       break;
     case 'updateTube':
-      withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null }));
+      editApparatus({ kind: 'tube', id: msg.id }, () =>
+        withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
+      );
       break;
     case 'placeFlask':
       if (!isToolAllowed(activeRestrictions, 'flask')) break;
-      flasks.push(
-        placeFlaskInstance(grid, species, {
-          x: msg.x,
-          y: msg.y,
-          facing: msg.facing,
-          sizeScale: msg.sizeScale,
-          stirred: msg.stirred,
-          kind: msg.kind,
-        }),
+      editApparatus(null, () =>
+        flasks.push(
+          placeFlaskInstance(grid, species, {
+            x: msg.x,
+            y: msg.y,
+            facing: msg.facing,
+            sizeScale: msg.sizeScale,
+            stirred: msg.stirred,
+            kind: msg.kind,
+          }),
+        ),
       );
       break;
     case 'updateFlask':
-      withFlask(msg.id, (instance) =>
-        updateFlaskInstance(grid, species, instance, {
-          facing: msg.facing,
-          sizeScale: msg.sizeScale,
-          stirred: msg.stirred,
-          kind: msg.kind,
-        }),
+      editApparatus({ kind: 'flask', id: msg.id }, () =>
+        withFlask(msg.id, (instance) =>
+          updateFlaskInstance(grid, species, instance, {
+            facing: msg.facing,
+            sizeScale: msg.sizeScale,
+            stirred: msg.stirred,
+            kind: msg.kind,
+          }),
+        ),
       );
       break;
     case 'moveFlask':
-      withFlask(msg.id, (instance) => moveFlaskInstance(grid, species, instance, msg.x, msg.y));
+      editApparatus({ kind: 'flask', id: msg.id }, () => withFlask(msg.id, (instance) => moveFlaskInstance(grid, species, instance, msg.x, msg.y)));
       break;
     case 'placeGlassPolyline':
       // Glass is a paintable wall material, not a ToolKind of its own, so
       // this is gated by the same isPaintAllowed check the free-draw brush
       // used to go through as an ordinary 'paint' message.
       if (!isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID)) break;
-      glassPolys.push(placeGlassInstance(grid, species, msg.points));
+      editApparatus(null, () => glassPolys.push(placeGlassInstance(grid, species, msg.points)));
       break;
     case 'moveGlass':
-      withGlass(msg.id, (instance) => moveGlassInstance(grid, species, glassPolys, instance, msg.dx, msg.dy));
+      editApparatus({ kind: 'glass', id: msg.id }, () =>
+        withGlass(msg.id, (instance) => moveGlassInstance(grid, species, glassPolys, instance, msg.dx, msg.dy)),
+      );
       break;
     case 'rotateGlass':
-      withGlass(msg.id, (instance) => rotateGlassInstance(grid, species, glassPolys, instance, msg.rotation));
+      editApparatus({ kind: 'glass', id: msg.id }, () =>
+        withGlass(msg.id, (instance) => rotateGlassInstance(grid, species, glassPolys, instance, msg.rotation)),
+      );
       break;
     case 'paintSinkLine':
       if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;

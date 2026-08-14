@@ -60,6 +60,14 @@ function footprintOf(instance: FlaskInstance): Footprint {
   };
 }
 
+/** The cells a placed flask's glass outline occupies right now -- exposed for
+ * worker.ts's cross-apparatus glass repair, which needs to know what glass
+ * every *other* apparatus is holding before an edit clears a footprint that
+ * overlaps it. */
+export function flaskGlassCells(instance: FlaskInstance): readonly Point[] {
+  return footprintOf(instance).wallCells;
+}
+
 /** Draws the vessel: glass outline as real wall matter, plus vesselMask over
  * the interior (which movement.ts's tryDiagonal reads to stop matter hopping
  * diagonally through the glass instead of going in the mouth) and

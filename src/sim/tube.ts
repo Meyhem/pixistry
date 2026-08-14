@@ -143,6 +143,46 @@ function boreWallsFromLumen(grid: SimGrid, lumenIdx: readonly number[]): void {
   }
 }
 
+function markTubeMask(grid: SimGrid, geometry: TubeGeometry): void {
+  for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
+  for (const i of geometry.coneSrcIdx) {
+    if ((grid.tubeMask[i] as TubeMaskValue) !== TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.Cone;
+  }
+}
+
+/** Re-marks one tube's overlay without touching its glass, for the two ways
+ * a tube's mask gets wiped by something that isn't the tube itself: the
+ * eraser zeroes grid.tubeMask under its brush (see worker.ts) while leaving
+ * any tube whose knee points it missed alive, and one tube's
+ * unstampTubeGeometry clears mask cells a second, overlapping tube also
+ * claims. Either way the surviving tube kept its tracked path but silently
+ * lost the lumen protection movement.ts reads, so its cargo started leaking
+ * out sideways -- a conveyor that "sometimes doesn't work" with nothing
+ * visibly wrong with it. Glass is deliberately not re-stamped: the eraser is
+ * the one tool allowed to take glassware off the grid. */
+export function restampTubeMask(grid: SimGrid, instance: TubeInstance): void {
+  markTubeMask(grid, instance.geometry);
+}
+
+/** Re-bores every tube's lumen (see boreWallsFromLumen) -- called after any
+ * apparatus edit that may have stamped fresh glass across a lumen, so a tube
+ * isn't left visibly plugged until the next tick gets around to it. */
+export function boreTubeLumens(grid: SimGrid, instances: readonly TubeInstance[]): void {
+  for (const instance of instances) boreWallsFromLumen(grid, instance.geometry.lumenIdx);
+}
+
+/** Takes a whole tube back off the grid -- glass ring and overlay together --
+ * for the eraser, which deletes the tracked instance when its brush catches
+ * any knee point. Without this the brush only cleared the handful of cells it
+ * physically covered, leaving the rest of the tube behind as orphaned glass
+ * and, worse, leaving its lumen mask on the grid: an invisible barrier no
+ * matter could ever enter again, belonging to a tube that no longer exists.
+ * The flask's eraser path already worked this way (see flask.ts's
+ * unstampFlask). */
+export function unstampTube(grid: SimGrid, instance: TubeInstance): void {
+  unstampTubeGeometry(grid, instance.geometry);
+}
+
 /** Stamps wall cells as glass (see apparatus.ts's stampGlass -- same
  * "overwrite, seed at ambient" convention placeFunnelInstance uses) and
  * marks lumen/cone cells in the overlay mask -- lumen cells' existing
@@ -152,10 +192,7 @@ function boreWallsFromLumen(grid: SimGrid, lumenIdx: readonly number[]): void {
 function stampTubeGeometry(grid: SimGrid, species: SpeciesTable, geometry: TubeGeometry): void {
   stampGlass(grid, species, geometry.wallCells);
   boreWallsFromLumen(grid, geometry.lumenIdx);
-  for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
-  for (const i of geometry.coneSrcIdx) {
-    if ((grid.tubeMask[i] as TubeMaskValue) !== TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.Cone;
-  }
+  markTubeMask(grid, geometry);
 }
 
 export interface TubePlacement {
@@ -321,4 +358,68 @@ function stepOneTube(grid: SimGrid, instance: TubeInstance): void {
 
 export function stepTubes(grid: SimGrid, instances: readonly TubeInstance[]): void {
   for (const instance of instances) stepOneTube(grid, instance);
+}
+
+/** The cone cells that are actually holding something this tick, mapped to
+ * what each one accepts (null = every species). movement.ts suppresses
+ * ordinary gravity/spread for a cell sitting in a suction cone so the tube
+ * gets to walk it inward before it falls back out -- but that hold has to be
+ * conditional, because a held cell the tube will never actually pull is
+ * frozen in mid-air forever: it can't fall, can't spread, and nothing else
+ * moves it, so it just hangs there as an invisible obstacle. Two ways that
+ * happened:
+ *
+ * - the cell's species isn't on the tube's own filter list, so stepOneTube
+ *   skips it every tick (drop a grain of anything else into a filtered
+ *   tube's cone and it stuck there permanently);
+ * - the cell's one-step-toward-the-mouth target is a wall -- another
+ *   apparatus stamped over the cone after placement -- so the pull can never
+ *   fire. (Targets landing on the tube's *own* wall are already excluded at
+ *   build time, see buildTubeGeometry; this covers walls that arrive later.)
+ *
+ * A cone cell whose target is merely occupied still holds: that's the tube
+ * being backed up, and the queue waiting at its mouth is the intended
+ * backpressure, not a stuck cell.
+ */
+export type ConeHold = ReadonlyMap<number, ReadonlySet<number> | null>;
+
+export const NO_CONE_HOLD: ConeHold = new Map();
+
+export function coneHoldMap(grid: SimGrid, instances: readonly TubeInstance[]): ConeHold {
+  const map = new Map<number, Set<number> | null>();
+  for (const instance of instances) {
+    const { coneSrcIdx, conePullTargetIdx } = instance.geometry;
+    for (let i = 0; i < coneSrcIdx.length; i++) {
+      if (isWallSpecId(grid.specId[conePullTargetIdx[i] as number] as number)) continue;
+      const src = coneSrcIdx[i] as number;
+      if (instance.filter === null) {
+        map.set(src, null); // accepts everything -- outranks any filter already recorded here
+        continue;
+      }
+      if (!map.has(src)) {
+        map.set(src, new Set(instance.filter));
+        continue;
+      }
+      // Overlapping cones: the cell is held for anything *either* tube would
+      // take, since either one pulling it out is a real move.
+      const existing = map.get(src);
+      if (existing) for (const specId of instance.filter) existing.add(specId);
+    }
+  }
+  return map;
+}
+
+/** Whether `specId` sitting at cone cell `idx` is held by the tube that owns
+ * it -- see ConeHold. False for any cell no cone claims, so a stale mask
+ * (erased, or left behind by a tube that's gone) never freezes anything. */
+export function coneHolds(hold: ConeHold, idx: number, specId: number): boolean {
+  const filter = hold.get(idx);
+  if (filter === undefined) return false;
+  return filter === null || filter.has(specId);
+}
+
+/** A tube's glass footprint -- the wall ring, not the lumen (which is a bored
+ * hole, never matter). Exposed for worker.ts's cross-apparatus glass repair. */
+export function tubeGlassCells(instance: TubeInstance): readonly Point[] {
+  return instance.geometry.wallCells;
 }

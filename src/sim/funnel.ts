@@ -11,6 +11,7 @@ import { funnelShapeFor, funnelSpawnOffset, type FunnelFacing } from './apparatu
 import { clearCells, stampGlass } from './apparatus';
 import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, massOf } from './heat';
 import type { SpeciesTable } from './species';
+import type { Point } from './tube-shapes';
 
 // Toolbar/side-panel display constants -- mirrors radiators.ts's
 // RADIATOR_LABEL/RADIATOR_COLOR pattern for the other stateful apparatus.
@@ -95,24 +96,24 @@ export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placem
   };
 }
 
+/** The cells a placed funnel's glass outline occupies right now -- shared by
+ * the stamp/unstamp pair below, and by worker.ts's cross-apparatus glass
+ * repair, which needs to know what glass every *other* apparatus is holding
+ * before an edit clears a footprint that overlaps it. */
+export function funnelGlassCells(instance: FunnelInstance): Point[] {
+  const shape = funnelShapeFor(instance.facing);
+  return shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy }));
+}
+
 /** Clears the glass outline a funnel currently occupies -- the inverse of the
  * stamp placeFunnelInstance does, shared by the move and the facing change
  * below (both of which redraw the outline somewhere the old one isn't). */
 function unstampFunnel(grid: SimGrid, instance: FunnelInstance): void {
-  const shape = funnelShapeFor(instance.facing);
-  clearCells(
-    grid,
-    shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy })),
-  );
+  clearCells(grid, funnelGlassCells(instance));
 }
 
 function stampFunnel(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance): void {
-  const shape = funnelShapeFor(instance.facing);
-  stampGlass(
-    grid,
-    species,
-    shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy })),
-  );
+  stampGlass(grid, species, funnelGlassCells(instance));
 }
 
 /** Moves a placed funnel to a new anchor: clears the glass outline at its

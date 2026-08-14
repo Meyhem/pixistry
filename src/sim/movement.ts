@@ -6,6 +6,7 @@ import { NO_FILTERS, type FilterAllow } from './filter';
 import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { massOf, temperatureOf } from './heat';
 import type { SpeciesTable } from './species';
+import { coneHolds, NO_CONE_HOLD, type ConeHold } from './tube';
 import { isWallSpecId } from './walls';
 
 type Rng = () => number;
@@ -287,8 +288,18 @@ function moveRising(
  * filter line's instance id to its own allow-list (see filter.ts's
  * filterAllowMap) -- defaults to empty, i.e. "every filtered cell blocks
  * everything", so callers with no filter on the grid (every test but
- * movement.test.ts's own filter coverage) don't need to pass one. */
-export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number, filterAllow: FilterAllow = NO_FILTERS): void {
+ * movement.test.ts's own filter coverage) don't need to pass one.
+ * `coneHold` says which suction-cone cells are really held this tick (see
+ * tube.ts's coneHoldMap) -- defaults to empty, i.e. "no cone holds
+ * anything", so a caller with no tubes placed doesn't need to pass one. */
+export function stepMovement(
+  grid: SimGrid,
+  species: SpeciesTable,
+  rng: Rng,
+  tick: number,
+  filterAllow: FilterAllow = NO_FILTERS,
+  coneHold: ConeHold = NO_CONE_HOLD,
+): void {
   const { width, height } = grid;
   const leftToRight = tick % 2 === 0;
   const moved = new Uint8Array(width * height);
@@ -313,8 +324,14 @@ export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tic
       // Cone cells are still a normal (unblocked) *target* for ordinary
       // movement below -- this only stops a cell already inside the cone
       // from wandering back out, it doesn't stop new matter falling in.
+      //
+      // The cone half of that is conditional on the tube actually being
+      // willing and able to pull this particular cell (see tube.ts's
+      // ConeHold): holding one it will never take leaves it frozen in
+      // mid-air forever, since nothing else moves a cone cell either.
       const idxTubeMask = grid.tubeMask[idx] as TubeMaskValue;
-      if (idxTubeMask === TubeMaskValue.Lumen || idxTubeMask === TubeMaskValue.Cone) continue;
+      if (idxTubeMask === TubeMaskValue.Lumen) continue;
+      if (idxTubeMask === TubeMaskValue.Cone && coneHolds(coneHold, idx, specId)) continue;
       const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false, filterAllow);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true, filterAllow);

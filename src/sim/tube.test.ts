@@ -3,7 +3,19 @@ import { PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
-import { DEFAULT_TUBE_CONE_SIZE, moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
+import {
+  coneHoldMap,
+  coneHolds,
+  DEFAULT_TUBE_CONE_SIZE,
+  moveTubeKnee,
+  moveTubeSegment,
+  placeTubeInstance,
+  restampTubeMask,
+  stepTubes,
+  unstampTube,
+  updateTubeInstance,
+  type TubeInstance,
+} from './tube';
 import type { Point } from './tube-shapes';
 
 const species = new SpeciesTable();
@@ -313,5 +325,102 @@ describe('updateTubeInstance', () => {
     updateTubeInstance(grid, species, instance, { coneSize: 3, filter: null });
     expect(instance.geometry.coneSrcIdx.length).toBe(1 + 3 + 5);
     for (const i of instance.geometry.coneSrcIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Cone);
+  });
+});
+
+describe('coneHoldMap', () => {
+  it('holds every cone cell of an unfiltered tube, whatever the species', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const hold = coneHoldMap(grid, [instance]);
+
+    for (const i of instance.geometry.coneSrcIdx) {
+      expect(coneHolds(hold, i, SpeciesId.H2O)).toBe(true);
+      expect(coneHolds(hold, i, SpeciesId.NaCl)).toBe(true);
+    }
+  });
+
+  it('does not hold a species the tube would never pull in -- it must stay subject to gravity', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT, { filter: new Set([SpeciesId.H2O]) });
+    const hold = coneHoldMap(grid, [instance]);
+
+    for (const i of instance.geometry.coneSrcIdx) {
+      expect(coneHolds(hold, i, SpeciesId.H2O)).toBe(true);
+      expect(coneHolds(hold, i, SpeciesId.NaCl)).toBe(false);
+    }
+  });
+
+  it('does not hold a cone cell whose pull target has been walled off since placement', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const blockedSrc = instance.geometry.coneSrcIdx[2] as number;
+    const target = instance.geometry.conePullTargetIdx[2] as number;
+    grid.setAt(target, GLASS_WALL_SPEC_ID, PhaseCode.Solid);
+
+    const hold = coneHoldMap(grid, [instance]);
+    expect(coneHolds(hold, blockedSrc, SpeciesId.H2O)).toBe(false);
+    expect(coneHolds(hold, instance.geometry.coneSrcIdx[0] as number, SpeciesId.H2O)).toBe(true);
+  });
+
+  it('holds a cone cell whose pull target is merely occupied -- backpressure is a queue, not a jam', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const src = instance.geometry.coneSrcIdx[2] as number;
+    grid.setAt(instance.geometry.conePullTargetIdx[2] as number, SpeciesId.NaCl, PhaseCode.Solid);
+
+    expect(coneHolds(coneHoldMap(grid, [instance]), src, SpeciesId.NaCl)).toBe(true);
+  });
+
+  it('holds a cell for anything either of two overlapping cones would take', () => {
+    const grid = new SimGrid(100, 100);
+    const a = place(grid, STRAIGHT, { filter: new Set([SpeciesId.H2O]) });
+    const b = place(
+      grid,
+      [
+        { x: 20, y: 22 },
+        { x: 26, y: 22 },
+      ],
+      { filter: new Set([SpeciesId.NaCl]) },
+    );
+    // A cone cell shared by both tubes (their cones run parallel two rows apart,
+    // so pick one from each and assert the union rule on whichever they share).
+    const shared = (a.geometry.coneSrcIdx as number[]).filter((i) => (b.geometry.coneSrcIdx as number[]).includes(i));
+    const hold = coneHoldMap(grid, [a, b]);
+    for (const i of shared) {
+      expect(coneHolds(hold, i, SpeciesId.H2O)).toBe(true);
+      expect(coneHolds(hold, i, SpeciesId.NaCl)).toBe(true);
+    }
+  });
+});
+
+describe('unstampTube', () => {
+  it('takes the whole tube off the grid -- no orphaned glass, no stranded lumen mask', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+
+    unstampTube(grid, instance);
+
+    for (const cell of instance.geometry.wallCells) {
+      expect(grid.isEmptyAt(grid.index(cell.x, cell.y))).toBe(true);
+    }
+    for (const i of instance.geometry.lumenIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.None);
+    for (const i of instance.geometry.coneSrcIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.None);
+  });
+});
+
+describe('restampTubeMask', () => {
+  it('puts back an overlay something else wiped, without re-stamping the glass', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const wall = instance.geometry.wallCells[0] as Point;
+    // What the eraser does: wipes cells and every overlay under its brush.
+    for (const i of instance.geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.None;
+    grid.clear(wall.x, wall.y);
+
+    restampTubeMask(grid, instance);
+
+    for (const i of instance.geometry.lumenIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Lumen);
+    expect(grid.isEmptyAt(grid.index(wall.x, wall.y))).toBe(true);
   });
 });
