@@ -19,7 +19,7 @@ import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
-import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
+import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
 import { SINK_COLOR, SINK_LABEL, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { el } from './dom';
 import { toolIcon, type IconName } from './tool-icons';

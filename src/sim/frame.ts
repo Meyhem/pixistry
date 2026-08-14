@@ -7,6 +7,7 @@
 import type { GrabState } from './grabber';
 import { EMPTY, type SimGrid } from './grid';
 import { funnelShapeFor } from './apparatus-shapes';
+import type { FilterInstance } from './filter';
 import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
 import { kelvinToCelsius, massOf, temperatureOf } from './heat';
@@ -15,7 +16,7 @@ import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
 import type { TubeInstance } from './tube';
-import type { FlaskSnapshot, FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
+import type { FilterSnapshot, FlaskSnapshot, FunnelSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
 
 export function computeTempGrid(grid: SimGrid, species: SpeciesTable): Float32Array {
   const temps = new Float32Array(grid.width * grid.height);
@@ -76,6 +77,10 @@ export function tubeSnapshots(tubes: readonly TubeInstance[]): TubeSnapshot[] {
   }));
 }
 
+export function filterSnapshots(filters: readonly FilterInstance[]): FilterSnapshot[] {
+  return filters.map((f) => ({ id: f.id, x0: f.x0, y0: f.y0, x1: f.x1, y1: f.y1, species: [...f.species] }));
+}
+
 export function flaskSnapshots(flasks: readonly FlaskInstance[]): FlaskSnapshot[] {
   return flasks.map((f) => ({
     id: f.id,
@@ -118,6 +123,7 @@ export interface FrameState {
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
   readonly flasks: readonly FlaskInstance[];
+  readonly filters: readonly FilterInstance[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
   readonly ventCounter: SinkCounter;
@@ -159,6 +165,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     funnels: funnelSnapshots(state.funnels),
     tubes: tubeSnapshots(state.tubes),
     flasks: flaskSnapshots(state.flasks),
+    filters: filterSnapshots(state.filters),
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,

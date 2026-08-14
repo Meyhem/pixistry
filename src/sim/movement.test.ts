@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FilterAllow } from './filter';
 import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { stepMovement } from './movement';
@@ -313,7 +314,7 @@ describe('stepMovement', () => {
     stepMovement(grid, species, rng, 0);
     expect(grid.specId[grid.index(0, 0)]).toBe(iron.specId); // no allow-list -- blocked, stayed put
 
-    stepMovement(grid, species, rng, 1, new Set([iron.specId]));
+    stepMovement(grid, species, rng, 1, new Map([[1, new Set([iron.specId])]]));
     expect(grid.specId[grid.index(0, 1)]).toBe(iron.specId); // now allowed -- passed through
   });
 
@@ -330,7 +331,7 @@ describe('stepMovement', () => {
     stepMovement(grid, species, rng, 0);
     expect(grid.specId[grid.index(0, 1)]).toBe(hydrogen.specId); // no allow-list -- blocked
 
-    stepMovement(grid, species, rng, 1, new Set([hydrogen.specId]));
+    stepMovement(grid, species, rng, 1, new Map([[1, new Set([hydrogen.specId])]]));
     expect(grid.specId[grid.index(0, 0)]).toBe(hydrogen.specId); // now allowed -- passed through
   });
 
@@ -340,7 +341,7 @@ describe('stepMovement', () => {
     // exercises a different code path than the straight-fall test above.
     const species = new SpeciesTable();
 
-    function run(filterAllow: ReadonlySet<number> | undefined): { reachedFiltered: boolean; reachedOpen: boolean } {
+    function run(filterAllow: FilterAllow | undefined): { reachedFiltered: boolean; reachedOpen: boolean } {
       const grid = new SimGrid(5, 2);
       for (let x = 0; x < 5; x++) grid.set(x, 1, SpeciesId.Fe, PhaseCode.Solid);
       grid.set(2, 0, SpeciesId.H2O, PhaseCode.Liquid);
@@ -360,7 +361,7 @@ describe('stepMovement', () => {
     expect(blocked.reachedFiltered).toBe(false);
     expect(blocked.reachedOpen).toBe(true); // spread still works on the unfiltered side, proving movement wasn't just frozen
 
-    const allowed = run(new Set([SpeciesId.H2O]));
+    const allowed = run(new Map([[1, new Set([SpeciesId.H2O])]]));
     expect(allowed.reachedFiltered).toBe(true);
   });
 

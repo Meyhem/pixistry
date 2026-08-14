@@ -28,7 +28,7 @@ import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FLASK_COLOR } from '../sim/flask';
-import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter-apparatus';
+import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing, type FunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
@@ -47,7 +47,7 @@ import {
 import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
-import { ApparatusSelection, type FlaskEditDraft, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
+import { ApparatusSelection, type FilterEditDraft, type FlaskEditDraft, type FunnelEditDraft, type TubeEditDraft } from './apparatus-selection';
 import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
 import { loadProgress, recordCompletion, recordDiscovery, saveProgress, starsForCompletion, unlockAchievement } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
@@ -596,7 +596,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let settingsDockOpen = true;
   let benchMenuOpen = false;
   let ptSelectedSymbol: string | null = null;
-  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' = 'paint';
+  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' | 'filter-edit-add' = 'paint';
   let isPointerDown = false;
   let isGrabbing = false;
   // The mixer tool's active brush stroke: while held, position updates go
@@ -642,14 +642,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // funnelDraft/funnelSetter). null filter = accept every species.
   const tubeDraft: TubeEditDraft = { coneSize: DEFAULT_TUBE_CONE_SIZE, filter: null };
 
-  // Filter apparatus's global species allow-list -- unlike the funnel/tube
-  // drafts above, this isn't captured at placement time: it's a live global
-  // gate (see worker.ts's filterAllowSpecies) sent to the worker immediately
-  // on every add/remove via sendFilterSpecies, since it affects every filter
-  // line already drawn on the grid, not just future placements.
-  let filterSpecies = new Set<number>();
-  function sendFilterSpecies(): void {
-    send({ type: 'setFilterSpecies', species: [...filterSpecies] });
+  // Filter tool's pre-placement allow-list -- same "captured at placement
+  // time" convention as the funnel's and tube's drafts above, and the same
+  // shape as ApparatusSelection's FilterEditDraft for the same reason. Every
+  // drawn line used to share one live global list instead; each line carries
+  // its own now (see filter.ts), so this only seeds the next one drawn.
+  const filterDraft: FilterEditDraft = { species: new Set() };
+
+  /** Pushes the selected filter line's edited allow-list to the worker --
+   * the filter counterpart of sendTubeUpdate/sendFunnelUpdate. */
+  function sendFilterUpdate(): void {
+    const id = apparatusSelection.selectedFilterId;
+    const draft = apparatusSelection.filterEditDraft;
+    if (id === null || !draft) return;
+    send({ type: 'updateFilter', id, species: [...draft.species] });
   }
 
   // In-progress polygon draw (see isPolygonTool -- the conveyor tube and the
@@ -777,14 +783,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       const selectedFunnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
       const selectedTube = apparatusSelection.findTube(apparatusSelection.selectedTubeId);
       const selectedFlask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
-      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask;
+      const selectedFilter = apparatusSelection.findFilter(apparatusSelection.selectedFilterId);
+      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask && !selectedFilter;
       return {
         ...TOOL_META_DEFAULTS,
         label: selectedFunnel
           ? FUNNEL_LABEL
           : selectedTube
             ? TUBE_LABEL
-            : selectedFlask
+            : selectedFilter
+              ? FILTER_LABEL
+              : selectedFlask
               ? // Prefer the live edit draft over the worker's snapshot: the
                 // snapshot only catches up a frame later, and the HUD chip
                 // isn't rebuilt per frame, so a shape/stirred toggle would
@@ -794,11 +803,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
                   apparatusSelection.flaskEditDraft?.stirred ?? selectedFlask.stirred,
                 )
               : SELECT_APPARATUS_LABEL,
-        color: selectedFunnel ? FUNNEL_COLOR : selectedTube ? TUBE_COLOR : selectedFlask ? FLASK_COLOR : SELECT_APPARATUS_COLOR,
+        color: selectedFunnel
+          ? FUNNEL_COLOR
+          : selectedTube
+            ? TUBE_COLOR
+            : selectedFilter
+              ? FILTER_COLOR
+              : selectedFlask
+                ? FLASK_COLOR
+                : SELECT_APPARATUS_COLOR,
         category: nothingSelected ? 'TOOL' : 'APPARATUS',
         showBrushWidth: false,
         funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
         tubePanel: selectedTube ? 'edit' : 'none',
+        filterPanel: selectedFilter ? 'edit' : 'none',
         flaskPanel: selectedFlask ? 'edit' : 'none',
       };
     }
@@ -1199,6 +1217,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
     const selectedTube = isEditMode ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
     const selectedFlask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
+    const selectedFilter = isEditMode ? apparatusSelection.findFilter(apparatusSelection.selectedFilterId) : undefined;
     if (isEditMode && selectedFunnel && !apparatusSelection.editDraft) {
       apparatusSelection.editDraft = {
         specId: selectedFunnel.specId,
@@ -1230,6 +1249,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         : { facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, kind: tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND };
     const tubeFields: TubeFieldValues =
       isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : tubeDraft;
+    // Editing a placed line edits its own draft; otherwise the Filter tool's
+    // panel configures what the *next* line drawn will allow.
+    const isFilterEditMode = isEditMode && !!selectedFilter;
+    const filterFields: FilterEditDraft =
+      isFilterEditMode && apparatusSelection.filterEditDraft ? apparatusSelection.filterEditDraft : filterDraft;
 
     const funnelFields: FunnelFieldValues =
       isEditMode && apparatusSelection.editDraft
@@ -1396,16 +1420,16 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         }
         render();
       },
-      filterSpecies,
+      filterSpecies: filterFields.species,
       filterPalette: palette,
       onOpenFilterSpeciesPicker: () => {
-        ptTarget = 'filter-add';
+        ptTarget = isFilterEditMode ? 'filter-edit-add' : 'filter-add';
         ptOpen = true;
         render();
       },
       onRemoveFilterSpecies: (specId) => {
-        filterSpecies.delete(specId);
-        sendFilterSpecies();
+        filterFields.species.delete(specId);
+        if (isFilterEditMode) sendFilterUpdate();
         render();
       },
       flaskSizeScale: flaskFields.sizeScale,
@@ -1454,8 +1478,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
             apparatusSelection.tubeEditDraft.filter = addFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
             sendTubeUpdate();
           } else if (ptTarget === 'filter-add') {
-            filterSpecies.add(specId);
-            sendFilterSpecies();
+            filterDraft.species.add(specId);
+          } else if (ptTarget === 'filter-edit-add' && apparatusSelection.filterEditDraft) {
+            apparatusSelection.filterEditDraft.species.add(specId);
+            sendFilterUpdate();
           } else {
             setTool({ kind: 'paint', specId });
           }
@@ -1984,7 +2010,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
     if (lineDrawStart) {
       if (tool?.kind === 'filter') {
-        send({ type: 'paintFilterLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY });
+        send({ type: 'paintFilterLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, species: [...filterDraft.species] });
       } else {
         const width = wallBrushRadius(tool, brushWidth);
         const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;
@@ -2045,6 +2071,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       apparatusSelection.setFunnels(msg.funnels);
       apparatusSelection.setTubes(msg.tubes);
       apparatusSelection.setFlasks(msg.flasks);
+      apparatusSelection.setFilters(msg.filters);
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,

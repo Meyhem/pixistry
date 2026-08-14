@@ -149,6 +149,17 @@ probability gating, energy bookkeeping).
   every segment octant-aligned, even though a dragged knee generally can't land on an octant ray from both
   its fixed neighbors at once — `resolveKneePosition` brute-forces the 8x8 direction-pair combinations and
   picks the valid intersection closest to the cursor.
+- **`filter.ts`** — the filter apparatus: a one-cell-wide membrane line that only lets the species on its
+  own allow-list move into its cells, blocking everything else exactly like glass. There's no per-tick
+  step function — the gating happens inline in `movement.ts`'s `canEnterFiltered` — so the module is just
+  the instance model plus mask stamping. `grid.filterMask` holds the *owning line's instance id* (0 still
+  meaning "no filter", so movement's fast path is one array read), which is what lets two membranes on one
+  bench pass different species; `stepMovement` takes an id → allow-list map built fresh each tick from the
+  live instance list. Ids are 1-based, capped by the Uint8 mask, and reused once freed. This replaced a
+  design where every line shared one global allow-list and drawn lines weren't tracked at all
+  (`filterMask` was a 0/1 flag), which meant a placed filter could never be selected, reconfigured or
+  moved. Erasing part of a line leaves the rest filtering — it's a drawn membrane, not an object with an
+  anchor — and the instance is dropped only once its last cell is gone (`pruneErasedFilters`).
 - **`worker.ts`** — owns the `SimGrid`, runs the tick loop (`movement -> radiate -> conduct -> react`, per
   the design doc's order — `stepRadiators` takes the point-heat-source slot conduction previously shared
   with the cursor-driven burner/coolant tool), and talks to the main thread over `postMessage`. Paint

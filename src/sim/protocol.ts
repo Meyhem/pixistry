@@ -32,6 +32,16 @@ export interface TubeSnapshot {
   filter: number[] | null;
 }
 
+export interface FilterSnapshot {
+  id: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** This line's own allow-list; empty blocks everything. */
+  species: number[];
+}
+
 export interface FlaskSnapshot {
   id: number;
   x: number;
@@ -59,6 +69,7 @@ export type WorkerToMainMessage =
       funnels: FunnelSnapshot[];
       tubes: TubeSnapshot[];
       flasks: FlaskSnapshot[];
+      filters: FilterSnapshot[];
       sinkMask: Uint8Array;
       /** Indexed by specId (see species-data.ts's SPECIES array) -- how many
        * pixels of each species every sink line on the grid has ever
@@ -108,9 +119,17 @@ export type MainToWorkerMessage =
   | { type: 'paintCatalyst'; x: number; y: number; radius: number; strength: number }
   /** Draws a one-cell-wide filter line from (x0,y0) to (x1,y1) -- a filter
    * is a precise membrane, not a brush splash, so it's a single straight
-   * drag with no width of its own (see .filterMask in grid.ts). */
-  | { type: 'paintFilterLine'; x0: number; y0: number; x1: number; y1: number }
-  | { type: 'setFilterSpecies'; species: number[] }
+   * drag with no width of its own (see .filterMask in grid.ts). The line
+   * becomes a tracked instance (see filter.ts) carrying `species` as its own
+   * allow-list, captured at placement time like a funnel's payload. */
+  | { type: 'paintFilterLine'; x0: number; y0: number; x1: number; y1: number; species: number[] }
+  /** Replaces one placed filter line's allow-list (the select-apparatus
+   * tool's filter edit panel). */
+  | { type: 'updateFilter'; id: number; species: number[] }
+  /** Slides a placed filter line by (dx, dy), keeping its length and angle
+   * -- a membrane is one segment with no knees, so this is its only
+   * reshaping. */
+  | { type: 'moveFilter'; id: number; dx: number; dy: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }

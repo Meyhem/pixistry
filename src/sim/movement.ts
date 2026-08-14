@@ -2,6 +2,7 @@
 // design doc. Density (not a fixed solid > liquid > gas ranking) decides
 // whether a cell may displace its neighbour, so a denser gas can still sink
 // through a lighter one, etc. Swaps are probabilistic so mixing takes time.
+import { NO_FILTERS, type FilterAllow } from './filter';
 import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { massOf, temperatureOf } from './heat';
 import type { SpeciesTable } from './species';
@@ -33,14 +34,17 @@ type TargetStatus =
   | { kind: 'empty' }
   | { kind: 'occupied'; specId: number; phase: PhaseCode };
 
-/** A cell with the filter apparatus's overlay (grid.filterMask) is only a
- * valid destination for species in the current global allow-list -- for
- * every other species it's blocked exactly like a wall, regardless of
- * whether the cell is itself empty or occupied. A cell with no filter drawn
- * (mask is 0) is always unaffected. */
-function canEnterFiltered(grid: SimGrid, filterAllow: ReadonlySet<number>, targetIdx: number, fromSpecId: number): boolean {
-  if ((grid.filterMask[targetIdx] as number) === 0) return true;
-  return filterAllow.has(fromSpecId);
+/** A cell covered by a filter line (grid.filterMask holds that line's
+ * instance id -- see filter.ts) is only a valid destination for species on
+ * *that line's* allow-list; for every other species it's blocked exactly
+ * like a wall, regardless of whether the cell is itself empty or occupied.
+ * A cell with no filter drawn (mask is 0) is always unaffected, which is the
+ * overwhelmingly common case and stays a single array read. An id with no
+ * matching instance blocks everything, same as an empty allow-list. */
+function canEnterFiltered(grid: SimGrid, filterAllow: FilterAllow, targetIdx: number, fromSpecId: number): boolean {
+  const filterId = grid.filterMask[targetIdx] as number;
+  if (filterId === 0) return true;
+  return filterAllow.get(filterId)?.has(fromSpecId) ?? false;
 }
 
 /** The shared head of canDisplace/canRiseThroughLiquid below: a tube's
@@ -53,7 +57,7 @@ function canEnterFiltered(grid: SimGrid, filterAllow: ReadonlySet<number>, targe
  * canRiseThroughLiquid doesn't -- liquids don't spontaneously rise into open
  * air), so that decision stays with each predicate rather than being folded
  * in here. */
-function blockedTarget(grid: SimGrid, targetIdx: number, fromSpecId: number, filterAllow: ReadonlySet<number>): TargetStatus {
+function blockedTarget(grid: SimGrid, targetIdx: number, fromSpecId: number, filterAllow: FilterAllow): TargetStatus {
   if ((grid.tubeMask[targetIdx] as TubeMaskValue) === TubeMaskValue.Lumen) return { kind: 'blocked' };
   if (!canEnterFiltered(grid, filterAllow, targetIdx, fromSpecId)) return { kind: 'blocked' };
   if (grid.isEmptyAt(targetIdx)) return { kind: 'empty' };
@@ -70,7 +74,7 @@ function canDisplace(
   fromPhase: PhaseCode,
   targetIdx: number,
   direction: 'down' | 'up',
-  filterAllow: ReadonlySet<number>,
+  filterAllow: FilterAllow,
 ): boolean {
   const target = blockedTarget(grid, targetIdx, fromSpecId, filterAllow);
   if (target.kind === 'blocked') return false;
@@ -99,7 +103,7 @@ function canRiseThroughLiquid(
   fromSpecId: number,
   fromPhase: PhaseCode,
   targetIdx: number,
-  filterAllow: ReadonlySet<number>,
+  filterAllow: FilterAllow,
 ): boolean {
   const target = blockedTarget(grid, targetIdx, fromSpecId, filterAllow);
   if (target.kind !== 'occupied' || target.phase !== PhaseCode.Liquid) return false;
@@ -171,7 +175,7 @@ function moveFalling(
   fromPhase: PhaseCode,
   rng: Rng,
   canSpreadHorizontally: boolean,
-  filterAllow: ReadonlySet<number>,
+  filterAllow: FilterAllow,
 ): void {
   const belowY = y + 1;
   if (grid.inBounds(x, belowY)) {
@@ -236,7 +240,7 @@ function moveRising(
   idx: number,
   specId: number,
   rng: Rng,
-  filterAllow: ReadonlySet<number>,
+  filterAllow: FilterAllow,
 ): void {
   const aboveY = y - 1;
   if (grid.inBounds(x, aboveY)) {
@@ -279,13 +283,12 @@ function moveRising(
   }
 }
 
-const NO_FILTER_ALLOW: ReadonlySet<number> = new Set();
-
-/** One movement tick. Mutates grid in place. `filterAllow` is the Filter
- * apparatus's current global species allow-list (see worker.ts) -- defaults
- * to "blocks everything" so callers with no filter drawn on the grid (every
- * test but movement.test.ts's own filter coverage) don't need to pass one. */
-export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number, filterAllow: ReadonlySet<number> = NO_FILTER_ALLOW): void {
+/** One movement tick. Mutates grid in place. `filterAllow` maps each drawn
+ * filter line's instance id to its own allow-list (see filter.ts's
+ * filterAllowMap) -- defaults to empty, i.e. "every filtered cell blocks
+ * everything", so callers with no filter on the grid (every test but
+ * movement.test.ts's own filter coverage) don't need to pass one. */
+export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number, filterAllow: FilterAllow = NO_FILTERS): void {
   const { width, height } = grid;
   const leftToRight = tick % 2 === 0;
   const moved = new Uint8Array(width * height);

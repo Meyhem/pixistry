@@ -35,10 +35,12 @@ export interface ToolMeta {
    * apparatus with nothing selected looks the same regardless of which
    * kind of apparatus the player might click next). */
   tubePanel: 'none' | 'config' | 'edit';
-  /** The Filter tool's allow-list panel -- only 2 states (no placed-instance
-   * "edit" mode, since a filter line isn't a tracked instance: its
-   * allow-list is one global config, live-edited straight from the tool). */
-  filterPanel: 'none' | 'config';
+  /** The Filter apparatus's allow-list panel -- same 3-state convention as
+   * funnelPanel/tubePanel now that a drawn line is a tracked instance with
+   * its own allow-list (see filter.ts): 'config' is the next-line-drawn
+   * draft, 'edit' is a placed line selected with the select-apparatus
+   * tool. */
+  filterPanel: 'none' | 'config' | 'edit';
   /** The flask tool's size/stirred panel -- same 3-state convention as
    * funnelPanel: 'config' is the pre-placement draft, 'edit' is a placed
    * flask selected with the select-apparatus tool (see flask.ts, which
@@ -108,7 +110,8 @@ export interface SidePanelCallbacks {
   onSetTubeConeSize(value: number): void;
   onOpenTubeFilterPicker(): void;
   onRemoveTubeFilterSpecies(specId: number): void;
-  /** The Filter apparatus's current global allow-list. */
+  /** The allow-list being edited: the selected line's when one is selected,
+   * otherwise the Filter tool's pre-placement draft. */
   filterSpecies: ReadonlySet<number>;
   /** Every paintable species, for the Filter apparatus's chip-list picker. */
   filterPalette: readonly PaletteEntry[];
@@ -362,7 +365,9 @@ function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
 
   container.appendChild(
     hintBox(
-      'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. One shared allow-list applies to every filter line on the grid.',
+      meta.filterPanel === 'config'
+        ? 'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. Each line keeps the list it was drawn with -- pick it up with the Select tool to change it later.'
+        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it somewhere else; erase any part of it to take it out (the rest keeps filtering until the last cell is gone).",
       'HOW IT WORKS',
     ),
   );

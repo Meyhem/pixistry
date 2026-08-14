@@ -53,6 +53,14 @@ import { stepStirrers } from './stirrer';
 import { moveTubeKnee, moveTubeSegment, placeTubeInstance, stepTubes, updateTubeInstance, type TubeInstance } from './tube';
 import { moveFlaskInstance, placeFlaskInstance, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
 import { stampGlass } from './apparatus';
+import {
+  filterAllowMap,
+  moveFilterInstance,
+  placeFilterInstance,
+  pruneErasedFilters,
+  updateFilterInstance,
+  type FilterInstance,
+} from './filter';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 import type { Point } from './tube-shapes';
 
@@ -128,13 +136,12 @@ let tubes: TubeInstance[] = [];
 // not something the player placed and may want to re-edit.
 let flasks: FlaskInstance[] = [];
 
-// Filter apparatus's global species allow-list (see grid.ts's filterMask):
-// unlike the tube's per-instance filter, every drawn filter line shares this
-// one Set -- empty means "blocks everything", the opposite default from the
-// tube's null-means-accept-all, since an unconfigured Filter should read as
-// "just drew an impermeable line" rather than a no-op. Passed into
-// stepMovement every tick (see runOneTick).
-let filterAllowSpecies = new Set<number>();
+// Placed filter membranes (see filter.ts) -- tracked like the funnels/tubes/
+// flasks above, and for the same reason: each line carries its own species
+// allow-list, which isn't representable as a value per grid cell. What *is*
+// per-cell is which line owns the cell (grid.filterMask holds the instance
+// id), so movement.ts can look the right allow-list up per filtered cell.
+let filters: FilterInstance[] = [];
 
 // The Sink apparatus's global tally (see sink.ts) -- one counter shared by
 // every sink line drawn on the grid, not per-instance. The Vent gets a
@@ -197,6 +204,11 @@ function withTube(id: number, fn: (instance: TubeInstance) => void): void {
   if (instance) fn(instance);
 }
 
+function withFilter(id: number, fn: (instance: FilterInstance) => void): void {
+  const instance = filters.find((f) => f.id === id);
+  if (instance) fn(instance);
+}
+
 function withFlask(id: number, fn: (instance: FlaskInstance) => void): void {
   const instance = flasks.find((f) => f.id === id);
   if (instance) fn(instance);
@@ -204,7 +216,7 @@ function withFlask(id: number, fn: (instance: FlaskInstance) => void): void {
 
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
-  stepMovement(grid, species, rng, tick++, filterAllowSpecies);
+  stepMovement(grid, species, rng, tick++, filterAllowMap(filters));
   stepTubes(grid, tubes);
   if (tick % STIR_INTERVAL_TICKS === 0) {
     if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
@@ -226,7 +238,7 @@ function runOneTick(): void {
 }
 
 function postFrame(): void {
-  const frame = buildFrame(grid, species, { funnels, tubes, flasks, grabState, sinkCounter, ventCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
+  const frame = buildFrame(grid, species, { funnels, tubes, flasks, filters, grabState, sinkCounter, ventCounter, hasSnapshot: worldSnapshot !== null, tick, objectives: [] });
   if (activeScenario) {
     for (let i = 0; i < frame.tempK.length; i++) {
       const t = frame.tempK[i] as number;
@@ -319,15 +331,17 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'paintFilterLine':
       if (!isToolAllowed(activeRestrictions, 'filter')) break;
-      // Width 0 -> the bare Bresenham core, one cell wide (see
-      // sinkLineCells, reused here rather than hand-rolling a second line
-      // rasterizer -- same reason scenario.ts's applyWallLine reuses it).
-      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, 0)) {
-        if (grid.inBounds(x, y)) grid.filterMask[grid.index(x, y)] = 1;
-      }
+      // The drawn line becomes a tracked instance carrying the allow-list
+      // the tool was configured with, captured once at placement time --
+      // same "settings are a snapshot, not a live global" convention as the
+      // funnel's species and the tube's own filter.
+      placeFilterInstance(grid, filters, msg.x0, msg.y0, msg.x1, msg.y1, msg.species);
       break;
-    case 'setFilterSpecies':
-      filterAllowSpecies = new Set(msg.species);
+    case 'updateFilter':
+      withFilter(msg.id, (filter) => updateFilterInstance(filter, msg.species));
+      break;
+    case 'moveFilter':
+      withFilter(msg.id, (filter) => moveFilterInstance(grid, filter, msg.dx, msg.dy));
       break;
     case 'erase':
       if (!isToolAllowed(activeRestrictions, 'erase')) break;
@@ -355,6 +369,11 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // of its base): erasing there drops the whole vessel -- glass, masks
       // and tracked instance together -- rather than leaving a tracked
       // flask whose footprint the brush has already half-erased.
+      // A filter line is a drawn membrane rather than an object with an
+      // anchor, so erasing part of one leaves the rest working; the instance
+      // only goes away once the brush has taken its last cell (see
+      // pruneErasedFilters).
+      filters = pruneErasedFilters(grid, filters);
       flasks = flasks.filter((f) => {
         if (!withinRadius(msg.x, msg.y, f.x, f.y, msg.radius)) return true;
         unstampFlask(grid, f);
@@ -506,7 +525,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       flasks = [];
       sinkCounter.reset();
       ventCounter.reset();
-      filterAllowSpecies = new Set();
+      filters = [];
       grabState = null;
       stirState = null;
       // A snapshot of the old shape can't be restored into the new grid.
@@ -523,7 +542,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       flasks = [];
       sinkCounter.reset();
       ventCounter.reset();
-      filterAllowSpecies = new Set();
+      filters = [];
       grabState = null;
       stirState = null;
       tick = 0;
@@ -538,7 +557,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       flasks = [];
       sinkCounter.reset();
       ventCounter.reset();
-      filterAllowSpecies = new Set();
+      filters = [];
       grabState = null;
       stirState = null;
       tick = 0;
@@ -548,7 +567,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       applyScenarioSetup(grid, species, funnels, msg.scenario);
       break;
     case 'snapshotWorld':
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, sinkCounter, ventCounter, tick);
       break;
     case 'restoreWorld': {
       if (!worldSnapshot) break;
@@ -556,6 +575,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       funnels = restored.funnels;
       tubes = restored.tubes;
       flasks = restored.flasks;
+      filters = restored.filters;
       tick = restored.tick;
       // A restore is also a fresh start for anything mid-drag -- a held
       // grab/stir brush referencing cells that may no longer be what it
@@ -566,7 +586,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'runBurst': {
       if (burst) break;
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, sinkCounter, ventCounter, tick);
       sinkCounter.reset();
       ventCounter.reset();
       burst = { ticksTotal: msg.ticks, ticksRemaining: msg.ticks };
@@ -585,6 +605,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
         funnels = restored.funnels;
         tubes = restored.tubes;
+        filters = restored.filters;
         tick = restored.tick;
         grabState = null;
         stirState = null;

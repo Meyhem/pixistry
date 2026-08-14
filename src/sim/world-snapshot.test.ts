@@ -29,7 +29,7 @@ describe('world snapshot/restore', () => {
     const funnels = [placeFunnelInstance(grid, species, { x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 20, ratePerMinute: 60, total: 10 })];
     const tubes = [placeTubeInstance(grid, species, { points: [{ x: 2, y: 2 }, { x: 6, y: 2 }], coneSize: 3, filter: null })];
 
-    const snapshot = captureWorldSnapshot(grid, funnels, tubes, [], sinkCounter, ventCounter, 42);
+    const snapshot = captureWorldSnapshot(grid, funnels, tubes, [], [], sinkCounter, ventCounter, 42);
 
     // Mutate everything after the snapshot -- restore should undo all of it.
     paint(grid, species, 8, 8, SpeciesId.Fe);
@@ -56,7 +56,7 @@ describe('world snapshot/restore', () => {
     recordSinkHistory(sinkCounter, 60);
     recordSinkHistory(sinkCounter, 120);
 
-    const snapshot = captureWorldSnapshot(grid, [], [], [], sinkCounter, new SinkCounter(), 120);
+    const snapshot = captureWorldSnapshot(grid, [], [], [], [], sinkCounter, new SinkCounter(), 120);
     sinkCounter.reset();
     expect(sinkCounter.history).toHaveLength(0);
 
@@ -71,7 +71,7 @@ describe('world snapshot/restore', () => {
     const funnels = [placeFunnelInstance(grid, species, { x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 20, ratePerMinute: 60, total: null })];
     const sinkCounter = new SinkCounter();
 
-    const snapshot = captureWorldSnapshot(grid, funnels, [], [], sinkCounter, new SinkCounter(), 0);
+    const snapshot = captureWorldSnapshot(grid, funnels, [], [], [], sinkCounter, new SinkCounter(), 0);
     const restored = restoreWorldSnapshot(grid, sinkCounter, new SinkCounter(), snapshot);
 
     restored.funnels[0]!.remaining = 999;

@@ -11,6 +11,7 @@
 // every array here stays the same fixed size (the grid's dimensions never
 // change) for the worker's whole lifetime.
 import type { SimGrid } from './grid';
+import type { FilterInstance } from './filter';
 import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
 import type { SinkCounter } from './sink';
@@ -31,6 +32,7 @@ export interface WorldSnapshot {
   readonly funnels: readonly FunnelInstance[];
   readonly tubes: readonly TubeInstance[];
   readonly flasks: readonly FlaskInstance[];
+  readonly filters: readonly FilterInstance[];
   readonly sinkTotals: Uint32Array;
   readonly sinkGrandTotal: number;
   readonly sinkHistory: SinkCounter['history'];
@@ -51,6 +53,7 @@ export function captureWorldSnapshot(
   funnels: readonly FunnelInstance[],
   tubes: readonly TubeInstance[],
   flasks: readonly FlaskInstance[],
+  filters: readonly FilterInstance[],
   sinkCounter: SinkCounter,
   ventCounter: SinkCounter,
   tick: number,
@@ -70,6 +73,7 @@ export function captureWorldSnapshot(
     funnels: structuredClone(funnels as FunnelInstance[]),
     tubes: structuredClone(tubes as TubeInstance[]),
     flasks: structuredClone(flasks as FlaskInstance[]),
+    filters: structuredClone(filters as FilterInstance[]),
     sinkTotals: sinkCounter.totals.slice(),
     sinkGrandTotal: sinkCounter.grandTotal,
     sinkHistory: structuredClone(sinkCounter.history),
@@ -86,6 +90,7 @@ export interface RestoredWorld {
   readonly funnels: FunnelInstance[];
   readonly tubes: TubeInstance[];
   readonly flasks: FlaskInstance[];
+  readonly filters: FilterInstance[];
   readonly tick: number;
 }
 
@@ -115,6 +120,7 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ve
     funnels: structuredClone(snapshot.funnels as FunnelInstance[]),
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),
     flasks: structuredClone(snapshot.flasks as FlaskInstance[]),
+    filters: structuredClone(snapshot.filters as FilterInstance[]),
     tick: snapshot.tick,
   };
 }
