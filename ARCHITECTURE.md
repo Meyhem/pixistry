@@ -181,7 +181,8 @@ probability gating, energy bookkeeping).
 
   The rail is one icon slot per tool (`ui/tool-icons.ts`, inline 24x24 stroked SVG drawn from
   `currentColor`), grouped TOOLS / GLASS / HEAT / FLOW, with the active slot wearing its tool's own swatch
-  and each slot naming itself in a hover flyout. It's also the canonical home for the UI-side `ToolKind`
+  and each slot naming *and* explaining itself in a hover flyout (an icon rail is only readable if hovering
+  an unfamiliar glyph says what the tool does, not just what it's called). It's also the canonical home for the UI-side `ToolKind`
   union. Under 860px of window height it drops the group captions and pairs slots two-wide, since 16 slots
   in one column need ~560px. Species are the one thing that can't have a slot *each* — there are 149 — so
   the Paint slot (second in the TOOLS group, between Select and Erase, since it's the tool used most

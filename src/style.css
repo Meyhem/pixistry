@@ -168,12 +168,11 @@ body {
   align-items: flex-start;
   gap: 6px;
   pointer-events: none;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.tool-rail::-webkit-scrollbar {
-  display: none;
+  /* Deliberately NOT a scroll container at normal window heights: an
+     `overflow-y: auto` here would compute overflow-x to `auto` as well (a
+     `visible`/`auto` pair isn't allowed), and that clips each slot's hover
+     flyout, which by design hangs outside the rail. Scrolling is added back
+     only below the height where the slots genuinely can't all fit. */
 }
 
 .rail-group {
@@ -242,25 +241,44 @@ body {
   line-height: 1;
 }
 
-/* The slot's name, revealed on hover as a flyout to the right of the rail
-   rather than a native tooltip (whose ~500ms delay is far too slow for a
-   strip you're meant to scan). */
+/* The slot's name and description, revealed on hover as a flyout to the
+   right of the rail rather than a native tooltip (whose ~500ms delay is far
+   too slow for a strip you're meant to scan, and which can't carry a second
+   line anyway). */
 .rail-slot-name {
   position: absolute;
   left: calc(100% + 10px);
   top: 50%;
   transform: translateY(-50%);
-  padding: 4px 8px;
-  border-radius: 7px;
-  background: rgba(14, 16, 15, 0.96);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: max-content;
+  max-width: 230px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(14, 16, 15, 0.97);
   border: 1px solid var(--panel-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   color: var(--text);
-  font-size: 12px;
-  white-space: nowrap;
+  text-align: left;
   opacity: 0;
   pointer-events: none;
   transition: opacity 90ms ease;
   z-index: 2;
+}
+
+.rail-slot-title {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.rail-slot-desc {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-muted);
 }
 
 .rail-slot:hover .rail-slot-name,
@@ -288,6 +306,7 @@ body {
     gap: 6px;
   }
 
+
   .rail-caption {
     display: none;
   }
@@ -307,6 +326,32 @@ body {
   .tool-icon {
     width: 20px;
     height: 20px;
+  }
+
+  /* Two columns means a left-column slot's flyout would open straight over
+     the right column, so both columns push theirs clear of the whole rail
+     instead. The offsets are the compact layout's own metrics: 32px slots,
+     3px gap, 5px group padding. */
+  .rail-group > .rail-slot:nth-child(even) .rail-slot-name {
+    left: calc(100% + 51px);
+  }
+
+  .rail-group > .rail-slot:nth-child(odd) .rail-slot-name {
+    left: calc(100% + 16px);
+  }
+}
+
+/* Below this the two-column rail can't fit either, so it has to scroll --
+   accepting that the hover flyouts get clipped to the rail's own width
+   (see .tool-rail's comment), which beats slots you can't reach at all. */
+@media (max-height: 620px) {
+  .tool-rail {
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .tool-rail::-webkit-scrollbar {
+    display: none;
   }
 }
 
