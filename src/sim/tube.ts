@@ -23,7 +23,11 @@
 // target that some later-placed apparatus had walled off) was then frozen in
 // mid-air forever, an invisible obstacle with nothing on screen to explain
 // it. A mouth that only takes what arrives at it needs no hold at all, so
-// that entire bug class is gone rather than patched.
+// that entire bug class is gone rather than patched. The mouth does reach
+// exactly one cell past its aperture (stepOneTube's reach pass) -- enough
+// that a pixel drifting just short of it isn't missed by a hair, and short
+// enough that it stays a "take what's here" rule: nothing is ever held in
+// place waiting for a pull that may never come.
 import { SimGrid, TubeMaskValue } from './grid';
 import { nextEntityId } from './entity-id';
 import {
@@ -79,6 +83,13 @@ interface TubeGeometry {
    * each can draw from -- the whole of the suction model. */
   readonly intakeIdx: readonly number[];
   readonly intakeSources: readonly (readonly number[])[];
+  /** The mouth's one-cell reach: each in-bounds mouth aperture cell paired
+   * with the cell one step further straight out from it, so matter drifting
+   * past just short of the mouth is drawn in rather than missed by a hair
+   * (see stepOneTube's reach pass). Parallel arrays, target = the aperture
+   * cell, source = the cell beyond it. */
+  readonly reachTargetIdx: readonly number[];
+  readonly reachSourceIdx: readonly number[];
   readonly bounds: TubeBounds;
 }
 
@@ -171,6 +182,21 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[]): TubeGeometr
   const discharge = pairWithAperture(exitAperture);
   const intake = pairWithAperture(mouthAperture);
 
+  // One cell straight out beyond each mouth aperture cell -- both ends of
+  // each pair have to be in bounds for the reach to mean anything.
+  const reachTargetIdx: number[] = [];
+  const reachSourceIdx: number[] = [];
+  if (openEnds) {
+    const dir = openEnds.mouthDir;
+    for (const cell of mouthAperture) {
+      const to = idx(grid, cell);
+      const from = idx(grid, { x: cell.x + dir.x, y: cell.y + dir.y });
+      if (to === null || from === null) continue;
+      reachTargetIdx.push(to);
+      reachSourceIdx.push(from);
+    }
+  }
+
   const allCells = [...band, ...wallCells, ...mouthAperture, ...exitAperture];
   return {
     wallCells,
@@ -185,6 +211,8 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[]): TubeGeometr
     dischargeTargets: discharge.partners,
     intakeIdx: intake.bandIdx,
     intakeSources: intake.partners,
+    reachTargetIdx,
+    reachSourceIdx,
     bounds: allCells.length > 0 ? tubeBounds(allCells) : EMPTY_GEOMETRY_BOUNDS,
   };
 }
@@ -351,12 +379,16 @@ function accepts(instance: TubeInstance, specId: number): boolean {
  *    corner: the three lanes fan around the inside of a bend at different
  *    rates and re-converge, with no per-segment bookkeeping.
  * 3. *Intake.* Anything sitting in a mouth aperture cell is drawn into an
- *    empty band cell behind it. That is the entire suction model -- the tube
- *    takes what arrives at its mouth and reaches for nothing. Matter it
- *    won't accept simply falls past, because nothing is holding it there.
+ *    empty band cell behind it, and anything one cell beyond an empty
+ *    aperture cell is first drawn into the aperture (same tick, so a single
+ *    pixel passing just short of the mouth still gets taken). That one cell
+ *    is the whole of the reach: matter the tube won't accept, or that it
+ *    can't fit, simply falls past, since nothing holds anything in place --
+ *    which is what the old multi-cell suction cone got wrong (see the module
+ *    comment).
  */
 function stepOneTube(grid: SimGrid, instance: TubeInstance): void {
-  const { lumenIdx, advanceOrder, downhillIdx, dischargeIdx, dischargeTargets, intakeIdx, intakeSources } = instance.geometry;
+  const { lumenIdx, advanceOrder, downhillIdx, dischargeIdx, dischargeTargets, intakeIdx, intakeSources, reachTargetIdx, reachSourceIdx } = instance.geometry;
   if (lumenIdx.length === 0) return;
   // Re-checked every tick, not just at placement: a wall painted across the
   // channel (or a scenario's own walls, which the compositor doesn't own)
@@ -384,6 +416,18 @@ function stepOneTube(grid: SimGrid, instance: TubeInstance): void {
       grid.swap(from, to);
       break;
     }
+  }
+
+  // Reach: pull into the mouth's own aperture cells from one step further
+  // out, before intake runs, so something drawn in here rides on into the
+  // channel in the same tick rather than getting a chance to fall away again.
+  for (let k = 0; k < reachTargetIdx.length; k++) {
+    const to = reachTargetIdx[k] as number;
+    const from = reachSourceIdx[k] as number;
+    if (!grid.isEmptyAt(to) || grid.isEmptyAt(from)) continue;
+    if ((grid.tubeMask[from] as TubeMaskValue) !== TubeMaskValue.None) continue; // don't steal another tube's cargo
+    if (!accepts(instance, grid.specId[from] as number)) continue;
+    grid.swap(from, to);
   }
 
   for (let k = 0; k < intakeIdx.length; k++) {

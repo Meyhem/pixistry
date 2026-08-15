@@ -219,12 +219,38 @@ describe('stepTubes: intake', () => {
     expect(occupiedDistances(grid, instance).length).toBe(1);
   });
 
-  it('reaches for nothing beyond the mouth -- one cell further out is untouched', () => {
-    // The whole point of dropping the suction cone: the tube takes what
-    // arrives at it, and everything else obeys ordinary gravity.
+  it('reaches one cell past its aperture and takes that too, in a single tick', () => {
+    // Mouth cell x=20, aperture x=18, so x=17 is the one cell of reach.
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);
-    const beyond = grid.index(17, 20); // two cells out from the mouth at x=20, aperture at x=19
+    const beyond = grid.index(17, 20);
+    grid.setAt(beyond, SpeciesId.H2O, PhaseCode.Liquid, 0);
+
+    stepTubes(grid, [instance]);
+
+    // Reach and intake both run this tick: it's already in the channel, not
+    // parked in the aperture waiting for the next one.
+    expect(grid.isEmptyAt(beyond)).toBe(true);
+    expect(occupiedDistances(grid, instance).length).toBe(1);
+  });
+
+  it('reaches exactly one cell -- two cells past the aperture is untouched', () => {
+    // The reach is a nudge, not the old suction cone: past that, matter
+    // obeys ordinary gravity and the tube takes only what arrives.
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT);
+    const farther = grid.index(16, 20);
+    grid.setAt(farther, SpeciesId.H2O, PhaseCode.Liquid, 0);
+
+    for (let t = 0; t < 10; t++) stepTubes(grid, [instance]);
+
+    expect(grid.specId[farther]).toBe(SpeciesId.H2O);
+  });
+
+  it('does not reach for a species outside its filter', () => {
+    const grid = new SimGrid(100, 100);
+    const instance = place(grid, STRAIGHT, { filter: new Set([SpeciesId.NaCl]) });
+    const beyond = grid.index(17, 20);
     grid.setAt(beyond, SpeciesId.H2O, PhaseCode.Liquid, 0);
 
     for (let t = 0; t < 10; t++) stepTubes(grid, [instance]);

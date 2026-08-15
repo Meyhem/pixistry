@@ -1375,6 +1375,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     buildBenchMenu(benchMenuOverlay, benchMenuCallbacks);
   }
 
+  /** Whether the per-frame tool-settings rebuild has to stand down this tick:
+   * a live drag inside the dock, or an open species picker whose DOM the
+   * rebuild would replace (see the frame handler's call site). */
+  function frameRebuildBlocked(): boolean {
+    return ptOpen || sidePanel.contains(document.activeElement);
+  }
+
   function renderSidePanel(): void {
     const meta = describeToolMeta(tool);
     const showingVent = meta.sinkPanel === 'vent';
@@ -2401,17 +2408,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       // which kills the browser's native drag gesture on every tick -- a
       // slider could only ever be "clicked" (one input event, completing
       // before the next frame lands), never dragged.
-      if (tool?.kind === 'select-apparatus') {
-        if (!sidePanel.contains(document.activeElement)) renderSidePanel();
-      } else {
-        updateSelectionBox();
-        // The Sink tool's tally panel shows a live running count -- same
-        // "skip while a slider drag is in progress" guard as the funnel
-        // edit panel above (see its comment), so a tick landing mid-drag
-        // can't kill the browser's native drag gesture on the brush-width
-        // slider.
-        if (tool?.kind === 'sink' && !sidePanel.contains(document.activeElement)) renderSidePanel();
+      //
+      // Skipped just as hard while the species picker is open: renderSidePanel
+      // also rebuilds ptOverlay, so a per-frame call tore the modal's DOM out
+      // from under the pointer every tick -- an element or close button could
+      // be pressed but never *clicked*, since mousedown and mouseup landed on
+      // different nodes. That's what made a conveyor's or filter's
+      // "+ Add species" modal both unpickable and unclosable.
+      if (!frameRebuildBlocked()) {
+        if (tool?.kind === 'select-apparatus') renderSidePanel();
+        else if (tool?.kind === 'sink') renderSidePanel();
       }
+      if (tool?.kind !== 'select-apparatus') updateSelectionBox();
 
       if (activeScenario) {
         checkForWin(msg.objectives, msg.tick);
