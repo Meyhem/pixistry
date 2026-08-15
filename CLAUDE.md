@@ -109,8 +109,12 @@ for the multi-phase plan this is step one of, and check which phases are ticked 
 
 Two corollaries that are easy to undo by accident: apparatus is **indestructible** (the eraser takes
 matter and painted terrain only; `deleteApparatus` is the sole way something leaves the bench), and
-`stirrerMask`/`sinkMask`/`catalystStrength` are **painted terrain the compositor must never touch** — a
-stirred flask is stirred because `stepStirrers` unions its interior in, not because it marked the grid.
+`stirrerMask`/`catalystStrength` are **painted terrain the compositor must never touch** — a stirred
+flask is stirred because `stepStirrers` unions its interior in, not because it marked the grid.
+`sinkMask` used to be on that list and no longer is: Sinks and Vents became entities in phase 6e, so
+that array is compositor-derived like `tubeMask`, and anything writing it directly is a bug that a
+recomposite will silently erase. If you promote another painted array to apparatus, move it out of this
+rule in the same commit rather than quietly violating it.
 Scenario setup must place real tracked instances for the same reason: an untracked one-shot stamp vanishes
 on the first recomposite.
 

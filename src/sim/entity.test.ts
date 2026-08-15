@@ -91,6 +91,18 @@ describe('hit testing', () => {
   });
 });
 
+describe('collection ports', () => {
+  it('makes the whole visible width of a port clickable, not just its centre line', () => {
+    // A port is the one line kind that's drawn thick, so a hit test that only
+    // knew about the centre line would leave the part you can see -- and
+    // aimed at -- unclickable.
+    const { wire } = place({ kind: 'sink', x0: 20, y0: 70, x1: 40, y1: 70, width: 3 });
+
+    expect(hitTestEntities([wire], 30, 73, 2.5)?.entityId).toBe(wire.entityId);
+    expect(hitTestEntities([wire], 30, 90, 2.5)).toBeNull();
+  });
+});
+
 describe('body cells and bounds', () => {
   it("reads a tube as its channel -- what you see and aim at, not its wall ring", () => {
     const tube = place({ kind: 'tube', points: [{ x: 10, y: 10 }, { x: 30, y: 10 }], filter: null });

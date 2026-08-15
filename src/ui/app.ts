@@ -104,6 +104,8 @@ const GHOST_COLOR: Record<EntityKind, string> = {
   filter: 'rgba(140, 224, 150, 0.5)',
   radiator: 'rgba(255, 157, 92, 0.55)',
   glass: 'rgba(169, 214, 232, 0.5)',
+  sink: 'rgba(224, 72, 158, 0.5)',
+  vent: 'rgba(111, 143, 168, 0.5)',
 };
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 // How far a duplicate lands from its original, in cells -- enough that the
@@ -703,10 +705,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
   // In-progress straight-line draw (see isLineDragTool -- the Sink/Vent and
   // the Filter share it): set on pointerdown, held through the drag, and
-  // committed as one paintSinkLine/paintFilterLine message on pointerup (see
-  // the window pointerup handler below). Unlike every brush tool, these are a
-  // single free-form drag from anchor to release point, not a repeated
-  // per-move paint.
+  // committed as one 'placeEntity' message on pointerup (see the window
+  // pointerup handler below). Unlike every brush tool, these are a single
+  // free-form drag from anchor to release point, not a repeated per-move
+  // paint.
   let lineDrawStart: Point | null = null;
 
   // Label/color/palette-entry lookup for the probe, funnel field display,
@@ -747,6 +749,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         return radiatorDraft as unknown as Record<string, unknown>;
       case 'glass':
         return {};
+      // A port's only setting is its width, and before placement that's the
+      // brush-width control the tool already shows -- so there's nothing for
+      // a pre-placement pane to hold (see toolEntityKind, which keeps the
+      // Sink/Vent tool on its own counters panel).
+      case 'sink':
+      case 'vent':
+        return {};
     }
   }
 
@@ -776,6 +785,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         return { kind: 'radiator', radiationRadius: draft.radiationRadius, targetTempC: draft.targetTempC };
       case 'glass':
         return null;
+      case 'sink':
+        return { kind: 'sink', width: draft.width };
+      case 'vent':
+        return { kind: 'vent', width: draft.width };
     }
   }
 
@@ -817,6 +830,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // already applied (see glass.ts's glassPoints) -- so a duplicate of a
         // turned polygon is the shape you can see, at rotation 0.
         return { kind: 'glass', points: wire.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+      case 'sink':
+      case 'vent':
+        return { kind: wire.kind, x0: wire.x0 + dx, y0: wire.y0 + dy, x1: wire.x1 + dx, y1: wire.y1 + dy, width: wire.width };
     }
   }
 
@@ -847,6 +863,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         return { label: RADIATOR_LABEL, color: RADIATOR_COLOR };
       case 'glass':
         return { label: `${getWall(GLASS_WALL_SPEC_ID).label} (polygon)`, color: getWall(GLASS_WALL_SPEC_ID).color };
+      case 'sink':
+        return { label: SINK_LABEL, color: SINK_COLOR };
+      case 'vent':
+        return { label: VENT_LABEL, color: VENT_COLOR };
       case 'flask': {
         const draft = selection.draftOf('flask');
         return { label: flaskLabel(draft?.flaskKind ?? wire.flaskKind, draft?.stirred ?? wire.stirred), color: FLASK_COLOR };
@@ -955,7 +975,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         return { ...TOOL_META_DEFAULTS, label: SELECT_APPARATUS_LABEL, color: SELECT_APPARATUS_COLOR, category: 'TOOL', showBrushWidth: false };
       }
       const identity = entityIdentity(selected);
-      return { ...TOOL_META_DEFAULTS, label: identity.label, color: identity.color, category: 'APPARATUS', showBrushWidth: false };
+      const meta: ToolMeta = { ...TOOL_META_DEFAULTS, label: identity.label, color: identity.color, category: 'APPARATUS', showBrushWidth: false };
+      // A selected port brings its tallies with it, the same panel the
+      // Sink/Vent tool shows -- what a collection port has counted is the
+      // thing you select one to look at.
+      if (selected.kind === 'sink' || selected.kind === 'vent') meta.sinkPanel = selected.kind;
+      return meta;
     }
     const info = SIMPLE_TOOL_META[t.kind];
     return { ...TOOL_META_DEFAULTS, label: info.label, color: info.color, category: 'TOOL', eraseHint: t.kind === 'erase' };
@@ -2283,9 +2308,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           },
         });
       } else {
-        const width = wallBrushRadius(tool, brushWidth);
-        const port = tool?.kind === 'sink' ? tool.port : SinkMaskValue.Sink;
-        send({ type: 'paintSinkLine', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, width, port });
+        // A Sink and a Vent are two entity kinds over one drawing tool (see
+        // sim/sink.ts), so which one the drag places is the tool's own port
+        // setting -- everything after this point is kind-generic.
+        const kind = tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent ? 'vent' : 'sink';
+        send({
+          type: 'placeEntity',
+          entity: { kind, x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, width: wallBrushRadius(tool, brushWidth) },
+        });
       }
       lineDrawStart = null;
       updateApparatusOverlay(lastHoverX, lastHoverY);

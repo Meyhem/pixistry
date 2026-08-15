@@ -6,7 +6,9 @@
 // catches an authored-by-hand impossible level at CI time -- see
 // .grill/campaign-mode.md's §3.
 import { describe, expect, it } from 'vitest';
-import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { compositeEntities } from './entity-composite';
+import type { AnyEntity } from './entity';
+import { EMPTY, PhaseCode, SimGrid, SinkMaskValue } from './grid';
 import { REACTIONS } from './reactions';
 import { applyScenarioSetup, isFunnelSpeciesAllowed, isPaintAllowed, isToolAllowed } from './scenario';
 import { SCENARIOS, type Goal, type Scenario } from './scenario-data';
@@ -21,6 +23,35 @@ describe('applyScenarioSetup', () => {
     const scenario: Scenario = { ...SCENARIOS[0] as Scenario, setup: [] };
     applyScenarioSetup(grid, species, [], scenario);
     expect(grid.specId.every((s) => s === EMPTY)).toBe(true);
+  });
+
+  it("places a 'sink' command as a locked port entity, not a hand-written mask", () => {
+    // A scenario's collection port has to be a tracked instance for the same
+    // reason its glassware does: sinkMask is compositor-derived, so a mask
+    // written straight onto the grid here would be wiped the first time the
+    // player placed anything (see scenario.ts's applySink).
+    const grid = new SimGrid(160, 100);
+    const species = new SpeciesTable();
+    const entities: AnyEntity[] = [];
+    const scenario: Scenario = {
+      ...(SCENARIOS[0] as Scenario),
+      setup: [
+        { kind: 'sink', x0: 20, y0: 80, x1: 30, y1: 80, width: 0 },
+        { kind: 'sink', x0: 20, y0: 90, x1: 30, y1: 90, width: 0, port: SinkMaskValue.Vent },
+      ],
+    };
+    applyScenarioSetup(grid, species, entities, scenario);
+    compositeEntities(grid, species, entities);
+
+    expect(entities.map((e) => e.kind)).toEqual(['sink', 'vent']);
+    expect(entities.every((e) => e.locked)).toBe(true);
+    expect(grid.sinkMask[grid.index(25, 80)]).toBe(SinkMaskValue.Sink);
+    expect(grid.sinkMask[grid.index(25, 90)]).toBe(SinkMaskValue.Vent);
+
+    // And it survives an unrelated recomposite, which the old mask stamp
+    // would not have.
+    compositeEntities(grid, species, entities);
+    expect(grid.sinkMask[grid.index(25, 80)]).toBe(SinkMaskValue.Sink);
   });
 
   it("fills a 'rect' command's whole footprint with the given species", () => {

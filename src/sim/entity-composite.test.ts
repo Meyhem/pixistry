@@ -11,8 +11,9 @@ import { placeFilterInstance } from './filter';
 import { flaskFootprint, placeFlaskInstance } from './flask';
 import { funnelGlassCells, placeFunnelInstance } from './funnel';
 import { glassCells, placeGlassInstance } from './glass';
-import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
+import { EMPTY, PhaseCode, SimGrid, SinkMaskValue, TubeMaskValue } from './grid';
 import { placeRadiatorInstance } from './radiators';
+import { movePortInstance, placePortInstance, updatePortInstance } from './sink';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { moveTubeKnee, placeTubeInstance } from './tube';
@@ -30,6 +31,7 @@ function derivedState(grid: SimGrid): unknown[] {
     [...grid.tubeMask],
     [...grid.radiatorRadius],
     [...grid.radiatorTargetK],
+    [...grid.sinkMask],
     [...grid.entityOwner],
   ];
 }
@@ -121,12 +123,62 @@ describe('apparatus cannot damage other apparatus', () => {
   });
 });
 
+describe('collection ports', () => {
+  // Sinks and Vents were painted terrain until phase 6e of
+  // .grill/entity-overhaul.md -- a brush stroke straight into sinkMask that
+  // nothing could move or take back. These are the properties that changed.
+  it('derives a port line from its entity, tagged with the tally it feeds', () => {
+    const grid = new SimGrid(40, 40);
+    const sink = placePortInstance('sink', { x0: 5, y0: 10, x1: 9, y1: 10, width: 0 });
+    const vent = placePortInstance('vent', { x0: 5, y0: 20, x1: 9, y1: 20, width: 0 });
+
+    compositeEntities(grid, species, [sink, vent]);
+
+    expect(grid.sinkMask[grid.index(7, 10)]).toBe(SinkMaskValue.Sink);
+    expect(grid.sinkMask[grid.index(7, 20)]).toBe(SinkMaskValue.Vent);
+    // A port is a field, not matter, and claims nothing: matter falls onto it
+    // exactly as onto open ground, and it has no glass to keep provenance of.
+    expect(grid.specId[grid.index(7, 10)]).toBe(EMPTY);
+    expect(grid.entityOwner[grid.index(7, 10)]).toBe(0);
+  });
+
+  it('takes the mask back when the port moves, widens or leaves the bench', () => {
+    const grid = new SimGrid(40, 40);
+    const sink = placePortInstance('sink', { x0: 5, y0: 10, x1: 9, y1: 10, width: 0 });
+    compositeEntities(grid, species, [sink]);
+
+    movePortInstance(sink, 0, 5);
+    compositeEntities(grid, species, [sink]);
+    expect(grid.sinkMask[grid.index(7, 10)]).toBe(SinkMaskValue.None);
+    expect(grid.sinkMask[grid.index(7, 15)]).toBe(SinkMaskValue.Sink);
+
+    updatePortInstance(sink, 2);
+    compositeEntities(grid, species, [sink]);
+    expect(grid.sinkMask[grid.index(7, 16)]).toBe(SinkMaskValue.Sink);
+
+    compositeEntities(grid, species, NO_ENTITIES);
+    expect([...grid.sinkMask].every((v) => v === SinkMaskValue.None)).toBe(true);
+  });
+
+  it('wipes a hand-written mask cell -- sinkMask is derived, not painted', () => {
+    // The rule this reverses: sinkMask used to be in the compositor's
+    // hands-off list alongside stirrerMask and catalystStrength (see
+    // CLAUDE.md). Anything writing it directly now is a bug that would
+    // silently vanish on the next edit, so it fails loudly here instead.
+    const grid = new SimGrid(40, 40);
+    grid.sinkMask[grid.index(3, 5)] = SinkMaskValue.Sink;
+
+    compositeEntities(grid, species, NO_ENTITIES);
+
+    expect(grid.sinkMask[grid.index(3, 5)]).toBe(SinkMaskValue.None);
+  });
+});
+
 describe('what the compositor leaves alone', () => {
   it("never touches painted matter, painted terrain, or a vessel's contents", () => {
     const grid = new SimGrid(40, 40);
     grid.set(3, 3, SpeciesId.H2O, PhaseCode.Liquid, 12);
     grid.stirrerMask[grid.index(3, 4)] = 1;
-    grid.sinkMask[grid.index(3, 5)] = 1;
     grid.catalystStrength[grid.index(3, 6)] = 4;
     const flask = placeFlaskInstance({ x: 20, y: 30, facing: 'up', sizeScale: 1, stirred: true, flaskKind: 'beaker' });
     const inside = flaskFootprint(flask).reservoirCells[0] as { x: number; y: number };
@@ -136,7 +188,6 @@ describe('what the compositor leaves alone', () => {
 
     expect(grid.specId[grid.index(3, 3)]).toBe(SpeciesId.H2O);
     expect(grid.stirrerMask[grid.index(3, 4)]).toBe(1);
-    expect(grid.sinkMask[grid.index(3, 5)]).toBe(1);
     expect(grid.catalystStrength[grid.index(3, 6)]).toBe(4);
     expect(grid.specId[grid.index(inside.x, inside.y)]).toBe(SpeciesId.NaCl);
   });

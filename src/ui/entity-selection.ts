@@ -60,6 +60,13 @@ export interface RadiatorEditDraft {
   targetTempC: number;
 }
 
+/** A Sink's or a Vent's one editable value: how thick the line is. Both
+ * kinds share the shape, the same way their instances do (see sim/sink.ts's
+ * PortInstance). */
+export interface PortEditDraft {
+  width: number;
+}
+
 export interface FlaskEditDraft {
   facing: FlaskFacing;
   sizeScale: number;
@@ -82,7 +89,9 @@ export type EntityDraft =
   | ({ kind: 'flask' } & FlaskEditDraft)
   | ({ kind: 'filter' } & FilterEditDraft)
   | ({ kind: 'radiator' } & RadiatorEditDraft)
-  | ({ kind: 'glass' } & GlassEditDraft);
+  | ({ kind: 'glass' } & GlassEditDraft)
+  | ({ kind: 'sink' } & PortEditDraft)
+  | ({ kind: 'vent' } & PortEditDraft);
 
 type DraftOfKind<K extends EntityKind> = Extract<EntityDraft, { kind: K }>;
 type WireOfKind<K extends EntityKind> = Extract<EntityWire, { kind: K }>;
@@ -112,6 +121,10 @@ function draftFor(wire: EntityWire, fallbackTotalAmount: number): EntityDraft {
       return { kind: 'radiator', radiationRadius: wire.radiationRadius, targetTempC: wire.targetTempC };
     case 'glass':
       return { kind: 'glass', rotation: wire.rotation };
+    case 'sink':
+      return { kind: 'sink', width: wire.width };
+    case 'vent':
+      return { kind: 'vent', width: wire.width };
   }
 }
 

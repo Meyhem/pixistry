@@ -17,7 +17,7 @@ export enum TubeMaskValue {
   Lumen = 1,
 }
 
-/** What a drawn collection port on `sinkMask` does with what it eats. A Sink
+/** What a collection port on `sinkMask` does with what it eats. A Sink
  * and a Vent are deliberately the *same* primitive -- same line-draw tool,
  * same "consume whatever's resting here at end of tick" step -- differing
  * only in which tally they feed and therefore how a scenario scores them: a
@@ -68,9 +68,11 @@ export class SimGrid {
    * TubeMaskValue.None everywhere a tube isn't drawn. */
   readonly tubeMask: Uint8Array;
   /** Sink/Vent apparatus overlay -- same "fixed background field, not matter"
-   * convention as the masks above: painted once by a drawn sink or vent line
-   * (see worker.ts's 'paintSinkLine' handler), left untouched by
-   * set/clear/swap, and does NOT gate movement the way filterMask does --
+   * convention as the masks above, and derived from the placed Sink/Vent
+   * entities by the compositor exactly like tubeMask (see
+   * entity-composite.ts; ports were painted terrain until phase 6e of
+   * .grill/entity-overhaul.md). Left untouched by set/clear/swap, and does
+   * NOT gate movement the way a filter membrane does --
    * matter passes through a sink cell exactly like open ground. Consumption
    * happens once per tick, last in the tick order (see sink.ts's stepSinks
    * and worker.ts's runOneTick): any non-empty, non-wall cell still sitting

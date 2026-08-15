@@ -5,7 +5,7 @@
 // .grill/entity-overhaul.md): every apparatus bug this project has had was a
 // cross-interaction between two kinds -- a beaker and a tube, a knee drag and
 // a degenerate shape -- which is exactly what a per-kind unit test can't see
-// and a random bench of all six kinds hits within a few hundred operations.
+// and a random bench of all eight kinds hits within a few hundred operations.
 // When a new entity bug turns up in play, the fix lands with a new op or a new
 // invariant here, not just a targeted unit test.
 //
@@ -27,7 +27,7 @@ import {
   rotateEntityTo,
   type AnyEntity,
 } from './entity';
-import { SimGrid, TubeMaskValue } from './grid';
+import { SimGrid, SinkMaskValue, TubeMaskValue } from './grid';
 import type { PlaceEntityWire } from './protocol';
 import { mulberry32 } from './rng';
 import { SpeciesTable } from './species';
@@ -56,10 +56,10 @@ function checkInvariants(grid: SimGrid, bench: AnyEntity[], what: string): void 
   // 1. Idempotence: compositing again changes nothing. This is the
   //    load-bearing one -- if it holds, "mutate the instance and
   //    recomposite" is always safe, whatever the edit was.
-  const before = [grid.specId.slice(), grid.tubeMask.slice(), grid.entityOwner.slice()];
+  const before = [grid.specId.slice(), grid.tubeMask.slice(), grid.sinkMask.slice(), grid.entityOwner.slice()];
   compositeEntities(grid, species, bench);
-  const after = [grid.specId, grid.tubeMask, grid.entityOwner];
-  const names = ['specId', 'tubeMask', 'entityOwner'];
+  const after = [grid.specId, grid.tubeMask, grid.sinkMask, grid.entityOwner];
+  const names = ['specId', 'tubeMask', 'sinkMask', 'entityOwner'];
   for (let a = 0; a < before.length; a++) {
     const wasArray = before[a] as ArrayLike<number>;
     const isArray = after[a] as ArrayLike<number>;
@@ -74,12 +74,14 @@ function checkInvariants(grid: SimGrid, bench: AnyEntity[], what: string): void 
   const filterIds = new Set(bench.filter((e) => e.kind === 'filter').map((e) => e.entityId));
   const ownableByOwner = new Map<number, Set<number>>();
   const lumen = new Set<number>();
+  const portCells = new Set<number>();
   for (const { entityId, footprint } of entityFootprints(bench)) {
     const ownable = new Set<number>();
     for (const cell of footprint.wall ?? []) if (grid.inBounds(cell.x, cell.y)) ownable.add(grid.index(cell.x, cell.y));
     for (const cell of footprint.membrane ?? []) if (grid.inBounds(cell.x, cell.y)) ownable.add(grid.index(cell.x, cell.y));
     ownableByOwner.set(entityId, ownable);
     for (const cell of footprint.lumen ?? []) if (grid.inBounds(cell.x, cell.y)) lumen.add(grid.index(cell.x, cell.y));
+    for (const cell of footprint.port?.cells ?? []) if (grid.inBounds(cell.x, cell.y)) portCells.add(grid.index(cell.x, cell.y));
   }
 
   for (let i = 0; i < grid.entityOwner.length; i++) {
@@ -109,7 +111,14 @@ function checkInvariants(grid: SimGrid, bench: AnyEntity[], what: string): void 
       if (isWallSpecId(grid.specId[i] as number)) fail('lumen plugged with wall matter', i);
     }
 
-    // 5. Nothing left behind: glass on an unowned cell would be the player's
+    // 5. No orphan port: a masked cell always belongs to a live Sink or
+    //    Vent. An orphan would be an invisible drain eating whatever fell on
+    //    it, belonging to a port that isn't on the bench -- the sinkMask
+    //    version of the orphan lumen above, and the reason sinkMask stopped
+    //    being painted terrain (see entity-composite.ts).
+    if ((grid.sinkMask[i] as SinkMaskValue) !== SinkMaskValue.None && !portCells.has(i)) fail('orphan port mask', i);
+
+    // 6. Nothing left behind: glass on an unowned cell would be the player's
     //    paint, and this fuzz never paints -- so any is an entity's leak.
     if (grid.specId[i] === GLASS_WALL_SPEC_ID && owner === 0) fail('orphan glass with no owner', i);
   }
@@ -192,6 +201,21 @@ describe('entity fuzz', () => {
               { x: x + 2 + coord(9), y: y + 2 + coord(9) },
             ],
           });
+        },
+      },
+      {
+        name: 'place sink',
+        run: () => place({ kind: 'sink', x0: coord(WIDTH), y0: coord(HEIGHT), x1: coord(WIDTH), y1: coord(HEIGHT), width: coord(4) }),
+      },
+      {
+        name: 'place vent',
+        run: () => place({ kind: 'vent', x0: coord(WIDTH), y0: coord(HEIGHT), x1: coord(WIDTH), y1: coord(HEIGHT), width: coord(4) }),
+      },
+      {
+        name: 'widen a port',
+        run: () => {
+          const port = pick(rng() < 0.5 ? 'sink' : 'vent');
+          if (port?.kind === 'sink' || port?.kind === 'vent') applyEntitySettings(port, { kind: port.kind, width: coord(10) - 2 });
         },
       },
       {

@@ -12,7 +12,7 @@ import type { AnyEntity } from './entity';
 import { placeFlaskInstance } from './flask';
 import { placeFunnelInstance, setFunnelEnabledInstance } from './funnel';
 import { placeRadiatorInstance } from './radiators';
-import { sinkLineCells } from './sink';
+import { placePortInstance, sinkLineCells } from './sink';
 import type { SpeciesTable } from './species';
 import type { Restrictions, Scenario, SetupCommand, ToolKind } from './scenario-data';
 import { wallList, type WallKind } from './walls';
@@ -137,12 +137,12 @@ function applyRadiator(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind:
  * draws their own sink with the Sink tool), a puzzle scenario that only
  * grants the Tube tool (see the 'rube-goldberg' scenario) needs its
  * destination already marked, since the player has no way to place one
- * themselves. Reuses the same sinkLineCells Bresenham applyWallLine does. */
-function applySink(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'sink' }>): void {
-  const port = cmd.port ?? SinkMaskValue.Sink;
-  for (const { x, y } of sinkLineCells(cmd.x0, cmd.y0, cmd.x1, cmd.y1, cmd.width)) {
-    if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = port;
-  }
+ * themselves. A tracked locked instance, for the same reason applyFlask's
+ * vessels are: grid.sinkMask is compositor-derived now, so a mask written
+ * here by hand would be wiped the first time anything recomposited. */
+function applySink(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'sink' }>): void {
+  const kind = (cmd.port ?? SinkMaskValue.Sink) === SinkMaskValue.Vent ? 'vent' : 'sink';
+  entities.push(lock(placePortInstance(kind, { x0: cmd.x0, y0: cmd.y0, x1: cmd.x1, y1: cmd.y1, width: cmd.width })));
 }
 
 /** A pre-painted catalyst pad, same as the interactive Catalyst tool's
@@ -187,7 +187,7 @@ export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, entitie
         applyRadiator(entities, cmd);
         break;
       case 'sink':
-        applySink(grid, cmd);
+        applySink(entities, cmd);
         break;
       case 'catalyst':
         applyCatalyst(grid, cmd);

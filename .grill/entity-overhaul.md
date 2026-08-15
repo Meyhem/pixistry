@@ -333,18 +333,27 @@ monotonicity); extend the fuzz suite with tube ops.
   array over; `paintSinkLine` → `placeEntity`; they gain select/move/end-drag/delete. Counters stay
   global (per-sink tallies become possible later).
 
-  **Not done -- the one item left, and bigger than its bullet suggests.** Two kinds is `EntityKind`
-  going from 6 to 8, and phases 3a/3b/4 deliberately made every per-kind switch *exhaustive*
-  (`ENTITY_DEFS`, the protocol's three payload unions, `entityIdentity`, `toolEntityKind`,
-  `placementDraft`, `entitySettingsFromDraft`, `duplicatePayload`, the UI's ghost-colour record). That
-  exhaustiveness is the point -- the compiler names every site -- but it does mean 6e is a wide change
-  rather than a narrow one, on the order of 3a.
+  **Landed.** The two kinds share one registry row (`portDef`), because a Sink and a Vent differ in
+  exactly one expression -- which `SinkMaskValue` they stamp -- and writing the row twice would be two
+  chances for them to drift apart on a detail neither has a reason to differ on. The predicted width
+  was real but cheaper than feared: the exhaustive switches each took one or two lines, and the
+  compiler did name every one.
 
-  It also **changes a standing rule**: `sinkMask` becomes compositor-derived, where CLAUDE.md
-  currently says the compositor must never touch it. That rule was written *for* the painted-terrain
-  arrays in phase 1; promoting sinks to entities is exactly the case it wasn't written for, so the
-  rule needs editing in the same commit, not quietly violated. Worth doing deliberately with a fresh
-  context rather than tacked onto the end of a long session.
+  Three things the bullet didn't anticipate. **The eraser stopped clearing `sinkMask`** -- it had to,
+  since a derived array can't be edited in place (the next recomposite would put the port straight
+  back), and that makes ports indestructible like every other apparatus, reached only by Delete.
+  **`Footprint` gained a `port` role that deliberately does not claim the cell**: ownership is how
+  glass provenance is tracked, and a port has no glass, blocks nothing, and would only get in the way
+  of the stale-glass pass. **Hit-testing had to account for the line's own thickness** -- ports are the
+  one line kind drawn wide, so the centre-line test every other line kind uses would have left the
+  visible part of a wide port unclickable.
+
+  Width is the only setting, clamped in `sink.ts` rather than trusted from the message: a negative
+  width makes the thickening loop produce no cells at all, i.e. a port that looks placed and eats
+  nothing. Selecting a port shows the tallies panel alongside it, since what a collection port has
+  counted is the reason you'd select one. Scenario `sink` setup commands place locked instances now,
+  like the flasks and funnels before them.
+
 - **6f Selected-entity overlays:** flow-direction arrows along a selected tube; the allow-list as
   species chips beside a selected filter; a reach circle for a selected radiator.
 
@@ -401,5 +410,5 @@ monotonicity); extend the fuzz suite with tube ops.
 - [x] Phase 6d: locked scenario entities -- refused by the worker on every edit path, read-only panel
 - [x] Phase 6f: selected-entity overlays -- tube flow chevrons, radiator reach ring, filter allow-list
       swatches
-- [ ] Phase 6e: sink/vent as line entities (the last item; note it makes `sinkMask` compositor-derived,
-      which today's CLAUDE.md rule explicitly forbids -- that rule has to change with it)
+- [x] Phase 6e: sink/vent as line entities; `sinkMask` compositor-derived and the CLAUDE.md rule
+      rewritten in the same commit

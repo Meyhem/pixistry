@@ -63,10 +63,10 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   differ from a species' `phaseAtSTP` once a cell has been heated or cooled, and both movement and
   conduction read/write it directly rather than re-deriving it from the species table each time. There is
   no pressure/mole-count field: a gas cell is just a cell with `PhaseCode.Gas`, same as any other phase.
-  Alongside those three, a set of overlay arrays: `radiatorRadius`/`radiatorTargetK`, `tubeMask` and
-  `entityOwner` are all *derived* from the apparatus entity list (see
-  `entity-composite.ts`), while `stirrerMask`, `sinkMask` and `catalystStrength` are painted terrain the
-  player owns and nothing derives. There is no per-cell filter array: a membrane cell is simply a cell
+  Alongside those three, a set of overlay arrays: `radiatorRadius`/`radiatorTargetK`, `tubeMask`,
+  `sinkMask` and `entityOwner` are all *derived* from the apparatus entity list (see
+  `entity-composite.ts`), while `stirrerMask` and `catalystStrength` are painted terrain the player owns
+  and nothing derives. There is no per-cell filter array: a membrane cell is simply a cell
   whose `entityOwner` names a filter entity (see `filter.ts`).
 - **`entity.ts`** / **`entity-id.ts`** — the one entity vocabulary. Every apparatus kind (funnel, tube,
   flask, filter, radiator, glass polygon) carries a `kind` discriminant, `AnyEntity` is their union, and
@@ -276,8 +276,8 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   the list; nothing else writes apparatus state. Apparatus is indestructible: `erase` takes matter and
   painted terrain only (it skips any cell an entity owns), and the sole way something leaves the bench is
   `deleteEntity`, which the Select tool sends from its Delete key or its panel button. Scenario setup
-  places real tracked flasks/funnels/radiators into the same list for the same reason — an untracked
-  one-shot stamp would vanish on the first recomposite.
+  places real tracked flasks/funnels/radiators/ports into the same list for the same reason — an
+  untracked one-shot stamp would vanish on the first recomposite.
   M4 adds: `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x —
   implemented as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling
   `TICK_MS`, which would make the swap-probability-per-tick physics run at different real rates instead of

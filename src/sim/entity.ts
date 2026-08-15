@@ -11,10 +11,22 @@
 // means: give its instance type a `kind` discriminant, add its wire/payload
 // shapes to protocol.ts's unions, and fill in one row here -- no new
 // messages, no new selection code, no compositor changes.
-import type { SimGrid } from './grid';
+import type { SimGrid, SinkMaskValue } from './grid';
 import { FLASK_FACINGS, MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE, flaskShapeFor } from './flask-shapes';
 import { FUNNEL_FACINGS, funnelShapeFor } from './apparatus-shapes';
-import { sinkLineCells } from './sink';
+import {
+  MAX_PORT_WIDTH,
+  MIN_PORT_WIDTH,
+  movePortEndpoint,
+  movePortInstance,
+  placePortInstance,
+  portLineCells,
+  portMaskValue,
+  sinkLineCells,
+  updatePortInstance,
+  type SinkInstance,
+  type VentInstance,
+} from './sink';
 import { glassChainCells } from './glass';
 import { lumenBand, pointSegmentDistance, polylineToLumenPath } from './tube-shapes';
 import { celsiusToKelvin, kelvinToCelsius } from './heat';
@@ -53,13 +65,15 @@ import type {
   GlassWire,
   PlaceEntityWire,
   RadiatorWire,
+  SinkWire,
   TubeWire,
+  VentWire,
 } from './protocol';
 import type { Point } from './tube-shapes';
 
 export type { EntityKind } from './protocol';
 
-export type AnyEntity = FunnelInstance | TubeInstance | FlaskInstance | FilterInstance | RadiatorInstance | GlassInstance;
+export type AnyEntity = FunnelInstance | TubeInstance | FlaskInstance | FilterInstance | RadiatorInstance | GlassInstance | SinkInstance | VentInstance;
 
 /** What one entity puts on the grid -- the compositor (entity-composite.ts)
  * derives ALL apparatus grid state from these, so a kind's footprint is its
@@ -78,6 +92,12 @@ export interface Footprint {
   readonly membrane?: readonly Point[];
   /** Cells that radiate, and how far/toward what (see radiators.ts). */
   readonly radiator?: { readonly cells: readonly Point[]; readonly radius: number; readonly targetK: number };
+  /** Collection-port cells (sinkMask), and which tally they feed. Does NOT
+   * claim the cell: a port doesn't block or own anything, it just eats what
+   * comes to rest on it, so ownership -- which is how glass provenance is
+   * tracked -- would only get in the way (see the compositor's membrane
+   * pass for what claiming a cell you don't own costs). */
+  readonly port?: { readonly cells: readonly Point[]; readonly value: SinkMaskValue.Sink | SinkMaskValue.Vent };
 }
 
 /** A draggable point on a placed entity: a tube knee, a line end, a glass
@@ -146,6 +166,8 @@ interface EntityOfKind {
   filter: FilterInstance;
   radiator: RadiatorInstance;
   glass: GlassInstance;
+  sink: SinkInstance;
+  vent: VentInstance;
 }
 
 interface WireOfKind {
@@ -155,6 +177,8 @@ interface WireOfKind {
   filter: FilterWire;
   radiator: RadiatorWire;
   glass: GlassWire;
+  sink: SinkWire;
+  vent: VentWire;
 }
 
 type PlaceOfKind = { [K in EntityKind]: Extract<PlaceEntityWire, { kind: K }> };
@@ -287,6 +311,55 @@ function boxDistance(bounds: EntityBounds | null, p: Point): number | null {
 
 function offsetCells(cells: readonly { dx: number; dy: number }[], x: number, y: number): Point[] {
   return cells.map((c) => ({ x: x + c.dx, y: y + c.dy }));
+}
+
+/** One registry row for both collection-port kinds. A Sink and a Vent are the
+ * same entity in every respect the registry cares about -- same geometry,
+ * same handles, same settings, same footprint role -- and differ only in the
+ * SinkMaskValue they stamp, so writing the row twice would be two chances for
+ * the two to drift apart on some detail neither kind has a reason to differ
+ * on. `kind` is threaded through as a type parameter, so each call still
+ * yields a row fully checked against that kind's own wire and payload
+ * shapes. */
+function portDef<K extends 'sink' | 'vent'>(kind: K, label: string): EntityDef<K> {
+  return {
+    footprintOf: (port) => ({ port: { cells: portLineCells(port), value: portMaskValue(kind) } }),
+    handlesOf: (wire) => lineHandles(wire),
+    bodyCells: (wire) => sinkLineCells(wire.x0, wire.y0, wire.x1, wire.y1, wire.width),
+    // The line's own thickness widens the grab area: a hit test that only
+    // knew about the centre line would leave the outer cells of a wide port
+    // -- the part you can actually see -- unclickable.
+    bodyDistance: (wire, p) => {
+      const dist = pointSegmentDistance(p, { x: wire.x0, y: wire.y0 }, { x: wire.x1, y: wire.y1 });
+      return dist <= LINE_HIT_RADIUS + wire.width ? dist : null;
+    },
+    boundsOf: (wire) => boundsOfCells(sinkLineCells(wire.x0, wire.y0, wire.x1, wire.y1, wire.width)),
+    dragHandle: (_grid, port, handleId, x, y) => movePortEndpoint(port, handleId === 0 ? 0 : 1, x, y),
+    move: (_grid, port, dx, dy) => movePortInstance(port, dx, dy),
+    // The two casts are the price of writing one row for two kinds: `kind`
+    // is a type parameter here, so TS can't see that the sink branch really
+    // does produce a SinkInstance/SinkWire and the vent branch a
+    // Vent one. Both objects are built from `kind` itself, so there's no way
+    // for them to disagree with it at runtime.
+    place: (_grid, params) => placePortInstance(kind, params) as unknown as EntityOfKind[K],
+    toWire: (port) =>
+      ({
+        kind,
+        entityId: port.entityId,
+        ...(port.locked ? { locked: true } : {}),
+        x0: port.x0,
+        y0: port.y0,
+        x1: port.x1,
+        y1: port.y1,
+        width: port.width,
+      }) as WireOfKind[K],
+    settingsSchema: () => [{ field: 'slider', key: 'width', label: 'Width', min: MIN_PORT_WIDTH, max: MAX_PORT_WIDTH, step: 1, format: 'plain' }],
+    panelHint: (mode) =>
+      mode === 'config'
+        ? `Drag from one end to the other to draw a ${label} line, as thick as the brush width. Anything resting on it at the end of a tick is counted and removed -- it doesn't block movement or push matter around, so pixels fall onto it exactly as they would onto open ground.`
+        : `Drag the line to slide it, or drag either end to re-aim it; Width thickens it in place. The tallies above count every ${label} on the bench together, not just this one. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.`,
+    applySettings: (port, settings) => updatePortInstance(port, settings.width),
+  };
 }
 
 export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
@@ -572,6 +645,8 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
         ? 'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.'
         : "Drag any wall to slide the whole shape, drag a corner to reshape it, or rotate it with the scroll wheel over the grid (45-degree steps about its own middle). Whatever it was holding stays where it is, so a big turn can leave contents outside the new outline. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
   },
+  sink: portDef('sink', 'sink'),
+  vent: portDef('vent', 'vent'),
 };
 
 /** The typed dispatchers below are the only place the per-kind types are

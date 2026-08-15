@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EMPTY, PhaseCode, SimGrid, SinkMaskValue } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
-import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
+import { MAX_PORT_WIDTH, placePortInstance, portLineCells, portMaskValue, recordSinkHistory, SinkCounter, sinkLineCells, stepSinks, updatePortInstance } from './sink';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID, wallThermalProfile, getWall } from './walls';
 import { SpeciesTable } from './species';
@@ -220,5 +220,27 @@ describe('recordSinkHistory', () => {
     expect(counter.history).toHaveLength(1);
     counter.reset();
     expect(counter.history).toHaveLength(0);
+  });
+});
+
+describe('port instances', () => {
+  it('gives a Sink and a Vent identical geometry and different tallies', () => {
+    const sink = placePortInstance('sink', { x0: 2, y0: 2, x1: 6, y1: 2, width: 1 });
+    const vent = placePortInstance('vent', { x0: 2, y0: 2, x1: 6, y1: 2, width: 1 });
+
+    expect(portLineCells(vent)).toEqual(portLineCells(sink));
+    expect(portMaskValue(sink.kind)).toBe(SinkMaskValue.Sink);
+    expect(portMaskValue(vent.kind)).toBe(SinkMaskValue.Vent);
+  });
+
+  it('clamps width, so no message can make a port stamp nothing or swallow the bench', () => {
+    // A negative width makes sinkLineCells' thickening loop produce no cells
+    // at all -- a port that eats nothing while still looking placed.
+    const port = placePortInstance('sink', { x0: 5, y0: 5, x1: 5, y1: 5, width: -3 });
+    expect(port.width).toBe(0);
+    expect(portLineCells(port)).toHaveLength(1);
+
+    updatePortInstance(port, 9999);
+    expect(port.width).toBe(MAX_PORT_WIDTH);
   });
 });

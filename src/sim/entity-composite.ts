@@ -18,11 +18,13 @@
 // Deriving instead of patching makes those unrepresentable: B's cells are
 // recomputed from B, so nothing A does can damage them.
 //
-// What the compositor does NOT touch: painted terrain. stirrerMask, sinkMask
-// and catalystStrength are brush strokes the player owns, not apparatus
-// output, and matter (anything that isn't glass on a cell an entity claims)
-// is never cleared -- a vessel's contents survive the vessel being resized,
-// moved or deleted.
+// What the compositor does NOT touch: painted terrain. stirrerMask and
+// catalystStrength are brush strokes the player owns, not apparatus output,
+// and matter (anything that isn't glass on a cell an entity claims) is never
+// cleared -- a vessel's contents survive the vessel being resized, moved or
+// deleted. sinkMask used to be in that list; it isn't since Sinks and Vents
+// became entities (phase 6e of .grill/entity-overhaul.md), and it's derived
+// here like every other apparatus array.
 import { PhaseCode, TubeMaskValue, type SimGrid } from './grid';
 import { footprintOfEntity, type AnyEntity, type Footprint } from './entity';
 import { glassWallEnergyAtAmbient } from './heat';
@@ -59,6 +61,7 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, entities
   grid.tubeMask.fill(0);
   grid.radiatorRadius.fill(0);
   grid.radiatorTargetK.fill(0);
+  grid.sinkMask.fill(0);
 
   // Glass matter can't be wiped that way: it lives in specId alongside the
   // player's own walls. Instead, remember who owned what, hand ownership back
@@ -102,6 +105,14 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, entities
       // Deferred to the tail of the composite (after boring and stale-glass
       // cleanup) -- see below for why a membrane can't claim mid-pass.
       membraneCells.push({ entityId, cells });
+    }
+    const port = footprint.port;
+    if (port) {
+      for (const cell of port.cells) {
+        const i = indexOf(grid, cell);
+        if (i === null) continue;
+        grid.sinkMask[i] = port.value;
+      }
     }
     const radiator = footprint.radiator;
     if (radiator) {

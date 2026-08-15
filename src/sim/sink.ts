@@ -1,11 +1,17 @@
-// The Sink apparatus: a player-drawn straight line (grid.sinkMask overlay,
-// same "fixed background field, not matter" convention as filterMask/
-// stirrerMask/tubeMask -- see grid.ts) that consumes any non-wall matter
-// resting on it and tallies it into one global per-species counter. This is
-// the counting/objective primitive campaign scenarios will build on (see
-// .grill/campaign-mode.md) -- this first pass ships it to sandbox standalone,
-// since "how much have I made" is a fun toy on its own with no campaign code
-// at all.
+// The Sink apparatus: a placed straight line (grid.sinkMask overlay, same
+// "fixed background field, not matter" convention as stirrerMask/tubeMask --
+// see grid.ts) that consumes any non-wall matter resting on it and tallies it
+// into one global per-species counter. This is the counting/objective
+// primitive campaign scenarios build on (see .grill/campaign-mode.md).
+//
+// A Sink and a Vent are two entity kinds over one instance shape (see
+// PortInstance): identical geometry and identical consumption, differing only
+// in which tally they feed. They were painted terrain until phase 6e of
+// .grill/entity-overhaul.md -- a brush stroke straight into grid.sinkMask,
+// with no way to move, re-aim or remove one short of the eraser. They're
+// entities now, so sinkMask is compositor-derived like every other apparatus
+// array and a drawn port can be picked up with the Select tool.
+import { nextEntityId } from './entity-id';
 import { SinkMaskValue, type SimGrid } from './grid';
 import type { GoalHistoryEntry } from './objectives';
 import { SPECIES } from './species-data';
@@ -83,6 +89,101 @@ export function sinkLineCells(x0: number, y0: number, x1: number, y1: number, wi
     }
   }
   return out;
+}
+
+/** How wide a port line can be drawn or stretched to, in the same "0 = the
+ * bare 1px line" sense as sinkLineCells' width (and radiators.ts's). The
+ * ceiling is the brush-width ceiling the drawing tool already had -- this
+ * just gives the edit panel the same range. */
+export const MIN_PORT_WIDTH = 0;
+export const MAX_PORT_WIDTH = 8;
+
+/** What a Sink and a Vent both are: a line with a width. The two kinds carry
+ * no different fields at all -- they diverge only at portMaskValue, i.e. in
+ * which tally stepSinks feeds -- but they stay separate `kind`s rather than
+ * one kind with a `port` field so that everything generic about entities (the
+ * registry row, the tool that places one, the label on the HUD chip) can tell
+ * them apart the way it tells any two kinds apart. */
+interface PortFields {
+  /** Set on apparatus a scenario placed as fixed bench furniture -- see
+   * FilterInstance's own `locked`. */
+  readonly locked?: boolean;
+  /** Placement order across every apparatus kind -- see entity-id.ts. */
+  readonly entityId: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** Thickness, as sinkLineCells' `width` (0 = one cell wide). */
+  width: number;
+}
+
+export interface SinkInstance extends PortFields {
+  readonly kind: 'sink';
+}
+
+export interface VentInstance extends PortFields {
+  readonly kind: 'vent';
+}
+
+export type PortInstance = SinkInstance | VentInstance;
+
+/** Which SinkMaskValue a kind stamps -- the entire behavioural difference
+ * between the two kinds, in one function. */
+export function portMaskValue(kind: PortInstance['kind']): SinkMaskValue.Sink | SinkMaskValue.Vent {
+  return kind === 'vent' ? SinkMaskValue.Vent : SinkMaskValue.Sink;
+}
+
+/** The cells a port covers -- its own line, thickened by its own width. What
+ * the compositor stamps into sinkMask, and what the UI draws as its body. */
+export function portLineCells(port: PortInstance): Point[] {
+  return sinkLineCells(port.x0, port.y0, port.x1, port.y1, port.width);
+}
+
+export function placePortInstance<K extends PortInstance['kind']>(
+  kind: K,
+  params: { x0: number; y0: number; x1: number; y1: number; width: number },
+): Extract<PortInstance, { kind: K }> {
+  return {
+    kind,
+    entityId: nextEntityId(),
+    x0: params.x0,
+    y0: params.y0,
+    x1: params.x1,
+    y1: params.y1,
+    width: clampPortWidth(params.width),
+  } as Extract<PortInstance, { kind: K }>;
+}
+
+export function movePortInstance(port: PortInstance, dx: number, dy: number): void {
+  port.x0 += dx;
+  port.y0 += dy;
+  port.x1 += dx;
+  port.y1 += dy;
+}
+
+/** Drags one end of the line, leaving the other where it is -- the same
+ * reshaping a filter or radiator line has (see moveFilterEndpoint). */
+export function movePortEndpoint(port: PortInstance, endIndex: 0 | 1, x: number, y: number): void {
+  if (endIndex === 0) {
+    port.x0 = x;
+    port.y0 = y;
+  } else {
+    port.x1 = x;
+    port.y1 = y;
+  }
+}
+
+export function updatePortInstance(port: PortInstance, width: number): void {
+  port.width = clampPortWidth(width);
+}
+
+/** Guards the one field a port has against a hostile or stale message: a
+ * negative width would make sinkLineCells' thickening loop stamp nothing (so
+ * a port that eats nothing), and an unbounded one would stamp a disc the size
+ * of the bench. */
+function clampPortWidth(width: number): number {
+  return Math.max(MIN_PORT_WIDTH, Math.min(MAX_PORT_WIDTH, Math.round(width)));
 }
 
 /** One global counter shared by every sink line on the grid (per the

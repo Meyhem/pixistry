@@ -16,7 +16,7 @@
 // (place/move/dragHandle/rotate/updateSettings/action/delete), dispatched
 // through entity.ts's ENTITY_DEFS -- there are no per-kind message handlers
 // or per-kind instance arrays here anymore.
-import { SimGrid, SinkMaskValue } from './grid';
+import { SimGrid } from './grid';
 import { compositeEntities } from './entity-composite';
 import {
   applyEntityAction,
@@ -51,7 +51,7 @@ import { stepReactions } from './react';
 import { mulberry32 } from './rng';
 import { applyScenarioSetup, isFunnelSpeciesAllowed, isPaintAllowed, isToolAllowed } from './scenario';
 import type { Restrictions, Scenario } from './scenario-data';
-import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
+import { recordSinkHistory, SinkCounter, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { reseedEntityIds } from './entity-id';
@@ -375,7 +375,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         // protected.
         if (!(grid.entityOwner[idx] !== 0 && isWallSpecId(grid.specId[idx] as number))) grid.clearAt(idx);
         grid.stirrerMask[idx] = 0;
-        grid.sinkMask[idx] = 0;
         grid.catalystStrength[idx] = 0;
       });
       break;
@@ -462,12 +461,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       if (grabState) {
         grabDrop(grid, grabState);
         grabState = null;
-      }
-      break;
-    case 'paintSinkLine':
-      if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;
-      for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
-        if (grid.inBounds(x, y)) grid.sinkMask[grid.index(x, y)] = msg.port;
       }
       break;
     case 'resetSinkCounts':

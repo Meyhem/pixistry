@@ -15,7 +15,6 @@
 // registry without touching the message set at all.
 import type { FunnelFacing } from './apparatus-shapes';
 import type { FlaskFacing, FlaskKind } from './flask-shapes';
-import type { SinkMaskValue } from './grid';
 import type { GoalProgress } from './objectives';
 import type { Scenario } from './scenario-data';
 import type { PaletteEntry } from './species';
@@ -89,6 +88,27 @@ export interface GlassWire extends EntityWireBase {
   rotation: number;
 }
 
+/** A Sink or a Vent: the same line-with-a-width shape twice, since the two
+ * kinds differ only in which tally they feed (see sink.ts's portMaskValue). */
+export interface SinkWire extends EntityWireBase {
+  kind: 'sink';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** 0 = one cell wide (see sink.ts's sinkLineCells). */
+  width: number;
+}
+
+export interface VentWire extends EntityWireBase {
+  kind: 'vent';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  width: number;
+}
+
 /** Fields every kind's wire shape carries. `locked` marks scenario bench
  * furniture the worker refuses to edit (see worker.ts's isLocked), so the UI
  * can show it read-only rather than offering controls that silently do
@@ -98,7 +118,7 @@ export interface EntityWireBase {
   locked?: boolean;
 }
 
-export type EntityWire = FunnelWire | TubeWire | FlaskWire | FilterWire | RadiatorWire | GlassWire;
+export type EntityWire = FunnelWire | TubeWire | FlaskWire | FilterWire | RadiatorWire | GlassWire | SinkWire | VentWire;
 
 export type EntityKind = EntityWire['kind'];
 
@@ -112,7 +132,9 @@ export type PlaceEntityWire =
   | { kind: 'flask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
   | { kind: 'filter'; x0: number; y0: number; x1: number; y1: number; species: number[] }
   | { kind: 'radiator'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
-  | { kind: 'glass'; points: Point[] };
+  | { kind: 'glass'; points: Point[] }
+  | { kind: 'sink'; x0: number; y0: number; x1: number; y1: number; width: number }
+  | { kind: 'vent'; x0: number; y0: number; x1: number; y1: number; width: number };
 
 /** The 'updateEntitySettings' payload: one kind's whole settings block, sent
  * complete rather than as a patch (same "settings are a snapshot" convention
@@ -125,7 +147,9 @@ export type EntitySettingsWire =
   | { kind: 'tube'; filter: number[] | null }
   | { kind: 'flask'; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
   | { kind: 'filter'; species: number[] }
-  | { kind: 'radiator'; radiationRadius: number; targetTempC: number };
+  | { kind: 'radiator'; radiationRadius: number; targetTempC: number }
+  | { kind: 'sink'; width: number }
+  | { kind: 'vent'; width: number };
 
 /** The 'entityAction' verbs -- one-shot operations that aren't settings
  * (nothing to round-trip through a draft): refill a funnel's budget, or
@@ -264,12 +288,6 @@ export type MainToWorkerMessage =
    * The UI sends it from the Select tool -- Delete/Backspace, or the edit
    * panel's Delete button. */
   | { type: 'deleteEntity'; entityId: number }
-  /** Draws a collection port line -- a Sink or a Vent, which differ only in
-   * which tally they feed (see grid.ts's SinkMaskValue). One message for
-   * both, since the drawn geometry is identical. Ports are painted terrain
-   * (a mask), not entities -- phase 6e of the overhaul plan may promote
-   * them. */
-  | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
   /** Zeroes both the sink and the vent tallies. */
   | { type: 'resetSinkCounts' }
   /** Rebuilds the world at a new grid height (the column count is fixed --
