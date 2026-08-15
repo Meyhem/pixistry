@@ -126,7 +126,16 @@ export class EntitySelection {
    * only the delta since the previous one ('moveEntity' is relative); a
    * handle drag needs no tracking, since 'dragEntityHandle' is absolute and
    * the worker re-resolves from the instance's current shape every call. */
-  private dragState: { mode: 'body'; entityId: number; lastX: number; lastY: number } | { mode: 'handle'; entityId: number; handleId: number } | null = null;
+  private dragState:
+    | { mode: 'body'; entityId: number; lastX: number; lastY: number; undoTag: string }
+    | { mode: 'handle'; entityId: number; handleId: number; undoTag: string }
+    | null = null;
+
+  /** Makes each gesture's undo tag distinct from the last one's, so two
+   * consecutive drags of the same entity rewind separately (see protocol.ts's
+   * `undoTag`). Monotonic rather than random: two tags only ever need to
+   * differ, not to mean anything. */
+  private gestureCount = 0;
 
   /** Seeds a funnel draft's Amount field when the selected funnel is set to
    * infinite supply and therefore carries no number of its own. */
@@ -152,6 +161,14 @@ export class EntitySelection {
 
   selectedKind(): EntityKind | null {
     return this.selected()?.kind ?? null;
+  }
+
+  /** Whether the selection is scenario bench furniture: selectable and
+   * inspectable, but the worker refuses every edit (see worker.ts's
+   * isLocked), so the UI shows it read-only rather than offering controls
+   * that silently do nothing. */
+  isSelectionLocked(): boolean {
+    return this.selected()?.locked === true;
   }
 
   /** The selected entity, narrowed to `kind`, or undefined if something else
@@ -191,10 +208,12 @@ export class EntitySelection {
     const hit = this.hitTest(x, y);
     this.select(hit ? hit.entityId : null);
     if (!hit) return null;
+    if (hit.locked) return hit;
+    const undoTag = `drag:${(this.gestureCount += 1)}`;
     this.dragState =
       hit.handleId === null
-        ? { mode: 'body', entityId: hit.entityId, lastX: x, lastY: y }
-        : { mode: 'handle', entityId: hit.entityId, handleId: hit.handleId };
+        ? { mode: 'body', entityId: hit.entityId, lastX: x, lastY: y, undoTag }
+        : { mode: 'handle', entityId: hit.entityId, handleId: hit.handleId, undoTag };
     return hit;
   }
 
@@ -205,14 +224,14 @@ export class EntitySelection {
     const drag = this.dragState;
     if (!drag) return null;
     if (drag.mode === 'handle') {
-      return { type: 'dragEntityHandle', entityId: drag.entityId, handleId: drag.handleId, x, y };
+      return { type: 'dragEntityHandle', entityId: drag.entityId, handleId: drag.handleId, x, y, undoTag: drag.undoTag };
     }
     const dx = x - drag.lastX;
     const dy = y - drag.lastY;
     if (dx === 0 && dy === 0) return null;
     drag.lastX = x;
     drag.lastY = y;
-    return { type: 'moveEntity', entityId: drag.entityId, dx, dy };
+    return { type: 'moveEntity', entityId: drag.entityId, dx, dy, undoTag: drag.undoTag };
   }
 
   endDrag(): void {
@@ -226,7 +245,7 @@ export class EntitySelection {
    * agree with the bench immediately rather than a tick later. */
   rotateSelection(step: 1 | -1): MainToWorkerMessage | null {
     const wire = this.selected();
-    if (!wire) return null;
+    if (!wire || wire.locked) return null;
     const current = this.draftRotation(wire) ?? entityRotation(wire);
     if (current === null) return null;
     const rotation = current + step;

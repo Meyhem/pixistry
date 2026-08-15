@@ -100,6 +100,8 @@ export interface FrameState {
   readonly sinkCounter: SinkCounter;
   readonly ventCounter: SinkCounter;
   readonly hasSnapshot: boolean;
+  readonly canUndoEntities: boolean;
+  readonly canRedoEntities: boolean;
   readonly tick: number;
   /** Pre-computed by the caller (worker.ts, via objectives.ts's
    * evaluateGoals) -- buildFrame just embeds it, since it has no scenario
@@ -142,6 +144,8 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     ventTotals: state.ventCounter.totals.slice(),
     ventGrandTotal: state.ventCounter.grandTotal,
     hasSnapshot: state.hasSnapshot,
+    canUndoEntities: state.canUndoEntities,
+    canRedoEntities: state.canRedoEntities,
     tick: state.tick,
     objectives: state.objectives,
   };

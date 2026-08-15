@@ -97,6 +97,9 @@ export interface EntityHit {
   readonly kind: EntityKind;
   /** null = the body, not a handle. */
   readonly handleId: number | null;
+  /** Scenario bench furniture: selectable, but every edit is refused (see
+   * worker.ts's isLocked), so the UI arms no drag for it. */
+  readonly locked: boolean;
 }
 
 /** One control in an entity kind's settings pane. A kind declares its fields
@@ -312,6 +315,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (funnel) => ({
       kind: 'funnel',
       entityId: funnel.entityId,
+      ...(funnel.locked ? { locked: true } : {}),
       anchorX: funnel.anchorX,
       anchorY: funnel.anchorY,
       facing: funnel.facing,
@@ -392,6 +396,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (tube) => ({
       kind: 'tube',
       entityId: tube.entityId,
+      ...(tube.locked ? { locked: true } : {}),
       points: tube.points.map((p) => ({ x: p.x, y: p.y })),
       filter: tube.filter ? [...tube.filter] : null,
     }),
@@ -428,6 +433,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (flask) => ({
       kind: 'flask',
       entityId: flask.entityId,
+      ...(flask.locked ? { locked: true } : {}),
       x: flask.x,
       y: flask.y,
       facing: flask.facing,
@@ -486,6 +492,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (filter) => ({
       kind: 'filter',
       entityId: filter.entityId,
+      ...(filter.locked ? { locked: true } : {}),
       x0: filter.x0,
       y0: filter.y0,
       x1: filter.x1,
@@ -521,6 +528,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (radiator) => ({
       kind: 'radiator',
       entityId: radiator.entityId,
+      ...(radiator.locked ? { locked: true } : {}),
       x0: radiator.x0,
       y0: radiator.y0,
       x1: radiator.x1,
@@ -552,6 +560,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
     toWire: (glass) => ({
       kind: 'glass',
       entityId: glass.entityId,
+      ...(glass.locked ? { locked: true } : {}),
       points: glassPoints(glass),
       rotation: glass.rotation,
     }),
@@ -627,7 +636,7 @@ export function hitTestEntities(entities: readonly EntityWire[], x: number, y: n
       const dist = Math.hypot(handle.x - x, handle.y - y);
       if (dist > handleRadius) continue;
       if (!bestHandle || dist < bestHandle.dist) {
-        bestHandle = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: handle.handleId }, dist };
+        bestHandle = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: handle.handleId, locked: wire.locked === true }, dist };
       }
     }
   }
@@ -641,7 +650,7 @@ export function hitTestEntities(entities: readonly EntityWire[], x: number, y: n
     const bounds = def.boundsOf(wire as never);
     const area = bounds ? (bounds.maxX - bounds.minX + 1) * (bounds.maxY - bounds.minY + 1) : Infinity;
     if (!bestBody || area < bestBody.area || (area === bestBody.area && dist < bestBody.dist)) {
-      bestBody = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: null }, area, dist };
+      bestBody = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: null, locked: wire.locked === true }, area, dist };
     }
   }
   return bestBody ? bestBody.hit : null;

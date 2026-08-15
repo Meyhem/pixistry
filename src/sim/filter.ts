@@ -21,6 +21,11 @@ export const FILTER_COLOR = '#8ce096';
 
 export interface FilterInstance {
   readonly kind: 'filter';
+  /** Set on apparatus a scenario placed as fixed bench furniture: the worker
+   * refuses to move, reshape, reconfigure or delete it, so a campaign bench
+   * can't be dismantled mid-puzzle. Undefined for anything the player
+   * placed. */
+  readonly locked?: boolean;
   /** Placement order across every apparatus kind -- see entity-id.ts. Also
    * the id movement.ts's allow-list map is keyed by, via grid.entityOwner. */
   readonly entityId: number;

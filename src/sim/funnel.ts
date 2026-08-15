@@ -21,6 +21,11 @@ export const FUNNEL_COLOR = '#a9d6e8'; // same glass tint the funnel is built fr
 
 export interface FunnelInstance {
   readonly kind: 'funnel';
+  /** Set on apparatus a scenario placed as fixed bench furniture: the worker
+   * refuses to move, reshape, reconfigure or delete it, so a campaign bench
+   * can't be dismantled mid-puzzle. Undefined for anything the player
+   * placed. */
+  readonly locked?: boolean;
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   anchorX: number;

@@ -78,8 +78,16 @@ function applyWallLine(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupC
  * placed anything. */
 function applyFlask(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
   entities.push(
-    placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, flaskKind: cmd.glassware ?? DEFAULT_FLASK_KIND }),
+    lock(placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, flaskKind: cmd.glassware ?? DEFAULT_FLASK_KIND })),
   );
+}
+
+/** Scenario apparatus is the level's own bench furniture, not the player's:
+ * locking it means a puzzle's pre-plumbed feed or its collection vessel can
+ * be selected and inspected but not dragged away, reconfigured or deleted
+ * (see worker.ts's isLocked). Everything the player places is unlocked. */
+function lock<T extends AnyEntity>(entity: T): T {
+  return { ...entity, locked: true };
 }
 
 /** Places a funnel already dripping if the scenario says so -- unlike the
@@ -100,7 +108,7 @@ function applyFunnel(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: '
     total: cmd.total,
   });
   if (cmd.enabled) setFunnelEnabledInstance(instance, true);
-  entities.push(instance);
+  entities.push(lock(instance));
 }
 
 /** A tracked radiator instance, same as the interactive Radiator tool's
@@ -113,7 +121,7 @@ function applyFunnel(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: '
  * radiators.ts's `width`). */
 function applyRadiator(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'radiator' }>): void {
   entities.push(
-    placeRadiatorInstance({
+    lock(placeRadiatorInstance({
       x0: cmd.x,
       y0: cmd.y,
       x1: cmd.x,
@@ -121,7 +129,7 @@ function applyRadiator(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind:
       radius: cmd.radius,
       targetK: celsiusToKelvin(cmd.targetTempC),
       width: cmd.radius,
-    }),
+    })),
   );
 }
 

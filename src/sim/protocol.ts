@@ -25,9 +25,8 @@ import type { Point } from './tube-shapes';
  * data (points + settings), never derived geometry caches. `kind` mirrors the
  * instance discriminant; `entityId` is the one id the whole protocol
  * addresses entities by. */
-export interface FunnelWire {
+export interface FunnelWire extends EntityWireBase {
   kind: 'funnel';
-  entityId: number;
   anchorX: number;
   anchorY: number;
   facing: FunnelFacing;
@@ -39,17 +38,15 @@ export interface FunnelWire {
   enabled: boolean;
 }
 
-export interface TubeWire {
+export interface TubeWire extends EntityWireBase {
   kind: 'tube';
-  entityId: number;
   points: Point[];
   /** null = accept every species. */
   filter: number[] | null;
 }
 
-export interface FlaskWire {
+export interface FlaskWire extends EntityWireBase {
   kind: 'flask';
-  entityId: number;
   x: number;
   y: number;
   facing: FlaskFacing;
@@ -58,9 +55,8 @@ export interface FlaskWire {
   flaskKind: FlaskKind;
 }
 
-export interface FilterWire {
+export interface FilterWire extends EntityWireBase {
   kind: 'filter';
-  entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -69,9 +65,8 @@ export interface FilterWire {
   species: number[];
 }
 
-export interface RadiatorWire {
+export interface RadiatorWire extends EntityWireBase {
   kind: 'radiator';
-  entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -83,9 +78,8 @@ export interface RadiatorWire {
   targetTempC: number;
 }
 
-export interface GlassWire {
+export interface GlassWire extends EntityWireBase {
   kind: 'glass';
-  entityId: number;
   /** The polygon's corners where they currently sit -- already rotated and
    * translated (see glass.ts's glassPoints), so the UI hit-tests and draws
    * handles against these without redoing the math. */
@@ -93,6 +87,15 @@ export interface GlassWire {
   /** 0..7, 45 degrees a step -- the wheel's current position, so the UI can
    * send an absolute rotation rather than a delta. */
   rotation: number;
+}
+
+/** Fields every kind's wire shape carries. `locked` marks scenario bench
+ * furniture the worker refuses to edit (see worker.ts's isLocked), so the UI
+ * can show it read-only rather than offering controls that silently do
+ * nothing. */
+export interface EntityWireBase {
+  entityId: number;
+  locked?: boolean;
 }
 
 export type EntityWire = FunnelWire | TubeWire | FlaskWire | FilterWire | RadiatorWire | GlassWire;
@@ -167,6 +170,10 @@ export type WorkerToMainMessage =
        * 'restoreWorld' -- lets the UI grey out its Restore button rather
        * than sending a message the worker would just silently no-op. */
       hasSnapshot: boolean;
+      /** Whether the apparatus undo stack has anything to step to, so the
+       * UI can grey out its buttons rather than offering a no-op. */
+      canUndoEntities: boolean;
+      canRedoEntities: boolean;
       tick: number;
       /** Live pass/fail progress for the active scenario's goals (see
        * objectives.ts's evaluateGoals) -- empty in sandbox mode, where
@@ -213,30 +220,44 @@ export type MainToWorkerMessage =
   | { type: 'placeEntity'; entity: PlaceEntityWire }
   /** Slides a whole placed entity by (dx, dy) -- every kind moves this way
    * (a tube's knees all translate together, a funnel's anchor shifts), so
-   * the pointer drag and the keyboard nudge are the same message. */
-  | { type: 'moveEntity'; entityId: number; dx: number; dy: number }
+   * the pointer drag and the keyboard nudge are the same message.
+   *
+   * `undoTag` groups a gesture into one undo entry: the worker checkpoints
+   * before a mutation only when the tag differs from the last one it saw, so
+   * a drag that sends fifty moves under the same tag rewinds in a single
+   * step, while two separate drags (different tags) rewind separately. Every
+   * continuous edit carries one; the discrete ops below always checkpoint. */
+  | { type: 'moveEntity'; entityId: number; dx: number; dy: number; undoTag?: string }
   /** Drags one of an entity's handles to the absolute cell (x, y) -- a tube
    * knee, either end of a filter/radiator line, or a glass polygon corner
    * (see entity.ts's entityHandles for what each kind exposes and how
    * handleIds are numbered). Absolute rather than a delta so a dropped
    * pointermove can't leave the handle displaced from the cursor. */
-  | { type: 'dragEntityHandle'; entityId: number; handleId: number; x: number; y: number }
+  | { type: 'dragEntityHandle'; entityId: number; handleId: number; x: number; y: number; undoTag?: string }
   /** Turns an entity to an absolute rotation step: a glass polygon's 0..7
    * wheel position, or an index into a funnel's/flask's facing cycle
    * (FUNNEL_FACINGS/FLASK_FACINGS). Absolute rather than a delta so a
    * dropped or reordered wheel message can't leave the instance a notch off
    * what the UI is drawing. A no-op for kinds with no rotate capability. */
-  | { type: 'rotateEntity'; entityId: number; rotation: number }
+  | { type: 'rotateEntity'; entityId: number; rotation: number; undoTag?: string }
   /** Replaces one entity's whole settings block (see EntitySettingsWire).
    * Ignored if the payload's kind doesn't match the entity's -- a stale
    * message aimed at a deleted-and-outlived id can't misconfigure whatever
    * kind lives there now (ids are never reused, so this is belt and
    * braces). */
-  | { type: 'updateEntitySettings'; entityId: number; settings: EntitySettingsWire }
+  | { type: 'updateEntitySettings'; entityId: number; settings: EntitySettingsWire; undoTag?: string }
   /** One-shot verbs (see EntityAction) -- currently all funnel: 'reset'
    * refills the budget, 'enable'/'disable' switch dripping. No-ops on kinds
    * without the action. */
   | { type: 'entityAction'; entityId: number; action: EntityAction }
+  /** Steps the apparatus undo stack back or forward one entry (see
+   * worker.ts's undo bookkeeping). Matter is deliberately NOT covered:
+   * rewinding the chemistry is what snapshotWorld/restoreWorld are for, and
+   * conflating the two would make an accidental vessel nudge un-undoable
+   * without also throwing away a minute of reaction. A no-op at either end
+   * of the stack. */
+  | { type: 'undoEntities' }
+  | { type: 'redoEntities' }
   /** Removes one placed apparatus outright. This is the *only* way to take
    * apparatus off the bench: the eraser is matter-only, since "erase part of
    * a vessel" was a half-state nothing downstream could represent coherently.

@@ -51,6 +51,10 @@ export interface ToolMeta {
    * duplicated -- shows those two buttons. Deleting is the *only* way
    * apparatus comes off the bench now that the eraser is matter-only. */
   canDelete: boolean;
+  /** The selection is scenario bench furniture: its fields are shown for
+   * reference but disabled, and Delete/Duplicate are hidden, because the
+   * worker refuses every edit to it (see sim/worker.ts's isLocked). */
+  locked: boolean;
   /** The eraser's "this only takes matter" note. Worth spelling out because
    * erasing used to be how apparatus came off the bench. */
   eraseHint: boolean;
@@ -381,7 +385,11 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   }
   container.appendChild(header);
 
-  if (meta.canDelete) {
+  if (meta.locked) {
+    container.appendChild(hintBox('Part of this scenario\'s bench -- you can inspect it, but it can\'t be moved, reconfigured or removed.', 'LOCKED'));
+  }
+
+  if (meta.canDelete && !meta.locked) {
     const row = el('div', 'entity-action-row');
     if (cb.onDuplicateEntity) {
       const copy = el('button', 'entity-copy-btn');
@@ -442,6 +450,14 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
     const hint = entityPanelHint(panel.kind, panel.mode);
     if (schema.length > 0 || hint) addDivider(container);
     renderEntityPanel(container, schema, cb.entityValues, cb.entityContext);
+    // Disabling after the fact rather than teaching every field about it:
+    // a locked entity's pane is a read-only view of the same schema, so the
+    // controls should look exactly like the editable ones, just inert.
+    if (meta.locked) {
+      for (const control of container.querySelectorAll('input, button.funnel-toggle-btn, button.funnel-species-btn, button.funnel-reset-btn, button.species-chip-add')) {
+        (control as HTMLInputElement | HTMLButtonElement).disabled = true;
+      }
+    }
     if (hint) container.appendChild(hintBox(hint, 'HOW IT WORKS'));
   }
 

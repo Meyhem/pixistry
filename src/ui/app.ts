@@ -221,6 +221,7 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   showBrushWidth: true,
   sinkPanel: 'none',
   canDelete: false,
+  locked: false,
   entityPanel: null,
   selectHint: false,
   eraseHint: false,
@@ -720,6 +721,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let lastVentTotals: Uint32Array | null = null;
   let lastVentGrandTotal = 0;
   let hasSnapshot = false;
+  let canUndoEntities = false;
+  let canRedoEntities = false;
   let lastTick = 0;
 
   /** The pre-placement draft a tool writes into -- the same per-kind shape a
@@ -1322,6 +1325,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     };
     const benchMenuCallbacks: BenchMenuCallbacks = {
       hasSnapshot,
+      canUndoEntities,
+      canRedoEntities,
+      onUndoEntities: () => send({ type: 'undoEntities' }),
+      onRedoEntities: () => send({ type: 'redoEntities' }),
       onSnapshotWorld: () => send({ type: 'snapshotWorld' }),
       onRestoreWorld: () => send({ type: 'restoreWorld' }),
       resetWorldLabel: activeScenario ? 'Reset Experiment' : 'Clear All',
@@ -1350,6 +1357,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // Apparatus only comes off the bench through Delete, so the Delete and
     // Duplicate buttons show for whatever the Select tool has picked up.
     meta.canDelete = selected !== undefined;
+    meta.locked = selection.isSelectionLocked();
     meta.selectHint = isEditMode && !selected;
     meta.entityPanel = selected
       ? { kind: selected.kind, mode: 'edit' }
@@ -1379,12 +1387,16 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
      * draft *is* the settings payload for every kind (same field names by
      * construction -- the schema's keys are the draft's keys), so this is
      * one message builder rather than five. */
+    let settingsUndoKey = '';
     function sendSelectedSettings(): void {
       const wire = selection.selected();
       const draft = selection.draft;
       if (!wire || !draft || draft.kind !== wire.kind) return;
       const settings = entitySettingsFromDraft(draft);
-      if (settings) send({ type: 'updateEntitySettings', entityId: wire.entityId, settings });
+      // One undo step per (entity, field) run: dragging a slider sends a
+      // message per input event under the same tag, so the whole drag
+      // rewinds at once (see protocol.ts's `undoTag`).
+      if (settings) send({ type: 'updateEntitySettings', entityId: wire.entityId, settings, undoTag: `settings:${wire.entityId}:${settingsUndoKey}` });
     }
 
     const entityContext: EntityPanelContext = {
@@ -1410,6 +1422,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           next.delete(specId);
           values[key] = key === 'filter' && next.size === 0 ? null : next;
         }
+        settingsUndoKey = key;
         if (editing) sendSelectedSettings();
         render();
       },
@@ -1427,6 +1440,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         if (key === 'enabled' && selected) {
           send({ type: 'entityAction', entityId: selected.entityId, action: value ? 'enable' : 'disable' });
         } else {
+          settingsUndoKey = key;
           values[key] = value;
           if (editing) sendSelectedSettings();
         }
@@ -2054,11 +2068,19 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       return;
     }
 
-    // Ctrl/Cmd+D duplicates the selection -- the one shortcut that wants a
-    // modifier, so it's checked before the bare-key guard below rejects
-    // them all.
-    if ((event.ctrlKey || event.metaKey) && (event.key === 'd' || event.key === 'D')) {
-      if (!typing && !anyModalOpen() && tool?.kind === 'select-apparatus' && selection.selected()) {
+    // The modifier shortcuts, checked before the bare-key guard below
+    // rejects every modified key. Undo/redo are apparatus-only (see
+    // protocol.ts's 'undoEntities'), so they work whatever tool is active --
+    // the bench you just nudged is the thing you want back.
+    if (event.ctrlKey || event.metaKey) {
+      if (typing || anyModalOpen()) return;
+      if (event.key === 'z' || event.key === 'Z') {
+        event.preventDefault();
+        send({ type: event.shiftKey ? 'redoEntities' : 'undoEntities' });
+      } else if (event.key === 'y' || event.key === 'Y') {
+        event.preventDefault();
+        send({ type: 'redoEntities' });
+      } else if ((event.key === 'd' || event.key === 'D') && tool?.kind === 'select-apparatus' && selection.selected()) {
         event.preventDefault();
         duplicateSelectedApparatus();
       }
@@ -2214,8 +2236,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       maybeRecordDiscoveries(frameMeta);
       maybeCheckAchievements(frameMeta, msg.objectives);
       maybeSparkleSinks(msg.sinkMask, msg.sinkTotals);
-      const snapshotChanged = hasSnapshot !== msg.hasSnapshot;
+      const snapshotChanged = hasSnapshot !== msg.hasSnapshot || canUndoEntities !== msg.canUndoEntities || canRedoEntities !== msg.canRedoEntities;
       hasSnapshot = msg.hasSnapshot;
+      canUndoEntities = msg.canUndoEntities;
+      canRedoEntities = msg.canRedoEntities;
       selection.setEntities(msg.entities);
       lastTick = msg.tick;
       renderer?.drawFrame({

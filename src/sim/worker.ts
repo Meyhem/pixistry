@@ -54,6 +54,8 @@ import type { Restrictions, Scenario } from './scenario-data';
 import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink';
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
+import { reseedEntityIds } from './entity-id';
+import { EntityHistory } from './entity-history';
 import { stepStirrers } from './stirrer';
 import { filterAllowMap } from './filter';
 import { stepTubes } from './tube';
@@ -129,6 +131,10 @@ let entities: AnyEntity[] = [];
 const sinkCounter = new SinkCounter();
 const ventCounter = new SinkCounter();
 
+// Apparatus undo/redo (see entity-history.ts) -- the bench only, never the
+// chemistry.
+const history = new EntityHistory();
+
 // Manual quicksave (see world-snapshot.ts) -- null until the first
 // 'snapshotWorld' message; 'restoreWorld' is a no-op until then (see the
 // frame message's hasSnapshot, which lets the UI grey out its Restore
@@ -188,9 +194,29 @@ function withEntity(entityId: number, fn: (entity: AnyEntity) => void): void {
  * goes through this and nothing else writes apparatus state -- see
  * entity-composite.ts for why that single rule replaced the three
  * bookkeeping schemes this used to need. */
-function mutateEntities(edit: () => void): void {
+function mutateEntities(edit: () => void, undoTag?: string): void {
+  history.checkpoint(entities, undoTag);
   edit();
   compositeEntities(grid, species, entities);
+}
+
+/** Swaps the live bench for an undo/redo stack frame and re-derives the grid
+ * from it. A no-op at either end of the stack. */
+function stepEntityHistory(restored: AnyEntity[] | null): void {
+  if (!restored) return;
+  entities = restored;
+  // A restored entity may hold an id at or above where the counter now sits
+  // (it was handed out in a world we since discarded and re-made).
+  reseedEntityIds(entities.map((e) => e.entityId));
+  compositeEntities(grid, species, entities);
+}
+
+/** Whether a scenario placed this entity as fixed bench furniture. A locked
+ * entity is the level's own apparatus: it can be selected and inspected, but
+ * not moved, reshaped, reconfigured or deleted, so a campaign bench can't be
+ * dismantled by accident (or on purpose) mid-puzzle. */
+function isLocked(entityId: number): boolean {
+  return entities.find((e) => e.entityId === entityId)?.locked === true;
 }
 
 function runOneTick(): void {
@@ -223,6 +249,8 @@ function postFrame(): void {
     sinkCounter,
     ventCounter,
     hasSnapshot: worldSnapshot !== null,
+    canUndoEntities: history.canUndo,
+    canRedoEntities: history.canRedo,
     tick,
     objectives: [],
   });
@@ -283,6 +311,7 @@ function isPlacementAllowed(entity: Extract<MainToWorkerMessage, { type: 'placeE
  * state, the snapshot, the grid itself) stays at the call sites. */
 function clearBenchState(): void {
   entities = [];
+  history.clear();
   sinkCounter.reset();
   ventCounter.reset();
   grabState = null;
@@ -358,20 +387,24 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       });
       break;
     case 'moveEntity':
-      mutateEntities(() => withEntity(msg.entityId, (entity) => moveEntityBy(grid, entity, msg.dx, msg.dy)));
+      if (isLocked(msg.entityId)) break;
+      mutateEntities(() => withEntity(msg.entityId, (entity) => moveEntityBy(grid, entity, msg.dx, msg.dy)), msg.undoTag);
       break;
     case 'dragEntityHandle':
-      mutateEntities(() => withEntity(msg.entityId, (entity) => dragEntityHandleTo(grid, entity, msg.handleId, msg.x, msg.y)));
+      if (isLocked(msg.entityId)) break;
+      mutateEntities(() => withEntity(msg.entityId, (entity) => dragEntityHandleTo(grid, entity, msg.handleId, msg.x, msg.y)), msg.undoTag);
       break;
     case 'rotateEntity':
-      mutateEntities(() => withEntity(msg.entityId, (entity) => rotateEntityTo(entity, msg.rotation)));
+      if (isLocked(msg.entityId)) break;
+      mutateEntities(() => withEntity(msg.entityId, (entity) => rotateEntityTo(entity, msg.rotation)), msg.undoTag);
       break;
     case 'updateEntitySettings':
       // A funnel's dispensed species stays scenario-gated through edits, not
       // just at placement -- otherwise a placed funnel would be a loophole in
       // a scenario's funnelSpecies rule.
       if (msg.settings.kind === 'funnel' && !isFunnelSpeciesAllowed(activeRestrictions, msg.settings.specId)) break;
-      mutateEntities(() => withEntity(msg.entityId, (entity) => applyEntitySettings(entity, msg.settings)));
+      if (isLocked(msg.entityId)) break;
+      mutateEntities(() => withEntity(msg.entityId, (entity) => applyEntitySettings(entity, msg.settings)), msg.undoTag);
       break;
     case 'entityAction':
       // Actions never change a footprint today (funnel reset/enable/disable),
@@ -381,9 +414,16 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       mutateEntities(() => withEntity(msg.entityId, (entity) => applyEntityAction(entity, msg.action)));
       break;
     case 'deleteEntity':
+      if (isLocked(msg.entityId)) break;
       mutateEntities(() => {
         entities = entities.filter((e) => e.entityId !== msg.entityId);
       });
+      break;
+    case 'undoEntities':
+      stepEntityHistory(history.undo(entities));
+      break;
+    case 'redoEntities':
+      stepEntityHistory(history.redo(entities));
       break;
     case 'setRunning':
       running = msg.running;

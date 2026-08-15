@@ -62,9 +62,9 @@ describe('hit testing', () => {
     const tube = place({ kind: 'tube', points: [{ x: 10, y: 10 }, { x: 30, y: 10 }], filter: null });
 
     // Right on the mouth knee: the same click is also inside the channel.
-    expect(hit([tube.wire], 10, 10)).toEqual({ entityId: tube.entity.entityId, kind: 'tube', handleId: 0 });
+    expect(hit([tube.wire], 10, 10)).toEqual({ entityId: tube.entity.entityId, kind: 'tube', handleId: 0, locked: false });
     // Mid-channel, clear of both knees: the body.
-    expect(hit([tube.wire], 20, 10)).toEqual({ entityId: tube.entity.entityId, kind: 'tube', handleId: null });
+    expect(hit([tube.wire], 20, 10)).toEqual({ entityId: tube.entity.entityId, kind: 'tube', handleId: null, locked: false });
   });
 
   it('picks the smallest body when two overlap, so small apparatus inside a vessel stays clickable', () => {

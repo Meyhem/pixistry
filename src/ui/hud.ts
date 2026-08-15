@@ -112,6 +112,14 @@ export function buildHud(top: HTMLElement, cb: HudCallbacks): void {
 
 export interface BenchMenuCallbacks {
   hasSnapshot: boolean;
+  /** Apparatus undo/redo (see protocol.ts's 'undoEntities'). Separate from
+   * Save/Restore below, and labelled so: this rewinds the *bench*, never the
+   * chemistry, so an accidental nudge costs nothing while a minute of
+   * reaction keeps running. */
+  canUndoEntities: boolean;
+  canRedoEntities: boolean;
+  onUndoEntities(): void;
+  onRedoEntities(): void;
   onSnapshotWorld(): void;
   onRestoreWorld(): void;
   resetWorldLabel: string;
@@ -159,6 +167,12 @@ export function buildBenchMenu(container: HTMLElement, cb: BenchMenuCallbacks): 
     list.appendChild(row);
   };
 
+  add('Undo apparatus', cb.canUndoEntities ? 'Step the bench back -- matter keeps running (Ctrl+Z)' : 'Nothing to undo yet', cb.onUndoEntities, {
+    disabled: !cb.canUndoEntities,
+  });
+  add('Redo apparatus', cb.canRedoEntities ? 'Step the bench forward again (Ctrl+Shift+Z)' : 'Nothing to redo', cb.onRedoEntities, {
+    disabled: !cb.canRedoEntities,
+  });
   add('Save', 'Snapshot the grid so you can come back to it', cb.onSnapshotWorld);
   add('Restore', cb.hasSnapshot ? 'Go back to the last saved grid' : 'Save first -- nothing saved yet', cb.onRestoreWorld, {
     disabled: !cb.hasSnapshot,

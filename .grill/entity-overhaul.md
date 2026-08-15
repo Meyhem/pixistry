@@ -310,10 +310,24 @@ monotonicity); extend the fuzz suite with tube ops.
   UI sends `undoCheckpoint` at drag-start and before discrete ops; `undoEntities`/`redoEntities`
   restore a stack frame + composite. Matter is deliberately not covered (that's `snapshotWorld`'s
   job); say so in the UI copy.
+
+  **Landed, with the checkpoint trigger inverted.** A separate `undoCheckpoint` message means every
+  new discrete op is a chance to forget to send one, and the bug is invisible (undo silently skips a
+  step). Instead the *worker* checkpoints before every mutation, and the continuous messages carry an
+  optional `undoTag`: a checkpoint is skipped only when the tag matches the last one, so a 50-message
+  drag under one tag collapses to a single step while two drags stay separate. Discrete ops send no
+  tag and therefore always get their own step -- the safe default, and impossible to forget. The
+  stacks live in `entity-history.ts` rather than in the worker so they're directly testable.
 - **6d Scenario apparatus become locked entities:** `locked?: true` on the instance; worker refuses
   move/drag/rotate/update/delete for locked ids (UI shows a padlock and a read-only panel);
   `applyFlask`/`applyRadiator`/scenario funnels place real locked entities. Campaign benches stop
   being untracked one-shot stamps.
+
+  **Landed.** The refusal is in the worker, not the UI: the UI's own guards (no drag armed, no
+  Delete/Duplicate button, disabled fields) are the affordance, but a raw protocol message is refused
+  too -- verified by sending `moveEntity`/`deleteEntity` straight at a locked funnel from the console.
+  The read-only pane disables the rendered controls after the fact rather than teaching every field
+  kind about locking, so a locked entity's settings look exactly like an editable one's, just inert.
 - **6e Sinks/vents join the system:** kinds `sink`/`vent` as free-angle line entities (they keep
   `sinkLineCells` rasterization); footprint stamps `sinkMask` + owner and the compositor takes that
   array over; `paintSinkLine` → `placeEntity`; they gain select/move/end-drag/delete. Counters stay
@@ -362,4 +376,7 @@ monotonicity); extend the fuzz suite with tube ops.
       `placeEntity` replaces six per-kind place messages -- duplicating through the current protocol
       would mean six hand-written clone cases that phase 4 then deletes). Needed a new `moveTube`
       message: the tube was the one kind with no whole-move at all, only per-segment drags.
-- [ ] Phase 6c–6f: undo/redo, locked scenario entities, sink/vent entities, selected-entity overlays
+- [x] Phase 6c: apparatus undo/redo (`entity-history.ts`), gesture-coalesced via `undoTag`; Ctrl+Z/
+      Ctrl+Shift+Z + bench-menu entries
+- [x] Phase 6d: locked scenario entities -- refused by the worker on every edit path, read-only panel
+- [ ] Phase 6e–6f: sink/vent entities, selected-entity overlays

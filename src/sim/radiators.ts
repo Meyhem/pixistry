@@ -41,6 +41,11 @@ const MAX_RADIATION_REACH = 255;
 
 export interface RadiatorInstance {
   readonly kind: 'radiator';
+  /** Set on apparatus a scenario placed as fixed bench furniture: the worker
+   * refuses to move, reshape, reconfigure or delete it, so a campaign bench
+   * can't be dismantled mid-puzzle. Undefined for anything the player
+   * placed. */
+  readonly locked?: boolean;
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   x0: number;
