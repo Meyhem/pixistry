@@ -332,6 +332,19 @@ monotonicity); extend the fuzz suite with tube ops.
   `sinkLineCells` rasterization); footprint stamps `sinkMask` + owner and the compositor takes that
   array over; `paintSinkLine` → `placeEntity`; they gain select/move/end-drag/delete. Counters stay
   global (per-sink tallies become possible later).
+
+  **Not done -- the one item left, and bigger than its bullet suggests.** Two kinds is `EntityKind`
+  going from 6 to 8, and phases 3a/3b/4 deliberately made every per-kind switch *exhaustive*
+  (`ENTITY_DEFS`, the protocol's three payload unions, `entityIdentity`, `toolEntityKind`,
+  `placementDraft`, `entitySettingsFromDraft`, `duplicatePayload`, the UI's ghost-colour record). That
+  exhaustiveness is the point -- the compiler names every site -- but it does mean 6e is a wide change
+  rather than a narrow one, on the order of 3a.
+
+  It also **changes a standing rule**: `sinkMask` becomes compositor-derived, where CLAUDE.md
+  currently says the compositor must never touch it. That rule was written *for* the painted-terrain
+  arrays in phase 1; promoting sinks to entities is exactly the case it wasn't written for, so the
+  rule needs editing in the same commit, not quietly violated. Worth doing deliberately with a fresh
+  context rather than tacked onto the end of a long session.
 - **6f Selected-entity overlays:** flow-direction arrows along a selected tube; the allow-list as
   species chips beside a selected filter; a reach circle for a selected radiator.
 
