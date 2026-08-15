@@ -300,6 +300,19 @@ export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: n
   rebuildTubeGeometry(grid, instance, newPoints);
 }
 
+/** Slides the whole tube by (dx, dy) -- every knee translates together, so
+ * the shape is preserved exactly and no re-snap is needed. Distinct from
+ * moveTubeSegment, which drags one segment and lets its outer neighbours pull
+ * the adjoining knees back onto valid octant rays. */
+export function moveTubeInstance(grid: SimGrid, instance: TubeInstance, dx: number, dy: number): void {
+  if (dx === 0 && dy === 0) return;
+  rebuildTubeGeometry(
+    grid,
+    instance,
+    instance.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+  );
+}
+
 /** Drags segment (segIndex, segIndex+1) by (dx, dy): both its points
  * translate together (preserving the segment's own direction/length
  * exactly, so no re-snap is needed for the dragged segment itself), while

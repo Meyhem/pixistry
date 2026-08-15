@@ -52,6 +52,7 @@ import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
 import {
+  moveTubeInstance,
   moveTubeKnee,
   moveTubeSegment,
   normalizeTubePoints,
@@ -553,6 +554,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       mutateEntities(() => tubes.push(placeTubeInstance(grid, { points, filter: msg.filter ? new Set(msg.filter) : null })));
       break;
     }
+    case 'moveTube':
+      mutateEntities(() => withTube(msg.id, (instance) => moveTubeInstance(grid, instance, msg.dx, msg.dy)));
+      break;
     case 'moveTubeKnee':
       mutateEntities(() => withTube(msg.id, (instance) => moveTubeKnee(grid, instance, msg.kneeIndex, { x: msg.x, y: msg.y })));
       break;

@@ -314,5 +314,9 @@ monotonicity); extend the fuzz suite with tube ops.
 - [ ] Phase 3b: one selection/drag/hit-test path; generic handles overlay
 - [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
 - [x] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten
-- [ ] Phase 6a–6f: hover, keyboard, undo/redo, locked scenario entities, sink/vent entities,
-      selected-entity overlays
+- [x] Phase 6a: hover highlight + cursor
+- [x] Phase 6b: keyboard arrows/R/Esc (Ctrl+D duplicate deferred to phase 4, where one generic
+      `placeEntity` replaces six per-kind place messages -- duplicating through the current protocol
+      would mean six hand-written clone cases that phase 4 then deletes). Needed a new `moveTube`
+      message: the tube was the one kind with no whole-move at all, only per-segment drags.
+- [ ] Phase 6c–6f: undo/redo, locked scenario entities, sink/vent entities, selected-entity overlays

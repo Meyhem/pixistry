@@ -298,7 +298,11 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   addDivider(container);
 
   if (meta.funnelPanel === 'edit-empty') {
-    container.appendChild(hintBox('Click a placed apparatus on the grid to select it. Drag it to move it, drag a knee or an end to reshape it, and press Delete to take it off the bench.'));
+    container.appendChild(
+      hintBox(
+        'Click a placed apparatus on the grid to select it -- what the cursor is over is highlighted before you click. Drag it to move it, or drag a knee or an end to reshape it. Once selected: arrow keys nudge it (Shift for 5 cells), R rotates it where the shape allows, the scroll wheel does the same over the grid, Delete takes it off the bench, and Escape deselects.',
+      ),
+    );
     return;
   }
 

@@ -53,6 +53,7 @@ import {
   type FilterEditDraft,
   type FlaskEditDraft,
   type FunnelEditDraft,
+  type ApparatusHit,
   type RadiatorEditDraft,
   type TubeEditDraft,
 } from './apparatus-selection';
@@ -635,6 +636,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     totalAmount: DEFAULT_FUNNEL_TOTAL_AMOUNT,
     facing: 'down',
   };
+  // What the Select tool's cursor is over right now (see
+  // hoveredApparatusCells) -- drives the hover highlight and the cursor
+  // shape, so what a click would grab is visible before committing to it.
+  let hoveredApparatus: ApparatusHit = { kind: 'none' };
   let lastHoverX = 0;
   let lastHoverY = 0;
 
@@ -890,6 +895,40 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     render();
   }
 
+  /** Nudges the selected apparatus by (dx, dy) cells -- the keyboard's
+   * counterpart to dragging it. Each kind gets whichever of its move messages
+   * takes a relative delta; the two that only take an absolute anchor
+   * (funnel, flask) are handed their current position plus the delta. */
+  function nudgeSelectedApparatus(dx: number, dy: number): void {
+    const funnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
+    if (funnel) {
+      send({ type: 'moveFunnel', id: funnel.id, x: funnel.anchorX + dx, y: funnel.anchorY + dy });
+      return;
+    }
+    const flask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
+    if (flask) {
+      send({ type: 'moveFlask', id: flask.id, x: flask.x + dx, y: flask.y + dy });
+      return;
+    }
+    const tubeId = apparatusSelection.selectedTubeId;
+    if (tubeId !== null) {
+      send({ type: 'moveTube', id: tubeId, dx, dy });
+      return;
+    }
+    const filterId = apparatusSelection.selectedFilterId;
+    if (filterId !== null) {
+      send({ type: 'moveFilter', id: filterId, dx, dy });
+      return;
+    }
+    const radiatorId = apparatusSelection.selectedRadiatorId;
+    if (radiatorId !== null) {
+      send({ type: 'moveRadiator', id: radiatorId, dx, dy });
+      return;
+    }
+    const glassId = apparatusSelection.selectedGlassId;
+    if (glassId !== null) send({ type: 'moveGlass', id: glassId, dx, dy });
+  }
+
   /** Pushes the edit draft's full config to the worker as one message -- see
    * FunnelEditDraft's doc comment for why every field is sent together
    * rather than patched individually. */
@@ -938,7 +977,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * in 45-degree steps, a funnel through its four facings. Leaves the event
    * alone (no preventDefault) when nothing rotatable is selected, so the
    * wheel keeps doing whatever it normally would. */
-  function rotateSelectedApparatus(step: 1 | -1, event: WheelEvent): void {
+  function rotateSelectedApparatus(step: 1 | -1, event: { preventDefault(): void }): void {
     const flask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
     if (flask) {
       event.preventDefault();
@@ -1772,6 +1811,57 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       if (selected) drawGhostCells(ctx, glassChainCells(glass.points), cellPxX, cellPxY, 'rgba(169, 214, 232, 0.5)');
       drawHandleDots(ctx, glass.points, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
     }
+    // Whatever the cursor is over, faintly, so "will this click pick that up?"
+    // is answered before the click rather than after it. Skipped for the
+    // already-selected apparatus, which is drawn brighter above anyway.
+    const hovered = hoveredApparatusCells();
+    if (hovered.length > 0) drawGhostCells(ctx, hovered, cellPxX, cellPxY, 'rgba(255, 255, 255, 0.18)');
+  }
+
+  /** The cells of whatever the Select tool is hovering, for the highlight
+   * above -- one place that knows how to turn a hit back into a footprint,
+   * since every kind stores its shape differently. */
+  function hoveredApparatusCells(): Point[] {
+    const hit = hoveredApparatus;
+    const selected = apparatusSelection.selectedRef();
+    const isSelected = (kind: string, id: number): boolean => selected?.kind === kind && selected.id === id;
+    switch (hit.kind) {
+      case 'funnel': {
+        const funnel = apparatusSelection.findFunnel(hit.id);
+        if (!funnel || isSelected('funnel', hit.id)) return [];
+        return funnelShapeFor(funnel.facing).cells.map((c) => ({ x: funnel.anchorX + c.dx, y: funnel.anchorY + c.dy }));
+      }
+      case 'flask': {
+        const flask = apparatusSelection.findFlask(hit.id);
+        if (!flask || isSelected('flask', hit.id)) return [];
+        return flaskShapeFor(flask.facing, flask.sizeScale, flask.kind).cells.map((c) => ({ x: flask.x + c.dx, y: flask.y + c.dy }));
+      }
+      case 'tube-knee':
+      case 'tube-segment': {
+        const tube = apparatusSelection.findTube(hit.tubeId);
+        if (!tube || isSelected('tube', hit.tubeId)) return [];
+        return lumenBand(polylineToLumenPath(tube.points));
+      }
+      case 'filter':
+      case 'filter-end': {
+        const filter = apparatusSelection.findFilter(hit.id);
+        if (!filter || isSelected('filter', hit.id)) return [];
+        return sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0);
+      }
+      case 'radiator':
+      case 'radiator-end': {
+        const radiator = apparatusSelection.findRadiator(hit.id);
+        if (!radiator || isSelected('radiator', hit.id)) return [];
+        return sinkLineCells(radiator.x0, radiator.y0, radiator.x1, radiator.y1, 0);
+      }
+      case 'glass': {
+        const glass = apparatusSelection.findGlass(hit.id);
+        if (!glass || isSelected('glass', hit.id)) return [];
+        return glassChainCells(glass.points);
+      }
+      default:
+        return [];
+    }
   }
 
   /** Ghost preview overlay, drawn on the shared 2D canvas (see
@@ -1787,11 +1877,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const showPolyDraw = isPolygonTool(tool) && polyDrawPoints.length > 0;
     const showLineDraw = isLineDragTool(tool) && lineDrawStart !== null;
     const showHandles =
-      tool?.kind === 'select-apparatus' &&
-      (apparatusSelection.allTubes().length > 0 ||
-        apparatusSelection.allFilters().length > 0 ||
-        apparatusSelection.allRadiators().length > 0 ||
-        apparatusSelection.allGlass().length > 0);
+      tool?.kind === 'select-apparatus';
     if ((!showFunnelGhost && !showFlaskGhost && !showPolyDraw && !showLineDraw && !showHandles) || gridWidth === 0 || gridHeight === 0) {
       apparatusPreview.style.display = 'none';
       return;
@@ -2041,6 +2127,23 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     inspectorText.textContent = `${label} · ${tempC.toFixed(1)}°C · ${phase}${radiatorNote}${sinkNote}`;
   }
 
+  /** Tracks what the Select tool is over, and says so with the cursor: a
+   * handle (a knee, a line end) is a reshape, anything else is a move. Left
+   * alone while a drag is in flight -- the cursor shouldn't flicker as the
+   * dragged apparatus slides out from under the pointer. */
+  function updateSelectHover(x: number, y: number): void {
+    if (tool?.kind !== 'select-apparatus') {
+      if (hoveredApparatus.kind !== 'none') hoveredApparatus = { kind: 'none' };
+      canvas.style.cursor = '';
+      return;
+    }
+    if (isPointerDown) return;
+    hoveredApparatus = apparatusSelection.hitTest(x, y);
+    const isHandle =
+      hoveredApparatus.kind === 'tube-knee' || hoveredApparatus.kind === 'filter-end' || hoveredApparatus.kind === 'radiator-end';
+    canvas.style.cursor = hoveredApparatus.kind === 'none' ? '' : isHandle ? 'crosshair' : 'grab';
+  }
+
   canvas.addEventListener('pointerdown', (event) => {
     // Left button only. A right-click on a polygon draw means "finish here"
     // (see the contextmenu handler below), and the browser fires pointerdown
@@ -2085,11 +2188,14 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         applyTool(x, y);
       }
     }
+    updateSelectHover(x, y);
     updateInspector(x, y);
     updateBrushOutline(event);
     updateApparatusOverlay(x, y);
   });
   canvas.addEventListener('pointerleave', () => {
+    hoveredApparatus = { kind: 'none' };
+    canvas.style.cursor = '';
     inspector.classList.add('empty');
     inspectorText.textContent = 'Hover the canvas to inspect a cell';
     brushOutline.style.display = 'none';
@@ -2158,7 +2264,15 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         toggleSettingsOverlay(false);
         return;
       }
-      if (isPolygonTool(tool) && polyDrawPoints.length > 0) cancelPolyDraw();
+      if (isPolygonTool(tool) && polyDrawPoints.length > 0) {
+        cancelPolyDraw();
+        return;
+      }
+      if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
+        apparatusSelection.endDrag();
+        apparatusSelection.selectFunnel(null); // clears every kind's selection
+        render();
+      }
       return;
     }
 
@@ -2173,6 +2287,33 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         deleteSelectedApparatus();
       }
       return;
+    }
+
+    // Keyboard editing for the Select tool: arrows nudge, R rotates. A drag
+    // can't place anything at an exact offset, and the wheel needs the
+    // pointer over the canvas -- both awkward once a bench is dense enough
+    // that the apparatus you want is under something else.
+    if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
+      const nudge: Record<string, [number, number]> = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+      };
+      const delta = nudge[event.key];
+      if (delta) {
+        event.preventDefault();
+        const scale = event.shiftKey ? 5 : 1;
+        nudgeSelectedApparatus((delta[0] as number) * scale, (delta[1] as number) * scale);
+        return;
+      }
+      if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
+        // Shift reverses, matching the wheel's two directions. Silently does
+        // nothing for the kinds that don't rotate (a line has no facing).
+        rotateSelectedApparatus(event.shiftKey ? -1 : 1, { preventDefault: () => {} });
+        return;
+      }
     }
 
     // Now that picking a tool means opening a modal, the things you do most

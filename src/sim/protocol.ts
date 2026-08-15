@@ -196,6 +196,10 @@ export type MainToWorkerMessage =
   | { type: 'setFunnelEnabled'; id: number; enabled: boolean }
   | { type: 'moveFunnel'; id: number; x: number; y: number }
   | { type: 'placeTube'; points: Point[]; filter: number[] | null }
+  /** Slides a whole placed tube by (dx, dy), every knee together -- the
+   * keyboard nudge, and the only way to move a tube without also reshaping
+   * it (moveTubeSegment drags one segment and lets the outer knees follow). */
+  | { type: 'moveTube'; id: number; dx: number; dy: number }
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
   | { type: 'updateTube'; id: number; filter: number[] | null }
