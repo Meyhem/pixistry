@@ -31,7 +31,7 @@ import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
 import { glassChainCells } from '../sim/glass';
 import { entityBodyCells, entityBounds, entityHandles, entityReadouts, type EntityKind } from '../sim/entity';
-import type { EntitySettingsWire, EntityWire, PlaceEntityWire } from '../sim/protocol';
+import type { EntitySettingsWire, EntityWire, FilterWire, PlaceEntityWire, RadiatorWire } from '../sim/protocol';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskKind } from '../sim/flask-shapes';
@@ -109,6 +109,11 @@ const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 // How far a duplicate lands from its original, in cells -- enough that the
 // copy is visibly its own object rather than exactly covering the source.
 const DUPLICATE_OFFSET = 2;
+// One flow chevron every few cells along a selected tube -- dense enough to
+// read as a direction at a glance, sparse enough not to hide the cargo.
+const FLOW_ARROW_SPACING = 5;
+// A long allow-list would cover the bench; the panel has the full one.
+const MAX_FILTER_SWATCHES = 6;
 
 type Tool =
   | { kind: 'paint'; specId: number }
@@ -1655,12 +1660,108 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       if (handles.length > 0) {
         drawHandleDots(ctx, handles, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
       }
+      if (selected) drawSelectedOverlay(ctx, wire, cellPxX, cellPxY);
     }
     // Whatever the cursor is over, faintly, so "will this click pick that up?"
     // is answered before the click rather than after it. Skipped for the
     // already-selected apparatus, which is drawn brighter above anyway.
     const hovered = hoveredApparatusCells();
     if (hovered.length > 0) drawGhostCells(ctx, hovered, cellPxX, cellPxY, 'rgba(255, 255, 255, 0.18)');
+  }
+
+  /** What the selected entity is *doing*, drawn over it: which way a tube
+   * conveys, how far a radiator actually reaches, what a membrane lets
+   * through. Each is a question you'd otherwise answer by reading the panel
+   * and imagining the geometry -- a conveyor plumbed backwards looks
+   * identical to a correct one until something fails to arrive.
+   *
+   * Per-kind by nature: this is visual design (an arrow, a circle, a row of
+   * swatches), not behaviour, so it stays a switch here rather than becoming
+   * a registry capability that would have to describe canvas drawing. */
+  function drawSelectedOverlay(ctx: CanvasRenderingContext2D, wire: EntityWire, cellPxX: number, cellPxY: number): void {
+    switch (wire.kind) {
+      case 'tube':
+        drawFlowArrows(ctx, wire.points, cellPxX, cellPxY);
+        break;
+      case 'radiator':
+        drawReachOutline(ctx, wire, cellPxX, cellPxY);
+        break;
+      case 'filter':
+        drawAllowedSwatches(ctx, wire, cellPxX, cellPxY);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Chevrons along a tube's centre path, pointing the way cargo travels
+   * (mouth to exit -- the order the knees were drawn in). */
+  function drawFlowArrows(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number): void {
+    const path = polylineToLumenPath(points);
+    if (path.length < 2) return;
+    const size = Math.max(3, Math.min(cellPxX, cellPxY) * 1.4);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = Math.max(1, Math.min(cellPxX, cellPxY) * 0.35);
+    ctx.lineCap = 'round';
+    for (let i = FLOW_ARROW_SPACING; i < path.length - 1; i += FLOW_ARROW_SPACING) {
+      const here = path[i] as Point;
+      const next = path[i + 1] as Point;
+      const dx = next.x - here.x;
+      const dy = next.y - here.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      // The chevron's two strokes: back-and-out from the tip, on both sides
+      // of the direction of travel.
+      const tipX = (here.x + 0.5) * cellPxX + ux * size * 0.5;
+      const tipY = (here.y + 0.5) * cellPxY + uy * size * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(tipX - (ux + uy) * size * 0.6, tipY - (uy - ux) * size * 0.6);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(tipX - (ux - uy) * size * 0.6, tipY - (uy + ux) * size * 0.6);
+      ctx.stroke();
+    }
+  }
+
+  /** How far a radiator actually reaches, as a capsule around the drawn line
+   * -- its per-cell radius, which is otherwise a number in a panel with no
+   * relation to anything on screen. */
+  function drawReachOutline(ctx: CanvasRenderingContext2D, wire: RadiatorWire, cellPxX: number, cellPxY: number): void {
+    const radius = wire.radiationRadius;
+    if (radius <= 0) return;
+    ctx.strokeStyle = 'rgba(255, 157, 92, 0.5)';
+    ctx.setLineDash([Math.max(3, cellPxX), Math.max(3, cellPxX)]);
+    ctx.lineWidth = 1.5;
+    for (const end of [
+      { x: wire.x0, y: wire.y0 },
+      { x: wire.x1, y: wire.y1 },
+    ]) {
+      ctx.beginPath();
+      ctx.ellipse((end.x + 0.5) * cellPxX, (end.y + 0.5) * cellPxY, (radius + 0.5) * cellPxX, (radius + 0.5) * cellPxY, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  /** A membrane's allow-list as colour swatches beside its midpoint: which
+   * species pass is the whole of what a filter does, and it's invisible on
+   * the grid otherwise. */
+  function drawAllowedSwatches(ctx: CanvasRenderingContext2D, wire: FilterWire, cellPxX: number, cellPxY: number): void {
+    const midX = ((wire.x0 + wire.x1) / 2 + 0.5) * cellPxX;
+    const midY = ((wire.y0 + wire.y1) / 2 + 0.5) * cellPxY;
+    const size = Math.max(4, Math.min(cellPxX, cellPxY) * 1.6);
+    const shown = wire.species.slice(0, MAX_FILTER_SWATCHES);
+    if (shown.length === 0) return;
+    const totalWidth = shown.length * (size + 2);
+    shown.forEach((specId, i) => {
+      ctx.fillStyle = speciesLookup.colorOf(specId) ?? '#888';
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.lineWidth = 1;
+      const x = midX - totalWidth / 2 + i * (size + 2);
+      const y = midY - size * 2;
+      ctx.fillRect(x, y, size, size);
+      ctx.strokeRect(x, y, size, size);
+    });
   }
 
   /** The cells of whatever the Select tool is hovering, for the highlight

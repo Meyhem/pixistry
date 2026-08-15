@@ -335,6 +335,13 @@ monotonicity); extend the fuzz suite with tube ops.
 - **6f Selected-entity overlays:** flow-direction arrows along a selected tube; the allow-list as
   species chips beside a selected filter; a reach circle for a selected radiator.
 
+  **Landed**, and deliberately *not* as a registry capability: these are visual design (a chevron, a
+  dashed ellipse, a row of swatches), not behaviour, so a per-kind switch in the overlay drawing is
+  the honest shape -- a `drawOverlay` def field would just be canvas code wearing a registry hat.
+  Each answers a question the panel can't: a conveyor plumbed backwards looks identical to a correct
+  one until something fails to arrive, and a radiator's reach is otherwise a number with no relation
+  to anything on screen.
+
 ---
 
 ## Regression-proofing rules (standing, like the heat-guard rule in CLAUDE.md)
@@ -379,4 +386,7 @@ monotonicity); extend the fuzz suite with tube ops.
 - [x] Phase 6c: apparatus undo/redo (`entity-history.ts`), gesture-coalesced via `undoTag`; Ctrl+Z/
       Ctrl+Shift+Z + bench-menu entries
 - [x] Phase 6d: locked scenario entities -- refused by the worker on every edit path, read-only panel
-- [ ] Phase 6e–6f: sink/vent entities, selected-entity overlays
+- [x] Phase 6f: selected-entity overlays -- tube flow chevrons, radiator reach ring, filter allow-list
+      swatches
+- [ ] Phase 6e: sink/vent as line entities (the last item; note it makes `sinkMask` compositor-derived,
+      which today's CLAUDE.md rule explicitly forbids -- that rule has to change with it)
