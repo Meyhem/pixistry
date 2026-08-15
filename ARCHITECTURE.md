@@ -70,11 +70,18 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   whose `entityOwner` names a filter entity (see `filter.ts`).
 - **`entity.ts`** / **`entity-id.ts`** — the one entity vocabulary. Every apparatus kind (funnel, tube,
   flask, filter, radiator, glass polygon) carries a `kind` discriminant, `AnyEntity` is their union, and
-  `ENTITY_DEFS` is a registry of one small `EntityDef` per kind — `footprintOf`, `handlesOf` (over the
-  wire snapshot, for the UI), `dragHandle`, `move`, optional `rotate`, `place`, `toWire`, optional
-  `applySettings`/`action`. Everything generic about apparatus (the worker's protocol handlers, the
-  compositor, the UI's handle overlay) dispatches through it, so adding a kind is one registry row plus
-  the payload unions in `protocol.ts` — no new messages, no new selection code. `entityId` is one
+  `ENTITY_DEFS` is a registry of one small `EntityDef` per kind. Half of a def is instance-side, for the
+  worker (`footprintOf`, `dragHandle`, `move`, optional `rotate`, `place`, `toWire`, optional
+  `applySettings`/`action`); the other half is *wire*-side, for the UI (`handlesOf`, `bodyCells`,
+  `bodyDistance`, `boundsOf`, optional `rotationOf`) — the main thread only ever has frame snapshots, no
+  grid to resolve a real footprint against. Everything generic about apparatus (the worker's protocol
+  handlers, the compositor, selection, hit-testing, the handle overlay) dispatches through it, so adding
+  a kind is one registry row plus the payload unions in `protocol.ts` — no new messages, no new selection
+  code. `hitTestEntities` lives here too, since "what did this click land on" is the registry's own
+  question: nearest handle within grabbing distance wins, else the **smallest-area body** containing the
+  point. That area rule is what keeps a funnel standing inside a big beaker clickable, and it replaced a
+  hand-ordered funnel → knee → segment → filter → radiator → glass → flask chain that had to be
+  re-reasoned every time a kind was added. `entityId` is one
   monotonic never-reused counter shared by every kind (a per-kind id can't order a tube against a flask),
   and is also the id everything on the wire addresses.
 - **`entity-composite.ts`** — the one place apparatus becomes grid state. Every placed apparatus declares

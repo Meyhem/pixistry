@@ -12,8 +12,11 @@
 // shapes to protocol.ts's unions, and fill in one row here -- no new
 // messages, no new selection code, no compositor changes.
 import type { SimGrid } from './grid';
-import { FLASK_FACINGS } from './flask-shapes';
-import { FUNNEL_FACINGS } from './apparatus-shapes';
+import { FLASK_FACINGS, flaskShapeFor } from './flask-shapes';
+import { FUNNEL_FACINGS, funnelShapeFor } from './apparatus-shapes';
+import { sinkLineCells } from './sink';
+import { glassChainCells } from './glass';
+import { lumenBand, pointSegmentDistance, polylineToLumenPath } from './tube-shapes';
 import { celsiusToKelvin, kelvinToCelsius } from './heat';
 import {
   funnelGlassCells,
@@ -38,7 +41,7 @@ import {
 import { flaskFootprint, moveFlaskInstance, placeFlaskInstance, updateFlaskInstance, type FlaskInstance } from './flask';
 import { filterLineCells, moveFilterEndpoint, moveFilterInstance, placeFilterInstance, updateFilterInstance, type FilterInstance } from './filter';
 import { moveRadiatorEndpoint, moveRadiatorInstance, placeRadiatorInstance, radiatorStamp, updateRadiatorInstance, type RadiatorInstance } from './radiators';
-import { glassCells, glassPoints, moveGlassCorner, moveGlassInstance, placeGlassInstance, rotateGlassInstance, type GlassInstance } from './glass';
+import { GLASS_ROTATION_STEPS, glassCells, glassPoints, moveGlassCorner, moveGlassInstance, placeGlassInstance, rotateGlassInstance, type GlassInstance } from './glass';
 import type {
   EntityAction,
   EntityKind,
@@ -86,6 +89,24 @@ export interface Handle {
   readonly y: number;
 }
 
+/** What a click landed on: an entity, and either one of its handles (a
+ * reshape) or its body (a move). One shape for every kind -- the ten-variant
+ * per-kind union this replaced had to grow a case per capability per kind. */
+export interface EntityHit {
+  readonly entityId: number;
+  readonly kind: EntityKind;
+  /** null = the body, not a handle. */
+  readonly handleId: number | null;
+}
+
+/** An entity's extent in grid cells, from its wire snapshot. */
+export interface EntityBounds {
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minY: number;
+  readonly maxY: number;
+}
+
 interface EntityOfKind {
   funnel: FunnelInstance;
   tube: TubeInstance;
@@ -116,6 +137,22 @@ export interface EntityDef<K extends EntityKind> {
    * handles from frame snapshots, and the worker resolves a dragged handle
    * against the live instance in dragHandle below. */
   handlesOf(wire: WireOfKind[K]): Handle[];
+  /** The cells this entity reads as, for the UI's hover highlight and its
+   * selected-entity ghost. Not the footprint: a tube's is its channel (what
+   * you see and aim at), not its wall ring, and this side of the wire has no
+   * grid to resolve a footprint against anyway. */
+  bodyCells(wire: WireOfKind[K]): Point[];
+  /** How far (in cells) `p` is from this entity's body, or null if it's
+   * outside grabbing range -- the "did the click land on it" half of the
+   * UI's hit test. Distance breaks ties between overlapping candidates of
+   * the same size; boundsOf's area breaks them between different sizes (see
+   * entity-selection.ts). */
+  bodyDistance(wire: WireOfKind[K], p: Point): number | null;
+  boundsOf(wire: WireOfKind[K]): EntityBounds | null;
+  /** Which absolute rotation step this entity currently sits at, for kinds
+   * that rotate -- so the wheel can send `current + 1` rather than tracking
+   * the cycle itself. Omitted exactly when `rotate` is. */
+  rotationOf?(wire: WireOfKind[K]): number;
   dragHandle(grid: SimGrid, entity: EntityOfKind[K], handleId: number, x: number, y: number): void;
   move(grid: SimGrid, entity: EntityOfKind[K], dx: number, dy: number): void;
   /** Absolute rotation step -- a glass polygon's 0..7 wheel position, a
@@ -128,6 +165,12 @@ export interface EntityDef<K extends EntityKind> {
   applySettings?(entity: EntityOfKind[K], settings: SettingsOfKind[K]): void;
   action?(entity: EntityOfKind[K], action: EntityAction): void;
 }
+
+/** How close a click has to be to a one-cell-wide line (a filter, a radiator,
+ * a glass wall) or a tube's channel to count as landing on it. A couple of
+ * cells of slack, since a 1px line is otherwise unclickable at any sane
+ * zoom. */
+const LINE_HIT_RADIUS = 2;
 
 function facingIndex(rotation: number, steps: number): number {
   return ((Math.round(rotation) % steps) + steps) % steps;
@@ -144,10 +187,61 @@ function pointHandles(points: readonly Point[]): Handle[] {
   return points.map((p, i) => ({ handleId: i, x: p.x, y: p.y }));
 }
 
+function boundsOfCells(cells: readonly Point[]): EntityBounds | null {
+  if (cells.length === 0) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const c of cells) {
+    if (c.x < minX) minX = c.x;
+    if (c.x > maxX) maxX = c.x;
+    if (c.y < minY) minY = c.y;
+    if (c.y > maxY) maxY = c.y;
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+/** Distance from `p` to a chain of points, or null past LINE_HIT_RADIUS --
+ * the body test every polyline kind shares (a two-point line is just the
+ * short case). */
+function chainDistance(points: readonly Point[], p: Point): number | null {
+  let best = Infinity;
+  for (let i = 0; i + 1 < points.length; i++) {
+    const d = pointSegmentDistance(p, points[i] as Point, points[i + 1] as Point);
+    if (d < best) best = d;
+  }
+  return best <= LINE_HIT_RADIUS ? best : null;
+}
+
+function lineChain(line: { x0: number; y0: number; x1: number; y1: number }): Point[] {
+  return [
+    { x: line.x0, y: line.y0 },
+    { x: line.x1, y: line.y1 },
+  ];
+}
+
+/** Bounding-box body test for the stamp kinds (funnel, flask): anywhere
+ * inside the outline's box counts, at distance 0. Precise glass-cell
+ * hit-testing would make a vessel's own open interior unclickable, which is
+ * exactly where you reach for it. */
+function boxDistance(bounds: EntityBounds | null, p: Point): number | null {
+  if (!bounds) return null;
+  return p.x >= bounds.minX && p.x <= bounds.maxX && p.y >= bounds.minY && p.y <= bounds.maxY ? 0 : null;
+}
+
+function offsetCells(cells: readonly { dx: number; dy: number }[], x: number, y: number): Point[] {
+  return cells.map((c) => ({ x: x + c.dx, y: y + c.dy }));
+}
+
 export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   funnel: {
     footprintOf: (funnel) => ({ wall: funnelGlassCells(funnel) }),
     handlesOf: () => [],
+    bodyCells: (wire) => offsetCells(funnelShapeFor(wire.facing).cells, wire.anchorX, wire.anchorY),
+    bodyDistance: (wire, p) => boxDistance(boundsOfCells(offsetCells(funnelShapeFor(wire.facing).cells, wire.anchorX, wire.anchorY)), p),
+    boundsOf: (wire) => boundsOfCells(offsetCells(funnelShapeFor(wire.facing).cells, wire.anchorX, wire.anchorY)),
+    rotationOf: (wire) => FUNNEL_FACINGS.indexOf(wire.facing),
     dragHandle: () => {},
     move: (_grid, funnel, dx, dy) => moveFunnelInstance(funnel, funnel.anchorX + dx, funnel.anchorY + dy),
     rotate: (funnel, rotation) => {
@@ -192,6 +286,9 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   tube: {
     footprintOf: (tube) => ({ wall: tubeGlassCells(tube), lumen: tubeLumenCells(tube) }),
     handlesOf: (wire) => pointHandles(wire.points),
+    bodyCells: (wire) => lumenBand(polylineToLumenPath(wire.points)),
+    bodyDistance: (wire, p) => chainDistance(wire.points, p),
+    boundsOf: (wire) => boundsOfCells(lumenBand(polylineToLumenPath(wire.points))),
     dragHandle: (grid, tube, handleId, x, y) => moveTubeKnee(grid, tube, handleId, { x, y }),
     move: (grid, tube, dx, dy) => moveTubeInstance(grid, tube, dx, dy),
     place: (grid, params) => {
@@ -213,6 +310,10 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   flask: {
     footprintOf: (flask) => ({ wall: flaskFootprint(flask).wallCells }),
     handlesOf: () => [],
+    bodyCells: (wire) => offsetCells(flaskShapeFor(wire.facing, wire.sizeScale, wire.flaskKind).cells, wire.x, wire.y),
+    bodyDistance: (wire, p) => boxDistance(boundsOfCells(offsetCells(flaskShapeFor(wire.facing, wire.sizeScale, wire.flaskKind).cells, wire.x, wire.y)), p),
+    boundsOf: (wire) => boundsOfCells(offsetCells(flaskShapeFor(wire.facing, wire.sizeScale, wire.flaskKind).cells, wire.x, wire.y)),
+    rotationOf: (wire) => FLASK_FACINGS.indexOf(wire.facing),
     dragHandle: () => {},
     move: (_grid, flask, dx, dy) => moveFlaskInstance(flask, flask.x + dx, flask.y + dy),
     rotate: (flask, rotation) => {
@@ -248,6 +349,9 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   filter: {
     footprintOf: (filter) => ({ membrane: filterLineCells(filter) }),
     handlesOf: (wire) => lineHandles(wire),
+    bodyCells: (wire) => sinkLineCells(wire.x0, wire.y0, wire.x1, wire.y1, 0),
+    bodyDistance: (wire, p) => chainDistance(lineChain(wire), p),
+    boundsOf: (wire) => boundsOfCells(lineChain(wire)),
     dragHandle: (_grid, filter, handleId, x, y) => moveFilterEndpoint(filter, handleId === 0 ? 0 : 1, x, y),
     move: (_grid, filter, dx, dy) => moveFilterInstance(filter, dx, dy),
     place: (_grid, params) => placeFilterInstance(params.x0, params.y0, params.x1, params.y1, params.species),
@@ -265,6 +369,9 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   radiator: {
     footprintOf: (radiator) => ({ radiator: radiatorStamp(radiator) }),
     handlesOf: (wire) => lineHandles(wire),
+    bodyCells: (wire) => sinkLineCells(wire.x0, wire.y0, wire.x1, wire.y1, 0),
+    bodyDistance: (wire, p) => chainDistance(lineChain(wire), p),
+    boundsOf: (wire) => boundsOfCells(lineChain(wire)),
     dragHandle: (_grid, radiator, handleId, x, y) => moveRadiatorEndpoint(radiator, handleId === 0 ? 0 : 1, x, y),
     move: (_grid, radiator, dx, dy) => moveRadiatorInstance(radiator, dx, dy),
     place: (_grid, params) =>
@@ -291,6 +398,10 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   glass: {
     footprintOf: (glass) => ({ wall: glassCells(glass) }),
     handlesOf: (wire) => pointHandles(wire.points),
+    bodyCells: (wire) => glassChainCells(wire.points),
+    bodyDistance: (wire, p) => chainDistance(wire.points, p),
+    boundsOf: (wire) => boundsOfCells(wire.points),
+    rotationOf: (wire) => facingIndex(wire.rotation, GLASS_ROTATION_STEPS),
     dragHandle: (_grid, glass, handleId, x, y) => moveGlassCorner(glass, handleId, x, y),
     move: (_grid, glass, dx, dy) => moveGlassInstance(glass, dx, dy),
     rotate: (glass, rotation) => rotateGlassInstance(glass, rotation),
@@ -328,6 +439,62 @@ export function entityWires(entities: readonly AnyEntity[]): EntityWire[] {
 /** Handles for one wire snapshot -- what the UI hit-tests and draws. */
 export function entityHandles(wire: EntityWire): Handle[] {
   return defOf(wire.kind).handlesOf(wire as never);
+}
+
+/** The cells an entity reads as on screen -- the hover highlight and the
+ * selected-entity ghost. */
+export function entityBodyCells(wire: EntityWire): Point[] {
+  return defOf(wire.kind).bodyCells(wire as never);
+}
+
+export function entityBounds(wire: EntityWire): EntityBounds | null {
+  return defOf(wire.kind).boundsOf(wire as never);
+}
+
+/** The rotation step an entity currently sits at, or null for the kinds that
+ * don't turn (a line has no facing) -- so a wheel notch is
+ * `rotateEntity(current + step)` with no per-kind cycle bookkeeping. */
+export function entityRotation(wire: EntityWire): number | null {
+  const def = defOf(wire.kind);
+  return def.rotationOf ? def.rotationOf(wire as never) : null;
+}
+
+/** What a click at (x, y) lands on: the nearest handle within grabbing
+ * distance, else the smallest body containing the point, else null.
+ *
+ * Handles beat bodies because a handle is the more specific thing to have
+ * aimed at and is only a couple of cells wide, so a click on one is never an
+ * accident. Among bodies, *smallest area wins*: that's what keeps a funnel
+ * or a tube knee standing inside a big flask clickable, and it replaced a
+ * hand-ordered funnel -> knee -> segment -> filter -> radiator -> glass ->
+ * flask chain that had to be re-reasoned every time a kind was added.
+ * Distance breaks ties between equally-sized candidates. */
+export function hitTestEntities(entities: readonly EntityWire[], x: number, y: number, handleRadius: number): EntityHit | null {
+  const p = { x, y };
+  let bestHandle: { hit: EntityHit; dist: number } | null = null;
+  for (const wire of entities) {
+    for (const handle of entityHandles(wire)) {
+      const dist = Math.hypot(handle.x - x, handle.y - y);
+      if (dist > handleRadius) continue;
+      if (!bestHandle || dist < bestHandle.dist) {
+        bestHandle = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: handle.handleId }, dist };
+      }
+    }
+  }
+  if (bestHandle) return bestHandle.hit;
+
+  let bestBody: { hit: EntityHit; area: number; dist: number } | null = null;
+  for (const wire of entities) {
+    const def = defOf(wire.kind);
+    const dist = def.bodyDistance(wire as never, p);
+    if (dist === null) continue;
+    const bounds = def.boundsOf(wire as never);
+    const area = bounds ? (bounds.maxX - bounds.minX + 1) * (bounds.maxY - bounds.minY + 1) : Infinity;
+    if (!bestBody || area < bestBody.area || (area === bestBody.area && dist < bestBody.dist)) {
+      bestBody = { hit: { entityId: wire.entityId, kind: wire.kind, handleId: null }, area, dist };
+    }
+  }
+  return bestBody ? bestBody.hit : null;
 }
 
 export function moveEntityBy(grid: SimGrid, entity: AnyEntity, dx: number, dy: number): void {

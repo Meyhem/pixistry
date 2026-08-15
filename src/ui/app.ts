@@ -29,10 +29,11 @@ import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
 import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
-import { glassChainCells, GLASS_ROTATION_STEPS } from '../sim/glass';
+import { glassChainCells } from '../sim/glass';
+import { entityBodyCells, entityBounds, entityHandles, type EntityKind } from '../sim/entity';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
-import { funnelBounds, funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
-import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
+import { funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
+import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { apertureCells, lumenBand, lumenOpenEnds, lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolChest, type ToolChestCallbacks } from './tool-chest';
 import {
@@ -49,15 +50,14 @@ import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } 
 import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import {
-  ApparatusSelection,
-  isHandleHit,
+  EntitySelection,
+  type EntityHit,
   type FilterEditDraft,
   type FlaskEditDraft,
   type FunnelEditDraft,
-  type ApparatusHit,
   type RadiatorEditDraft,
   type TubeEditDraft,
-} from './apparatus-selection';
+} from './entity-selection';
 import { buildBriefing, buildObjectiveHud, buildWinOverlay, type BurstStatus } from './campaign-hud';
 import { loadProgress, recordCompletion, recordDiscovery, saveProgress, starsForCompletion, unlockAchievement } from './campaign-progress';
 import { installDebugHook } from './debug-hook';
@@ -93,6 +93,16 @@ const DEFAULT_PINNED_LABELS = ['H2O', 'NaCl', 'Fe', 'Cu', 'Na', 'Cl2', 'O2', 'C'
 const DRAFT_HANDLE_COLOR = '#f2d94e';
 const SELECTED_HANDLE_COLOR = SELECT_APPARATUS_COLOR;
 const IDLE_HANDLE_COLOR = 'rgba(77, 163, 255, 0.45)';
+// The wash drawn over a selected entity's own cells, in its kind's colour --
+// glassware blue, membrane green, radiator orange.
+const GHOST_COLOR: Record<EntityKind, string> = {
+  funnel: 'rgba(169, 214, 232, 0.5)',
+  tube: 'rgba(169, 214, 232, 0.3)',
+  flask: 'rgba(169, 214, 232, 0.5)',
+  filter: 'rgba(140, 224, 150, 0.5)',
+  radiator: 'rgba(255, 157, 92, 0.55)',
+  glass: 'rgba(169, 214, 232, 0.5)',
+};
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
 
 type Tool =
@@ -637,10 +647,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     totalAmount: DEFAULT_FUNNEL_TOTAL_AMOUNT,
     facing: 'down',
   };
-  // What the Select tool's cursor is over right now (see
-  // hoveredApparatusCells) -- drives the hover highlight and the cursor
-  // shape, so what a click would grab is visible before committing to it.
-  let hoveredApparatus: ApparatusHit = { kind: 'none' };
+  // What the Select tool's cursor is over right now -- drives the hover
+  // highlight and the cursor shape, so what a click would grab is visible
+  // before committing to it.
+  let hoveredApparatus: EntityHit | null = null;
   let lastHoverX = 0;
   let lastHoverY = 0;
 
@@ -654,9 +664,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // panel), replacing the separate "Erlenmeyer (stirred)" chest entry.
   let flaskStirred = false;
 
-  // select-apparatus tool's selection/edit-draft/drag state for both
-  // apparatus types -- see apparatus-selection.ts.
-  const apparatusSelection = new ApparatusSelection();
+  // The Select tool's selection/edit-draft/drag state, one of each for every
+  // apparatus kind -- see entity-selection.ts.
+  const selection = new EntitySelection(DEFAULT_FUNNEL_TOTAL_AMOUNT);
 
   // Conveyor-tube tool config (pre-placement) -- same "captured at placement
   // time" convention as the funnel's config above, and same shape as
@@ -674,9 +684,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   /** Pushes the selected filter line's edited allow-list to the worker --
    * the filter counterpart of sendTubeUpdate/sendFunnelUpdate. */
   function sendFilterUpdate(): void {
-    const entityId = apparatusSelection.selectedFilterId;
-    const draft = apparatusSelection.filterEditDraft;
-    if (entityId === null || !draft) return;
+    const entityId = selection.selectedOf('filter')?.entityId;
+    const draft = selection.draftOf('filter');
+    if (entityId === undefined || !draft) return;
     send({ type: 'updateEntitySettings', entityId, settings: { kind: 'filter', species: [...draft.species] } });
   }
 
@@ -804,13 +814,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (t.kind === 'select-apparatus') {
       // The only branch that depends on live selection state rather than
       // just the tool kind, so it stays logic instead of a static table row.
-      const selectedFunnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
-      const selectedTube = apparatusSelection.findTube(apparatusSelection.selectedTubeId);
-      const selectedFlask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
-      const selectedFilter = apparatusSelection.findFilter(apparatusSelection.selectedFilterId);
-      const selectedRadiator = apparatusSelection.findRadiator(apparatusSelection.selectedRadiatorId);
-      const selectedGlass = apparatusSelection.findGlass(apparatusSelection.selectedGlassId);
-      const nothingSelected = !selectedFunnel && !selectedTube && !selectedFlask && !selectedFilter && !selectedRadiator && !selectedGlass;
+      const selectedFunnel = selection.selectedOf('funnel');
+      const selectedTube = selection.selectedOf('tube');
+      const selectedFlask = selection.selectedOf('flask');
+      const selectedFilter = selection.selectedOf('filter');
+      const selectedRadiator = selection.selectedOf('radiator');
+      const selectedGlass = selection.selectedOf('glass');
+      const nothingSelected = !selection.selected();
       // Whichever apparatus is selected lends the HUD chip its own name and
       // swatch, so the chip reads as "the thing you're holding" rather than
       // as the tool. At most one is ever selected (see
@@ -834,8 +844,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
                       // would otherwise keep reading stale until some unrelated
                       // render.
                       label: flaskLabel(
-                        apparatusSelection.flaskEditDraft?.flaskKind ?? selectedFlask.flaskKind,
-                        apparatusSelection.flaskEditDraft?.stirred ?? selectedFlask.stirred,
+                        selection.draftOf('flask')?.flaskKind ?? selectedFlask.flaskKind,
+                        selection.draftOf('flask')?.stirred ?? selectedFlask.stirred,
                       ),
                       color: FLASK_COLOR,
                     }
@@ -888,11 +898,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * became derived (see sim/entity-composite.ts), because "erase half a
    * vessel" isn't a state the bench can hold. */
   function deleteSelectedApparatus(): void {
-    const ref = apparatusSelection.selectedRef();
-    if (!ref) return;
-    send({ type: 'deleteEntity', entityId: ref.entityId });
-    apparatusSelection.endDrag();
-    apparatusSelection.selectFunnel(null); // clears every kind's selection
+    const selected = selection.selected();
+    if (!selected) return;
+    send({ type: 'deleteEntity', entityId: selected.entityId });
+    selection.endDrag();
+    selection.select(null);
     render();
   }
 
@@ -900,19 +910,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * counterpart to dragging it. One message for every kind: 'moveEntity'
    * slides whatever the id names, whole. */
   function nudgeSelectedApparatus(dx: number, dy: number): void {
-    const ref = apparatusSelection.selectedRef();
-    if (ref) send({ type: 'moveEntity', entityId: ref.entityId, dx, dy });
+    const selected = selection.selected();
+    if (selected) send({ type: 'moveEntity', entityId: selected.entityId, dx, dy });
   }
 
   /** Pushes the edit draft's full config to the worker as one message -- see
    * FunnelEditDraft's doc comment for why every field is sent together
    * rather than patched individually. */
   function sendFunnelUpdate(): void {
-    const { selectedFunnelId, editDraft } = apparatusSelection;
-    if (selectedFunnelId === null || !editDraft) return;
+    const funnel = selection.selectedOf('funnel');
+    const editDraft = selection.draftOf('funnel');
+    if (!funnel || !editDraft) return;
     send({
       type: 'updateEntitySettings',
-      entityId: selectedFunnelId,
+      entityId: funnel.entityId,
       settings: {
         kind: 'funnel',
         specId: editDraft.specId,
@@ -929,20 +940,21 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * Unlike the pre-placement sliders (whose values are only ever read at
    * placement time), these take effect the moment they move. */
   function sendRadiatorUpdate(): void {
-    const entityId = apparatusSelection.selectedRadiatorId;
-    const draft = apparatusSelection.radiatorEditDraft;
-    if (entityId === null || !draft) return;
+    const entityId = selection.selectedOf('radiator')?.entityId;
+    const draft = selection.draftOf('radiator');
+    if (entityId === undefined || !draft) return;
     send({ type: 'updateEntitySettings', entityId, settings: { kind: 'radiator', radiationRadius: draft.radiationRadius, targetTempC: draft.targetTempC } });
   }
 
   /** Pushes a selected flask's whole config to the worker, which re-stamps
    * the vessel (see flask.ts's updateFlaskInstance). */
   function sendFlaskUpdate(): void {
-    const { selectedFlaskId, flaskEditDraft } = apparatusSelection;
-    if (selectedFlaskId === null || !flaskEditDraft) return;
+    const flask = selection.selectedOf('flask');
+    const flaskEditDraft = selection.draftOf('flask');
+    if (!flask || !flaskEditDraft) return;
     send({
       type: 'updateEntitySettings',
-      entityId: selectedFlaskId,
+      entityId: flask.entityId,
       settings: {
         kind: 'flask',
         facing: flaskEditDraft.facing,
@@ -953,76 +965,32 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     });
   }
 
-  /** The scroll wheel's job while the select tool holds something: turns
-   * whichever selected apparatus can be rotated -- a flask or a glass polygon
-   * in 45-degree steps, a funnel through its four facings. Leaves the event
-   * alone (no preventDefault) when nothing rotatable is selected, so the
-   * wheel keeps doing whatever it normally would. */
+  /** The scroll wheel's job while the Select tool holds something: turns
+   * whatever is selected, if its kind turns at all -- a flask or a glass
+   * polygon in 45-degree steps, a funnel through its four facings. One call
+   * for every kind now that rotation is a registry capability (see
+   * sim/entity.ts): the selection resolves the next absolute step off its own
+   * draft and keeps the draft in sync, and a kind with no `rotate` simply
+   * returns null. Leaves the event alone (no preventDefault) in that case, so
+   * the wheel keeps doing whatever it normally would. */
   function rotateSelectedApparatus(step: 1 | -1, event: { preventDefault(): void }): void {
-    const flask = apparatusSelection.findFlask(apparatusSelection.selectedFlaskId);
-    if (flask) {
-      event.preventDefault();
-      // Sent as a whole settings block (same convention as every other flask
-      // edit) rather than a bare 'rotateEntity' index, because the wheel also
-      // has to keep the edit draft's facing in step -- the panel reads it.
-      const draft = apparatusSelection.flaskEditDraft;
-      const facing = nextFlaskFacing(draft?.facing ?? flask.facing, step);
-      if (draft) draft.facing = facing;
-      send({
-        type: 'updateEntitySettings',
-        entityId: flask.entityId,
-        settings: {
-          kind: 'flask',
-          facing,
-          sizeScale: draft?.sizeScale ?? flask.sizeScale,
-          stirred: draft?.stirred ?? flask.stirred,
-          flaskKind: draft?.flaskKind ?? flask.flaskKind,
-        },
-      });
-      return;
-    }
-    const funnel = apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId);
-    if (funnel) {
-      event.preventDefault();
-      // Same whole-config convention as the flask above, falling back to the
-      // worker's snapshot for the fields the draft hasn't been seeded with
-      // yet.
-      const draft = apparatusSelection.editDraft;
-      const facing = nextFunnelFacing(draft?.facing ?? funnel.facing, step);
-      if (draft) draft.facing = facing;
-      send({
-        type: 'updateEntitySettings',
-        entityId: funnel.entityId,
-        settings: {
-          kind: 'funnel',
-          specId: draft?.specId ?? funnel.specId,
-          tempC: draft?.tempC ?? funnel.tempC,
-          ratePerMinute: draft?.ratePerMinute ?? funnel.ratePerMinute,
-          total: draft ? (draft.totalMode === 'infinite' ? null : draft.totalAmount) : funnel.total,
-          facing,
-        },
-      });
-      return;
-    }
-    const glass = apparatusSelection.findGlass(apparatusSelection.selectedGlassId);
-    if (glass) {
-      event.preventDefault();
-      // Absolute, and counted off the local draft rather than the snapshot --
-      // see the 'rotateEntity' message's doc comment for why it's absolute,
-      // and glassRotationDraft's for why the snapshot can't be the thing it
-      // counts from.
-      const rotation = ((apparatusSelection.glassRotationDraft ?? glass.rotation) + step + GLASS_ROTATION_STEPS) % GLASS_ROTATION_STEPS;
-      apparatusSelection.glassRotationDraft = rotation;
-      send({ type: 'rotateEntity', entityId: glass.entityId, rotation });
-    }
+    const message = selection.rotateSelection(step);
+    if (!message) return;
+    event.preventDefault();
+    send(message);
+    // A flask's own label carries its facing into the HUD chip, and the ghost
+    // overlay reads the draft too -- both are drawn from local state, so they
+    // need the repaint rather than waiting a frame for the worker.
+    render();
   }
 
   function sendTubeUpdate(): void {
-    const { selectedTubeId, tubeEditDraft } = apparatusSelection;
-    if (selectedTubeId === null || !tubeEditDraft) return;
+    const tube = selection.selectedOf('tube');
+    const tubeEditDraft = selection.draftOf('tube');
+    if (!tube || !tubeEditDraft) return;
     send({
       type: 'updateEntitySettings',
-      entityId: selectedTubeId,
+      entityId: tube.entityId,
       settings: { kind: 'tube', filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null },
     });
   }
@@ -1350,73 +1318,48 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // The select-apparatus tool's own selection can go stale (the selected
     // apparatus got erased) -- drop it rather than keep pointing an edit
     // panel at nothing.
-    if (isEditMode) apparatusSelection.dropStaleSelection();
-    const selectedFunnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
-    const selectedTube = isEditMode ? apparatusSelection.findTube(apparatusSelection.selectedTubeId) : undefined;
-    const selectedFlask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
-    const selectedFilter = isEditMode ? apparatusSelection.findFilter(apparatusSelection.selectedFilterId) : undefined;
-    const selectedRadiator = isEditMode ? apparatusSelection.findRadiator(apparatusSelection.selectedRadiatorId) : undefined;
-    if (isEditMode && selectedFunnel && !apparatusSelection.editDraft) {
-      apparatusSelection.editDraft = {
-        specId: selectedFunnel.specId,
-        tempC: selectedFunnel.tempC,
-        ratePerMinute: selectedFunnel.ratePerMinute,
-        totalMode: selectedFunnel.total === null ? 'infinite' : 'finite',
-        totalAmount: selectedFunnel.total ?? funnelDraft.totalAmount,
-        facing: selectedFunnel.facing,
-      };
-    }
-    if (isEditMode && selectedTube && !apparatusSelection.tubeEditDraft) {
-      apparatusSelection.tubeEditDraft = {
-        filter: selectedTube.filter ? new Set(selectedTube.filter) : null,
-      };
-    }
-    if (isEditMode && selectedFlask && !apparatusSelection.flaskEditDraft) {
-      apparatusSelection.flaskEditDraft = {
-        facing: selectedFlask.facing,
-        sizeScale: selectedFlask.sizeScale,
-        stirred: selectedFlask.stirred,
-        flaskKind: selectedFlask.flaskKind,
-      };
-    }
-    if (isEditMode && selectedRadiator && !apparatusSelection.radiatorEditDraft) {
-      apparatusSelection.radiatorEditDraft = {
-        radiationRadius: selectedRadiator.radiationRadius,
-        targetTempC: selectedRadiator.targetTempC,
-      };
-    }
+    if (isEditMode) selection.dropStaleSelection();
+    // Drafts are seeded once, by the selection itself (see
+    // entity-selection.ts's `select`) -- this used to be four "if selected
+    // and no draft yet" blocks here plus two more seeded at selection time,
+    // which is how a panel could come up showing the previous entity's
+    // values.
+    const selectedFunnel = isEditMode ? selection.selectedOf('funnel') : undefined;
+    const selectedTube = isEditMode ? selection.selectedOf('tube') : undefined;
+    const selectedFilter = isEditMode ? selection.selectedOf('filter') : undefined;
+    // Typed as the bare draft shapes (not the tagged union members) so the
+    // generic per-key setters below can write through them.
+    const funnelEditDraft: FunnelEditDraft | null = isEditMode ? selection.draftOf('funnel') : null;
+    const tubeEditDraft: TubeEditDraft | null = isEditMode ? selection.draftOf('tube') : null;
+    const flaskEditDraft: FlaskEditDraft | null = isEditMode ? selection.draftOf('flask') : null;
+    const filterEditDraft: FilterEditDraft | null = isEditMode ? selection.draftOf('filter') : null;
+    const radiatorEditDraft: RadiatorEditDraft | null = isEditMode ? selection.draftOf('radiator') : null;
     // Apparatus only comes off the bench through Delete now, so the button
     // shows for every kind the Select tool can have picked up.
-    meta.canDelete = isEditMode && apparatusSelection.selectedRef() !== null;
+    meta.canDelete = isEditMode && selection.selected() !== undefined;
     const isTubeEditMode = isEditMode && !!selectedTube;
-    const isFlaskEditMode = isEditMode && !!selectedFlask;
     // Editing a placed radiator edits its own draft (pushed straight to the
     // worker, which re-stamps its cells); otherwise these two sliders
-    // configure what the *next* line drawn will radiate.
-    const isRadiatorEditMode = isEditMode && !!selectedRadiator;
-    const radiatorFields: RadiatorEditDraft =
-      isRadiatorEditMode && apparatusSelection.radiatorEditDraft ? apparatusSelection.radiatorEditDraft : { radiationRadius, targetTempC };
+    // configure what the *next* line drawn will radiate -- and the same for
+    // the flask/tube/filter fields below.
+    const radiatorFields: RadiatorEditDraft = radiatorEditDraft ?? { radiationRadius, targetTempC };
     const flaskFields: FlaskEditDraft =
-      isFlaskEditMode && apparatusSelection.flaskEditDraft
-        ? apparatusSelection.flaskEditDraft
-        : { facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, flaskKind: tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND };
-    const tubeFields: TubeFieldValues =
-      isTubeEditMode && apparatusSelection.tubeEditDraft ? apparatusSelection.tubeEditDraft : tubeDraft;
+      flaskEditDraft ?? { facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, flaskKind: tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND };
+    const tubeFields: TubeFieldValues = tubeEditDraft ?? tubeDraft;
     // Editing a placed line edits its own draft; otherwise the Filter tool's
     // panel configures what the *next* line drawn will allow.
     const isFilterEditMode = isEditMode && !!selectedFilter;
-    const filterFields: FilterEditDraft =
-      isFilterEditMode && apparatusSelection.filterEditDraft ? apparatusSelection.filterEditDraft : filterDraft;
+    const filterFields: FilterEditDraft = filterEditDraft ?? filterDraft;
 
     const funnelFields: FunnelFieldValues =
-      isEditMode && apparatusSelection.editDraft
+      funnelEditDraft
         ? {
-            specLabel: speciesLookup.labelOf(apparatusSelection.editDraft.specId) ?? `spec ${apparatusSelection.editDraft.specId}`,
-            specColor: speciesLookup.colorOf(apparatusSelection.editDraft.specId) ?? '#888',
-            tempC: apparatusSelection.editDraft.tempC,
-            ratePerMinute: apparatusSelection.editDraft.ratePerMinute,
-            totalMode: apparatusSelection.editDraft.totalMode,
-            totalAmount: apparatusSelection.editDraft.totalAmount,
+            specLabel: speciesLookup.labelOf(funnelEditDraft.specId) ?? `spec ${funnelEditDraft.specId}`,
+            specColor: speciesLookup.colorOf(funnelEditDraft.specId) ?? '#888',
+            tempC: funnelEditDraft.tempC,
+            ratePerMinute: funnelEditDraft.ratePerMinute,
+            totalMode: funnelEditDraft.totalMode,
+            totalAmount: funnelEditDraft.totalAmount,
             remaining: selectedFunnel?.remaining ?? null,
             enabled: selectedFunnel?.enabled ?? false,
           }
@@ -1440,7 +1383,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // instead (see sendFunnelUpdate).
     //
     // Writes through whichever draft is live -- a placed funnel's
-    // apparatusSelection.editDraft in edit mode, or the pre-placement
+    // selection.editDraft in edit mode, or the pre-placement
     // funnelDraft otherwise -- and pushes the change to the worker
     // immediately when editing a placed funnel. No render() by default: a
     // rebuild mid-drag would replace the slider DOM node under the
@@ -1450,8 +1393,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // itself depends on the value (see onSetFunnelTotalMode below).
     function funnelSetter<K extends keyof FunnelEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FunnelEditDraft[K]) => void {
       return (value) => {
-        if (isEditMode && apparatusSelection.editDraft) {
-          apparatusSelection.editDraft[key] = value;
+        if (funnelEditDraft) {
+          funnelEditDraft[key] = value;
           sendFunnelUpdate();
         } else {
           funnelDraft[key] = value;
@@ -1490,8 +1433,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
      * ever read when a new line is drawn. */
     function radiatorSetter(key: keyof RadiatorEditDraft): (value: number) => void {
       return (value) => {
-        if (isRadiatorEditMode && apparatusSelection.radiatorEditDraft) {
-          apparatusSelection.radiatorEditDraft[key] = value;
+        if (radiatorEditDraft) {
+          radiatorEditDraft[key] = value;
           sendRadiatorUpdate();
         } else if (key === 'radiationRadius') {
           radiationRadius = value;
@@ -1507,8 +1450,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
      * state. */
     function flaskSetter<K extends keyof FlaskEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FlaskEditDraft[K]) => void {
       return (value) => {
-        if (isFlaskEditMode && apparatusSelection.flaskEditDraft) {
-          apparatusSelection.flaskEditDraft[key] = value;
+        if (flaskEditDraft) {
+          flaskEditDraft[key] = value;
           sendFlaskUpdate();
         } else if (key === 'sizeScale') {
           flaskSizeScale = value as number;
@@ -1548,12 +1491,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetFunnelTotalMode: funnelSetter('totalMode', { render: true }),
       onSetFunnelTotalAmount: funnelSetter('totalAmount'),
       onSetFunnelEnabled: (enabled) => {
-        if (apparatusSelection.selectedFunnelId !== null) {
-          send({ type: 'entityAction', entityId: apparatusSelection.selectedFunnelId, action: enabled ? 'enable' : 'disable' });
+        if (selectedFunnel) {
+          send({ type: 'entityAction', entityId: selectedFunnel.entityId, action: enabled ? 'enable' : 'disable' });
         }
       },
       onResetFunnel: () => {
-        if (apparatusSelection.selectedFunnelId !== null) send({ type: 'entityAction', entityId: apparatusSelection.selectedFunnelId, action: 'reset' });
+        if (selectedFunnel) send({ type: 'entityAction', entityId: selectedFunnel.entityId, action: 'reset' });
       },
       tubeFields,
       tubePalette: palette,
@@ -1563,8 +1506,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         render();
       },
       onRemoveTubeFilterSpecies: (specId) => {
-        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          apparatusSelection.tubeEditDraft.filter = removeFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
+        if (tubeEditDraft) {
+          tubeEditDraft.filter = removeFilterSpecies(tubeEditDraft.filter, specId);
           sendTubeUpdate();
         } else {
           tubeDraft.filter = removeFilterSpecies(tubeDraft.filter, specId);
@@ -1621,18 +1564,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         onSelectSpecies: (specId) => {
           if (ptTarget === 'funnel-config') {
             funnelDraft.specId = specId;
-          } else if (ptTarget === 'funnel-edit' && apparatusSelection.editDraft) {
-            apparatusSelection.editDraft.specId = specId;
+          } else if (ptTarget === 'funnel-edit' && funnelEditDraft) {
+            funnelEditDraft.specId = specId;
             sendFunnelUpdate();
           } else if (ptTarget === 'tube-filter-add') {
             tubeDraft.filter = addFilterSpecies(tubeDraft.filter, specId);
-          } else if (ptTarget === 'tube-filter-edit-add' && apparatusSelection.tubeEditDraft) {
-            apparatusSelection.tubeEditDraft.filter = addFilterSpecies(apparatusSelection.tubeEditDraft.filter, specId);
+          } else if (ptTarget === 'tube-filter-edit-add' && tubeEditDraft) {
+            tubeEditDraft.filter = addFilterSpecies(tubeEditDraft.filter, specId);
             sendTubeUpdate();
           } else if (ptTarget === 'filter-add') {
             filterDraft.species.add(specId);
-          } else if (ptTarget === 'filter-edit-add' && apparatusSelection.filterEditDraft) {
-            apparatusSelection.filterEditDraft.species.add(specId);
+          } else if (ptTarget === 'filter-edit-add' && filterEditDraft) {
+            filterEditDraft.species.add(specId);
             sendFilterUpdate();
           } else {
             setTool({ kind: 'paint', specId });
@@ -1769,36 +1712,18 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * selected one, because the alternative is a bench where nothing looks
    * grabbable until you've already guessed right and clicked it. */
   function drawSelectionHandles(ctx: CanvasRenderingContext2D, cellPxX: number, cellPxY: number): void {
-    for (const tube of apparatusSelection.allTubes()) {
-      // A selected tube gets its full lumen/wall ghost (that's what makes a
-      // knee drag legible); the rest just get their knees marked.
-      if (tube.entityId === apparatusSelection.selectedTubeId) drawTubeGhost(ctx, tube.points, cellPxX, cellPxY, false);
-      else drawHandleDots(ctx, tube.points, cellPxX, cellPxY, IDLE_HANDLE_COLOR);
-    }
-    for (const filter of apparatusSelection.allFilters()) {
-      const selected = filter.entityId === apparatusSelection.selectedFilterId;
-      if (selected) drawGhostCells(ctx, sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0), cellPxX, cellPxY, 'rgba(140, 224, 150, 0.5)');
-      const ends = [
-        { x: filter.x0, y: filter.y0 },
-        { x: filter.x1, y: filter.y1 },
-      ];
-      drawHandleDots(ctx, ends, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
-    }
-    for (const radiator of apparatusSelection.allRadiators()) {
-      const selected = radiator.entityId === apparatusSelection.selectedRadiatorId;
+    for (const wire of selection.all()) {
+      const selected = wire.entityId === selection.selectedId;
       if (selected) {
-        drawGhostCells(ctx, sinkLineCells(radiator.x0, radiator.y0, radiator.x1, radiator.y1, 0), cellPxX, cellPxY, 'rgba(255, 157, 92, 0.55)');
+        // The selected entity gets its body washed in its own color -- for a
+        // tube that's the channel, which is what makes a knee drag legible.
+        if (wire.kind === 'tube') drawTubeGhost(ctx, wire.points, cellPxX, cellPxY, false);
+        else drawGhostCells(ctx, entityBodyCells(wire), cellPxX, cellPxY, GHOST_COLOR[wire.kind]);
       }
-      const ends = [
-        { x: radiator.x0, y: radiator.y0 },
-        { x: radiator.x1, y: radiator.y1 },
-      ];
-      drawHandleDots(ctx, ends, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
-    }
-    for (const glass of apparatusSelection.allGlass()) {
-      const selected = glass.entityId === apparatusSelection.selectedGlassId;
-      if (selected) drawGhostCells(ctx, glassChainCells(glass.points), cellPxX, cellPxY, 'rgba(169, 214, 232, 0.5)');
-      drawHandleDots(ctx, glass.points, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
+      const handles = entityHandles(wire);
+      if (handles.length > 0) {
+        drawHandleDots(ctx, handles, cellPxX, cellPxY, selected ? SELECTED_HANDLE_COLOR : IDLE_HANDLE_COLOR);
+      }
     }
     // Whatever the cursor is over, faintly, so "will this click pick that up?"
     // is answered before the click rather than after it. Skipped for the
@@ -1808,50 +1733,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   }
 
   /** The cells of whatever the Select tool is hovering, for the highlight
-   * above -- one place that knows how to turn a hit back into a footprint,
-   * since every kind stores its shape differently. */
+   * above -- one registry call now, where this used to be a switch with a
+   * case per hit variant, each reaching into that kind's own snapshot shape. */
   function hoveredApparatusCells(): Point[] {
     const hit = hoveredApparatus;
-    const selected = apparatusSelection.selectedRef();
-    const isSelected = (entityId: number): boolean => selected?.entityId === entityId;
-    switch (hit.kind) {
-      case 'funnel': {
-        const funnel = apparatusSelection.findFunnel(hit.entityId);
-        if (!funnel || isSelected(hit.entityId)) return [];
-        return funnelShapeFor(funnel.facing).cells.map((c) => ({ x: funnel.anchorX + c.dx, y: funnel.anchorY + c.dy }));
-      }
-      case 'flask': {
-        const flask = apparatusSelection.findFlask(hit.entityId);
-        if (!flask || isSelected(hit.entityId)) return [];
-        return flaskShapeFor(flask.facing, flask.sizeScale, flask.flaskKind).cells.map((c) => ({ x: flask.x + c.dx, y: flask.y + c.dy }));
-      }
-      case 'tube-knee':
-      case 'tube-segment': {
-        const tube = apparatusSelection.findTube(hit.entityId);
-        if (!tube || isSelected(hit.entityId)) return [];
-        return lumenBand(polylineToLumenPath(tube.points));
-      }
-      case 'filter':
-      case 'filter-end': {
-        const filter = apparatusSelection.findFilter(hit.entityId);
-        if (!filter || isSelected(hit.entityId)) return [];
-        return sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0);
-      }
-      case 'radiator':
-      case 'radiator-end': {
-        const radiator = apparatusSelection.findRadiator(hit.entityId);
-        if (!radiator || isSelected(hit.entityId)) return [];
-        return sinkLineCells(radiator.x0, radiator.y0, radiator.x1, radiator.y1, 0);
-      }
-      case 'glass':
-      case 'glass-corner': {
-        const glass = apparatusSelection.findGlass(hit.entityId);
-        if (!glass || isSelected(hit.entityId)) return [];
-        return glassChainCells(glass.points);
-      }
-      default:
-        return [];
-    }
+    if (!hit || hit.entityId === selection.selectedId) return [];
+    const wire = selection.find(hit.entityId);
+    return wire ? entityBodyCells(wire) : [];
   }
 
   /** Ghost preview overlay, drawn on the shared 2D canvas (see
@@ -1974,42 +1862,24 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * line, and its own highlighted cells and end handles say "selected"
    * better than a bracket box drawn around a diagonal would. */
   function updateSelectionBox(): void {
-    const isEditMode = tool?.kind === 'select-apparatus';
-    const funnel = isEditMode ? apparatusSelection.findFunnel(apparatusSelection.selectedFunnelId) : undefined;
-    const flask = isEditMode ? apparatusSelection.findFlask(apparatusSelection.selectedFlaskId) : undefined;
-    const glass = isEditMode ? apparatusSelection.findGlass(apparatusSelection.selectedGlassId) : undefined;
-    const box = funnel
-      ? { anchorX: funnel.anchorX, anchorY: funnel.anchorY, bounds: funnelBounds(funnelShapeFor(funnel.facing)) }
-      : flask
-        ? { anchorX: flask.x, anchorY: flask.y, bounds: flaskBounds(flaskShapeFor(flask.facing, flask.sizeScale, flask.flaskKind)) }
-        : glass && glass.points.length > 0
-          ? // A polygon's corners are already absolute grid coordinates (see
-            // the GlassSnapshot), so its "anchor" is the grid origin and the
-            // bounds are the corners' own extent.
-            {
-              anchorX: 0,
-              anchorY: 0,
-              bounds: {
-                minDx: Math.min(...glass.points.map((p) => p.x)),
-                maxDx: Math.max(...glass.points.map((p) => p.x)),
-                minDy: Math.min(...glass.points.map((p) => p.y)),
-                maxDy: Math.max(...glass.points.map((p) => p.y)),
-              },
-            }
-          : null;
-    if (!box || gridWidth === 0 || gridHeight === 0) {
+    const wire = tool?.kind === 'select-apparatus' ? selection.selected() : undefined;
+    // Lines are deliberately left without brackets: a box drawn around a
+    // diagonal filter or radiator says less than its own highlighted cells
+    // and end handles already do.
+    const boxed = wire && wire.kind !== 'filter' && wire.kind !== 'radiator' ? wire : undefined;
+    const bounds = boxed ? entityBounds(boxed) : null;
+    if (!bounds || gridWidth === 0 || gridHeight === 0) {
       selectBox.style.display = 'none';
       return;
     }
     const rect = canvas.getBoundingClientRect();
     const cellPxX = rect.width / gridWidth;
     const cellPxY = rect.height / gridHeight;
-    const { anchorX, anchorY, bounds } = box;
     selectBox.style.display = 'block';
-    selectBox.style.left = `${canvas.offsetLeft + (anchorX + bounds.minDx) * cellPxX}px`;
-    selectBox.style.top = `${canvas.offsetTop + (anchorY + bounds.minDy) * cellPxY}px`;
-    selectBox.style.width = `${(bounds.maxDx - bounds.minDx + 1) * cellPxX}px`;
-    selectBox.style.height = `${(bounds.maxDy - bounds.minDy + 1) * cellPxY}px`;
+    selectBox.style.left = `${canvas.offsetLeft + bounds.minX * cellPxX}px`;
+    selectBox.style.top = `${canvas.offsetTop + bounds.minY * cellPxY}px`;
+    selectBox.style.width = `${(bounds.maxX - bounds.minX + 1) * cellPxX}px`;
+    selectBox.style.height = `${(bounds.maxY - bounds.minY + 1) * cellPxY}px`;
   }
 
   /** Commits one clicked corner of a polygon draw (tube or glass), snapped
@@ -2087,7 +1957,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         addPolyPoint(x, y);
         break;
       case 'select-apparatus':
-        apparatusSelection.beginSelection(x, y);
+        selection.beginSelection(x, y);
         render();
         break;
     }
@@ -2126,13 +1996,13 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * dragged apparatus slides out from under the pointer. */
   function updateSelectHover(x: number, y: number): void {
     if (tool?.kind !== 'select-apparatus') {
-      if (hoveredApparatus.kind !== 'none') hoveredApparatus = { kind: 'none' };
+      hoveredApparatus = null;
       canvas.style.cursor = '';
       return;
     }
     if (isPointerDown) return;
-    hoveredApparatus = apparatusSelection.hitTest(x, y);
-    canvas.style.cursor = hoveredApparatus.kind === 'none' ? '' : isHandleHit(hoveredApparatus) ? 'crosshair' : 'grab';
+    hoveredApparatus = selection.hitTest(x, y);
+    canvas.style.cursor = !hoveredApparatus ? '' : hoveredApparatus.handleId !== null ? 'crosshair' : 'grab';
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -2170,7 +2040,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // Selecting is a single-click action (applyTool already ran once on
         // pointerdown), but if that click grabbed a funnel or a tube
         // knee/segment, dragging moves it -- see continueDrag's doc comment.
-        const msg = apparatusSelection.continueDrag(x, y);
+        const msg = selection.continueDrag(x, y);
         if (msg) send(msg);
       } else if (tool?.kind !== 'funnel' && !isPolygonTool(tool) && !isLineDragTool(tool)) {
         // Single-click action (place once) rather than a brush --
@@ -2185,7 +2055,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     updateApparatusOverlay(x, y);
   });
   canvas.addEventListener('pointerleave', () => {
-    hoveredApparatus = { kind: 'none' };
+    hoveredApparatus = null;
     canvas.style.cursor = '';
     inspector.classList.add('empty');
     inspectorText.textContent = 'Hover the canvas to inspect a cell';
@@ -2259,9 +2129,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         cancelPolyDraw();
         return;
       }
-      if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
-        apparatusSelection.endDrag();
-        apparatusSelection.selectFunnel(null); // clears every kind's selection
+      if (tool?.kind === 'select-apparatus' && selection.selected()) {
+        selection.endDrag();
+        selection.select(null);
         render();
       }
       return;
@@ -2273,7 +2143,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // Select tool's Delete button (see deleteSelectedApparatus). Backspace
     // too, since it's the same gesture on a keyboard without a Delete key.
     if (event.key === 'Delete' || event.key === 'Backspace') {
-      if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
+      if (tool?.kind === 'select-apparatus' && selection.selected()) {
         event.preventDefault();
         deleteSelectedApparatus();
       }
@@ -2284,7 +2154,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     // can't place anything at an exact offset, and the wheel needs the
     // pointer over the canvas -- both awkward once a bench is dense enough
     // that the apparatus you want is under something else.
-    if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
+    if (tool?.kind === 'select-apparatus' && selection.selected()) {
       const nudge: Record<string, [number, number]> = {
         ArrowLeft: [-1, 0],
         ArrowRight: [1, 0],
@@ -2361,7 +2231,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       lineDrawStart = null;
       updateApparatusOverlay(lastHoverX, lastHoverY);
     }
-    apparatusSelection.endDrag();
+    selection.endDrag();
     isPointerDown = false;
   }
   window.addEventListener('pointerup', handleWindowPointerUp);
@@ -2410,7 +2280,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       maybeSparkleSinks(msg.sinkMask, msg.sinkTotals);
       const snapshotChanged = hasSnapshot !== msg.hasSnapshot;
       hasSnapshot = msg.hasSnapshot;
-      apparatusSelection.setEntities(msg.entities);
+      selection.setEntities(msg.entities);
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,

@@ -227,6 +227,20 @@ Split into two commits.
   one `dropStaleSelection`; `drawSelectionHandles`/selection box drawn generically from
   `handlesOf(wire)` + footprint bounds.
 
+**3b landed.** The registry grew a wire-side half to make this possible, which the plan folded into
+"hit-test" without naming: `bodyCells` (what an entity reads as on screen -- a tube's is its *channel*,
+not its wall ring), `bodyDistance`, `boundsOf` and `rotationOf`, all over the wire shape, since the UI
+has no grid to resolve a real `Footprint` against. `hitTestEntities` itself lives in `entity.ts` rather
+than the UI: it's the registry's own question, and putting it there is what let `ApparatusHit`'s ten
+variants become one `{entityId, kind, handleId}` (handleId null = body).
+- The area-wins rule replaced the hand-ordered chain as planned, and it is *load-bearing* for the
+  funnel-inside-a-beaker case that the old chain hardcoded a position for.
+- `rotateSelection` returning a message-or-null is what collapsed the wheel: no per-kind branch, and
+  the two kinds whose facing the panel also reads keep their draft in step inside the selection rather
+  than at the call site.
+- Selection boxes still skip filter/radiator deliberately -- a bracket around a diagonal line says less
+  than its own highlighted cells and end handles already do.
+
 ## Phase 4 — Schema-driven settings pane
 
 - Field kinds: `slider`, `toggle`, `segmented`, `species-pick` (opens the periodic-table picker),
@@ -338,7 +352,8 @@ monotonicity); extend the fuzz suite with tube ops.
 - [x] Phase 2: diagonal corner rule; `vesselMask` deleted; diagonal-vessel containment test
 - [x] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired; per-kind ids retired
       (`entityId` is the one id on the wire); glass corners draggable; fuzz suite drives the registry
-- [ ] Phase 3b: one selection/drag/hit-test path; generic handles overlay
+- [x] Phase 3b: one selection/drag/hit-test path; generic handles overlay; `hitTestEntities` +
+      `bodyCells`/`boundsOf`/`rotationOf` on the registry; one `EntityHit`; one wheel handler
 - [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
 - [x] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten
 - [x] Phase 6a: hover highlight + cursor
