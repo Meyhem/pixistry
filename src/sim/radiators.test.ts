@@ -1,18 +1,31 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
 import { SimGrid } from './grid';
+import { SpeciesTable } from './species';
 import {
   moveRadiatorEndpoint,
   moveRadiatorInstance,
   placeRadiatorInstance,
-  pruneErasedRadiators,
   RADIATOR_WATTS,
   resetRadiatorIds,
   updateRadiatorInstance,
   type RadiatorInstance,
 } from './radiators';
 
+const species = new SpeciesTable();
+
+/** radiatorRadius/radiatorTargetK are derived state (see
+ * entity-composite.ts): the instance holds the line and its settings, the
+ * compositor writes the per-cell fields the physics reads. Every assertion
+ * against the grid composites the whole bench first. */
+function sync(grid: SimGrid, radiators: readonly RadiatorInstance[]): void {
+  compositeEntities(grid, species, { ...NO_ENTITIES, radiators });
+}
+
 function place(grid: SimGrid, x0: number, y0: number, x1: number, y1: number, radius = 3, targetK = 400): RadiatorInstance {
-  return placeRadiatorInstance(grid, { x0, y0, x1, y1, radius, targetK });
+  const instance = placeRadiatorInstance({ x0, y0, x1, y1, radius, targetK });
+  sync(grid, [instance]);
+  return instance;
 }
 
 describe('radiators', () => {
@@ -40,7 +53,8 @@ describe('radiators', () => {
     const grid = new SimGrid(20, 20);
     const instance = place(grid, 4, 10, 8, 10);
 
-    moveRadiatorInstance(grid, [instance], instance, 0, 5);
+    moveRadiatorInstance(instance, 0, 5);
+    sync(grid, [instance]);
 
     expect(grid.radiatorRadius[grid.index(6, 10)]).toBe(0);
     expect(grid.radiatorRadius[grid.index(6, 15)]).toBe(3);
@@ -51,7 +65,8 @@ describe('radiators', () => {
     const grid = new SimGrid(20, 20);
     const instance = place(grid, 4, 10, 8, 10);
 
-    moveRadiatorEndpoint(grid, [instance], instance, 1, 8, 16);
+    moveRadiatorEndpoint(instance, 1, 8, 16);
+    sync(grid, [instance]);
 
     expect(instance.x0).toBe(4);
     expect(instance.y0).toBe(10);
@@ -65,7 +80,8 @@ describe('radiators', () => {
     const grid = new SimGrid(20, 20);
     const instance = place(grid, 4, 10, 8, 10);
 
-    updateRadiatorInstance(grid, instance, 7, 250);
+    updateRadiatorInstance(instance, 7, 250);
+    sync(grid, [instance]);
 
     expect(grid.radiatorRadius[grid.index(6, 10)]).toBe(7);
     expect(grid.radiatorTargetK[grid.index(6, 10)]).toBe(250);
@@ -75,24 +91,37 @@ describe('radiators', () => {
     const grid = new SimGrid(20, 20);
     const across = place(grid, 2, 10, 18, 10, 3, 400);
     const down = place(grid, 10, 2, 10, 18, 5, 500);
+    sync(grid, [across, down]);
     // The newer line owns the crossing while both are on it.
     expect(grid.radiatorRadius[grid.index(10, 10)]).toBe(5);
 
-    moveRadiatorInstance(grid, [across, down], down, 4, 0);
+    moveRadiatorInstance(down, 4, 0);
+    sync(grid, [across, down]);
 
     expect(grid.radiatorRadius[grid.index(10, 10)]).toBe(3); // handed back to the horizontal line
     expect(grid.radiatorRadius[grid.index(10, 4)]).toBe(0); // the vertical line has left
   });
 
-  it('an instance survives partial erasure and dies with its last cell', () => {
+  it('a removed line stops radiating everywhere', () => {
     const grid = new SimGrid(20, 20);
-    const instance = place(grid, 4, 10, 8, 10);
-    const instances = [instance];
+    place(grid, 4, 10, 8, 10);
 
-    grid.radiatorRadius[grid.index(6, 10)] = 0;
-    expect(pruneErasedRadiators(grid, instances)).toHaveLength(1);
+    sync(grid, []);
 
-    for (let x = 4; x <= 8; x++) grid.radiatorRadius[grid.index(x, 10)] = 0;
-    expect(pruneErasedRadiators(grid, instances)).toHaveLength(0);
+    for (let x = 4; x <= 8; x++) expect(grid.radiatorRadius[grid.index(x, 10)]).toBe(0);
+  });
+
+  it("a scenario's disc-shaped heater radiates from every cell of the disc", () => {
+    // Scenario radiators are real tracked instances now (see scenario.ts's
+    // applyRadiator): a zero-length line whose emitter width is the disc's
+    // radius, which is exactly the blob the old untracked stamp painted.
+    const grid = new SimGrid(20, 20);
+    const disc = placeRadiatorInstance({ x0: 10, y0: 10, x1: 10, y1: 10, radius: 2, targetK: 500, width: 2 });
+    sync(grid, [disc]);
+
+    expect(grid.radiatorRadius[grid.index(10, 10)]).toBe(2);
+    expect(grid.radiatorRadius[grid.index(10, 12)]).toBe(2);
+    expect(grid.radiatorRadius[grid.index(9, 9)]).toBe(2);
+    expect(grid.radiatorRadius[grid.index(10, 13)]).toBe(0); // outside the disc
   });
 });

@@ -1,14 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import {
-  glassCells,
-  glassPoints,
-  moveGlassInstance,
-  placeGlassInstance,
-  pruneErasedGlass,
-  resetGlassIds,
-  rotateGlassInstance,
-  type GlassInstance,
-} from './glass';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { glassCells, glassPoints, moveGlassInstance, placeGlassInstance, resetGlassIds, rotateGlassInstance, type GlassInstance } from './glass';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
@@ -24,6 +16,14 @@ const CORNER = [
   { x: 16, y: 16 },
 ];
 
+/** A polygon's wall cells are derived state (see entity-composite.ts): the
+ * instance holds the corner chain, the compositor rasterizes it onto the
+ * grid. Every assertion here composites the whole bench first, exactly like
+ * worker.ts's mutateEntities does after each message. */
+function sync(grid: SimGrid, instances: readonly GlassInstance[]): void {
+  compositeEntities(grid, species, { ...NO_ENTITIES, glass: instances });
+}
+
 function isGlassAt(grid: SimGrid, x: number, y: number): boolean {
   return grid.specId[grid.index(x, y)] === GLASS_WALL_SPEC_ID;
 }
@@ -35,7 +35,8 @@ describe('glass polygon instances', () => {
 
   it('stamps every rasterized cell of the drawn chain as glass', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
 
     expect(instance.id).toBe(1);
     expect(isGlassAt(grid, 10, 10)).toBe(true);
@@ -46,9 +47,11 @@ describe('glass polygon instances', () => {
 
   it('moves as a whole: old cells go back to empty, new ones become glass', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
 
-    moveGlassInstance(grid, species, [instance], instance, 5, 3);
+    moveGlassInstance(instance, 5, 3);
+    sync(grid, [instance]);
 
     expect(grid.specId[grid.index(10, 10)]).toBe(EMPTY);
     expect(isGlassAt(grid, 15, 13)).toBe(true);
@@ -57,20 +60,26 @@ describe('glass polygon instances', () => {
 
   it('leaves whatever the vessel was holding exactly where it was', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
     grid.set(13, 13, SpeciesId.H2O, PhaseCode.Liquid, 5);
 
-    moveGlassInstance(grid, species, [instance], instance, 5, 0);
+    moveGlassInstance(instance, 5, 0);
+    sync(grid, [instance]);
 
     expect(grid.specId[grid.index(13, 13)]).toBe(SpeciesId.H2O);
   });
 
   it('a full turn of 8 steps returns the exact cells it was drawn with', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
     const drawn = glassCells(instance).map((c) => `${c.x},${c.y}`).sort();
 
-    for (let step = 1; step <= 8; step++) rotateGlassInstance(grid, species, [instance], instance, step);
+    for (let step = 1; step <= 8; step++) {
+      rotateGlassInstance(instance, step);
+      sync(grid, [instance]);
+    }
 
     expect(instance.rotation).toBe(0);
     expect(glassCells(instance).map((c) => `${c.x},${c.y}`).sort()).toEqual(drawn);
@@ -79,9 +88,11 @@ describe('glass polygon instances', () => {
 
   it('a quarter turn leaves no glass behind at the old outline', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
 
-    rotateGlassInstance(grid, species, [instance], instance, 2);
+    rotateGlassInstance(instance, 2);
+    sync(grid, [instance]);
 
     const now = new Set(glassCells(instance).map((c) => `${c.x},${c.y}`));
     for (let y = 0; y < grid.height; y++) {
@@ -93,41 +104,62 @@ describe('glass polygon instances', () => {
 
   it('normalizes a rotation past either end of the 8 steps', () => {
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
 
-    rotateGlassInstance(grid, species, [instance], instance, -1);
+    rotateGlassInstance(instance, -1);
     expect(instance.rotation).toBe(7);
-    rotateGlassInstance(grid, species, [instance], instance, 8);
+    rotateGlassInstance(instance, 8);
     expect(instance.rotation).toBe(0);
   });
 
   it('moving one polygon off another leaves the crossing cell glass', () => {
     const grid = new SimGrid(40, 40);
-    const across = placeGlassInstance(grid, species, [
+    const across = placeGlassInstance([
       { x: 5, y: 10 },
       { x: 25, y: 10 },
     ]);
-    const down = placeGlassInstance(grid, species, [
+    const down = placeGlassInstance([
       { x: 15, y: 5 },
       { x: 15, y: 20 },
     ]);
+    sync(grid, [across, down]);
     expect(isGlassAt(grid, 15, 10)).toBe(true); // the crossing
 
-    moveGlassInstance(grid, species, [across, down], down, 0, 8);
+    moveGlassInstance(down, 0, 8);
+    sync(grid, [across, down]);
 
     expect(isGlassAt(grid, 15, 10)).toBe(true); // still the horizontal line's cell
     expect(isGlassAt(grid, 15, 6)).toBe(false); // the vertical line has left
   });
 
-  it('an instance survives partial erasure and dies with its last cell', () => {
+  it('heals a hole punched in it: the next composite re-derives every cell', () => {
+    // A polygon is indestructible now. Nothing partially erases one (the
+    // eraser skips owned glass outright), and even if something clears a cell
+    // behind the compositor's back, the wall is derived from the instance --
+    // so it comes straight back rather than leaving the vessel with a
+    // permanent gap that has to be re-drawn corner by corner.
     const grid = new SimGrid(40, 40);
-    const instance = placeGlassInstance(grid, species, CORNER);
-    const instances: GlassInstance[] = [instance];
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
 
     grid.clear(13, 10);
-    expect(pruneErasedGlass(grid, instances)).toHaveLength(1);
+    sync(grid, [instance]);
 
-    for (const cell of glassCells(instance)) grid.clear(cell.x, cell.y);
-    expect(pruneErasedGlass(grid, instances)).toHaveLength(0);
+    expect(isGlassAt(grid, 13, 10)).toBe(true);
+  });
+
+  it('a removed polygon takes its glass with it and leaves nothing owned', () => {
+    const grid = new SimGrid(40, 40);
+    const instance = placeGlassInstance(CORNER);
+    sync(grid, [instance]);
+    const drawn = glassCells(instance);
+
+    sync(grid, []);
+
+    for (const cell of drawn) {
+      expect(grid.specId[grid.index(cell.x, cell.y)]).toBe(EMPTY);
+      expect(grid.entityOwner[grid.index(cell.x, cell.y)]).toBe(0);
+    }
   });
 });

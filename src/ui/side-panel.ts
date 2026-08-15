@@ -64,6 +64,16 @@ export interface ToolMeta {
    * has collected, a Vent what it has thrown away (see grid.ts's
    * SinkMaskValue). Same panel, different wording and different tally. */
   sinkPanel: 'none' | 'sink' | 'vent';
+  /** Whether the panel is editing a placed apparatus that can be removed --
+   * shows the Delete button. Deleting is the *only* way apparatus comes off
+   * the bench now that the eraser is matter-only (see protocol.ts's
+   * 'deleteApparatus'), so every kind's edit panel needs it, which is why
+   * it's one flag on the header rather than a button repeated in each of the
+   * six per-kind panel sections below. */
+  canDelete: boolean;
+  /** The eraser's "this only takes matter" note. Worth spelling out because
+   * erasing used to be how apparatus came off the bench. */
+  eraseHint: boolean;
 }
 
 /** One species' running total for the Sink tool's tally panel. */
@@ -151,6 +161,9 @@ export interface SidePanelCallbacks {
    * bench, since the "⚙ Tool settings" button that used to advertise the E
    * shortcut is gone. */
   onFoldDock?(): void;
+  /** Removes the apparatus the panel is currently editing (see
+   * ToolMeta.canDelete). */
+  onDeleteEntity?(): void;
 }
 
 const MIN_RADIUS = 1;
@@ -289,7 +302,7 @@ function addFunnelPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
   addDivider(container);
 
   if (meta.funnelPanel === 'edit-empty') {
-    container.appendChild(hintBox('Click a placed apparatus on the grid to select it.'));
+    container.appendChild(hintBox('Click a placed apparatus on the grid to select it. Drag it to move it, drag a knee or an end to reshape it, and press Delete to take it off the bench.'));
     return;
   }
 
@@ -373,7 +386,7 @@ function addFilterPanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCal
     hintBox(
       meta.filterPanel === 'config'
         ? 'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. Each line keeps the list it was drawn with -- pick it up with the Select tool to change it later.'
-        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it, or drag either end to re-aim it; erase any part of it to take it out (the rest keeps filtering until the last cell is gone).",
+        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it, or drag either end to re-aim it. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
       'HOW IT WORKS',
     ),
   );
@@ -446,7 +459,7 @@ function addGlassPanel(container: HTMLElement, meta: ToolMeta): void {
     hintBox(
       meta.glassPanel === 'config'
         ? 'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.'
-        : 'Drag any wall to slide the whole shape, or rotate it with the scroll wheel over the grid (45-degree steps about its own middle). Whatever it was holding stays where it is, so a big turn can leave contents outside the new outline. Erase any part of it to take it out -- the rest stays until the last cell is gone.',
+        : "Drag any wall to slide the whole shape, or rotate it with the scroll wheel over the grid (45-degree steps about its own middle). Whatever it was holding stays where it is, so a big turn can leave contents outside the new outline. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
       'HOW IT WORKS',
     ),
   );
@@ -526,6 +539,14 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
   }
   container.appendChild(header);
 
+  if (meta.canDelete && cb.onDeleteEntity) {
+    const remove = el('button', 'entity-delete-btn');
+    remove.textContent = 'Delete apparatus';
+    remove.title = 'Remove this apparatus from the bench (Delete)';
+    remove.onclick = cb.onDeleteEntity;
+    container.appendChild(remove);
+  }
+
   addDivider(container);
 
   if (meta.isSpecies) {
@@ -561,7 +582,16 @@ export function buildSidePanel(container: HTMLElement, meta: ToolMeta, cb: SideP
       hintBox(
         meta.radiatorPanel === 'config'
           ? "Drag from one end to the other to draw a single one-cell-wide line. Every cell of it radiates toward the target temperature each tick, within the radiation radius -- heating cells below it, cooling cells above it. Pure radiation, no collision. These settings are captured when you draw, so changing them afterward won't affect radiators already placed -- pick one up with the Select tool to change it."
-          : "This radiator's own settings, applied the moment you move a slider. Drag the line to slide it, or drag either end to re-aim it; erase any part of it to take it out (the rest keeps radiating until the last cell is gone).",
+          : "This radiator's own settings, applied the moment you move a slider. Drag the line to slide it, or drag either end to re-aim it. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
+        'HOW IT WORKS',
+      ),
+    );
+  }
+
+  if (meta.eraseHint) {
+    container.appendChild(
+      hintBox(
+        'Clears matter and painted overlays -- pixels, stirrer patches, catalyst pads, collection ports. Apparatus is indestructible: to take a vessel, tube, filter or radiator off the bench, pick it up with the Select tool and press Delete.',
         'HOW IT WORKS',
       ),
     );

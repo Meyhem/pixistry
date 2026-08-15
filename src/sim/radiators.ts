@@ -22,9 +22,10 @@
 // every cell radiates, but nothing in them says which drag put it there, so a
 // placed radiator used to be unmovable and unedited-able -- the only way to
 // change one was to erase it and redraw. The per-cell fields stay the source
-// of truth for the physics (heat.ts reads only those), and the instance list
-// is what the Select tool moves around.
-import type { SimGrid } from './grid';
+// of truth for the physics (heat.ts reads only those), the instance list is
+// what the Select tool moves around, and the compositor (entity-composite.ts)
+// derives the former from the latter -- nothing here writes the grid.
+import { nextEntityId } from './entity-id';
 import { sinkLineCells } from './sink';
 import type { Point } from './tube-shapes';
 
@@ -40,6 +41,8 @@ const MAX_RADIATION_REACH = 255;
 
 export interface RadiatorInstance {
   readonly id: number;
+  /** Placement order across every apparatus kind -- see entity-id.ts. */
+  readonly entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -47,6 +50,15 @@ export interface RadiatorInstance {
   /** Each of this line's cells radiates this far (grid.radiatorRadius). */
   radius: number;
   targetK: number;
+  /** How far the emitter itself is thickened around the drawn line, in the
+   * same "0 = the bare 1px line" sense as sinkLineCells' width. The Radiator
+   * *tool* always draws 0 (the radiation reach already controls how far a
+   * placement carries, so a second "how thick is the emitter" width was just
+   * a second way to spend heat) -- it exists because a scenario's `radiator`
+   * setup command paints a disc of emitting cells rather than a line, and
+   * campaign heaters have to be real tracked instances or the first
+   * recomposite would wipe them off the bench (see scenario.ts). */
+  width: number;
 }
 
 let nextRadiatorId = 1;
@@ -57,40 +69,22 @@ export function resetRadiatorIds(): void {
   nextRadiatorId = 1;
 }
 
-/** A radiator is drawn as one bare one-cell-wide line (the same drag the
- * sink/filter tools use), not a brush splat: the radiation radius already
- * controls how far a placement reaches, so a second "how thick is the emitter
- * itself" width was just a second way to spend heat. */
+/** The emitting cells themselves -- the drawn line, thickened by the
+ * instance's own `width` (0 for everything the Radiator tool draws). */
 export function radiatorLineCells(instance: RadiatorInstance): Point[] {
-  return sinkLineCells(instance.x0, instance.y0, instance.x1, instance.y1, 0);
+  return sinkLineCells(instance.x0, instance.y0, instance.x1, instance.y1, instance.width);
 }
 
-function stampRadiator(grid: SimGrid, instance: RadiatorInstance): void {
-  const radius = Math.max(0, Math.min(MAX_RADIATION_REACH, Math.round(instance.radius)));
-  for (const { x, y } of radiatorLineCells(instance)) {
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    grid.radiatorRadius[idx] = radius;
-    grid.radiatorTargetK[idx] = instance.targetK;
-  }
-}
-
-/** Zeroes an instance's own cells ahead of re-stamping it elsewhere, then
- * puts back any cell another tracked radiator also covers -- the same
- * crossing rule glass.ts and filter.ts use. A radiator a *scenario* painted
- * (scenario.ts's applyRadiator, which writes the per-cell fields directly and
- * tracks no instance) isn't restored this way: moving a player-drawn line off
- * a scenario's pre-placed heater takes that overlap with it. */
-function unstampRadiator(grid: SimGrid, instance: RadiatorInstance, others: readonly RadiatorInstance[]): void {
-  for (const { x, y } of radiatorLineCells(instance)) {
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    grid.radiatorRadius[idx] = 0;
-    grid.radiatorTargetK[idx] = 0;
-  }
-  for (const other of others) {
-    if (other.id !== instance.id) stampRadiator(grid, other);
-  }
+/** What the compositor writes into grid.radiatorRadius/radiatorTargetK for
+ * this instance. The reach is clamped here rather than at the field, since
+ * radiatorRadius is a Uint8Array and an unclamped hand-sent message would
+ * otherwise wrap a huge reach around to a tiny one. */
+export function radiatorStamp(instance: RadiatorInstance): { cells: Point[]; radius: number; targetK: number } {
+  return {
+    cells: radiatorLineCells(instance),
+    radius: Math.max(0, Math.min(MAX_RADIATION_REACH, Math.round(instance.radius))),
+    targetK: instance.targetK,
+  };
 }
 
 export interface RadiatorPlacement {
@@ -100,53 +94,35 @@ export interface RadiatorPlacement {
   readonly y1: number;
   readonly radius: number;
   readonly targetK: number;
+  /** Defaults to a bare one-cell-wide line -- see RadiatorInstance.width. */
+  readonly width?: number;
 }
 
-export function placeRadiatorInstance(grid: SimGrid, placement: RadiatorPlacement): RadiatorInstance {
-  const instance: RadiatorInstance = {
+export function placeRadiatorInstance(placement: RadiatorPlacement): RadiatorInstance {
+  return {
     id: nextRadiatorId++,
+    entityId: nextEntityId(),
     x0: placement.x0,
     y0: placement.y0,
     x1: placement.x1,
     y1: placement.y1,
     radius: placement.radius,
     targetK: placement.targetK,
+    width: placement.width ?? 0,
   };
-  stampRadiator(grid, instance);
-  return instance;
 }
 
 /** Slides a whole line by (dx, dy), keeping its length and angle. */
-export function moveRadiatorInstance(
-  grid: SimGrid,
-  instances: readonly RadiatorInstance[],
-  instance: RadiatorInstance,
-  dx: number,
-  dy: number,
-): void {
-  if (dx === 0 && dy === 0) return;
-  unstampRadiator(grid, instance, instances);
+export function moveRadiatorInstance(instance: RadiatorInstance, dx: number, dy: number): void {
   instance.x0 += dx;
   instance.y0 += dy;
   instance.x1 += dx;
   instance.y1 += dy;
-  stampRadiator(grid, instance);
 }
 
 /** Drags one end of the line to (x, y), leaving the other end where it is --
  * the reshaping a two-point line has instead of a tube's knees. */
-export function moveRadiatorEndpoint(
-  grid: SimGrid,
-  instances: readonly RadiatorInstance[],
-  instance: RadiatorInstance,
-  endIndex: 0 | 1,
-  x: number,
-  y: number,
-): void {
-  const cx = endIndex === 0 ? instance.x0 : instance.x1;
-  const cy = endIndex === 0 ? instance.y0 : instance.y1;
-  if (cx === x && cy === y) return;
-  unstampRadiator(grid, instance, instances);
+export function moveRadiatorEndpoint(instance: RadiatorInstance, endIndex: 0 | 1, x: number, y: number): void {
   if (endIndex === 0) {
     instance.x0 = x;
     instance.y0 = y;
@@ -154,22 +130,11 @@ export function moveRadiatorEndpoint(
     instance.x1 = x;
     instance.y1 = y;
   }
-  stampRadiator(grid, instance);
 }
 
 /** Live-edits a placed radiator's reach/target (the select tool's edit
- * panel) -- re-stamps in place, since both fields live per-cell. */
-export function updateRadiatorInstance(grid: SimGrid, instance: RadiatorInstance, radius: number, targetK: number): void {
+ * panel). */
+export function updateRadiatorInstance(instance: RadiatorInstance, radius: number, targetK: number): void {
   instance.radius = radius;
   instance.targetK = targetK;
-  stampRadiator(grid, instance);
-}
-
-/** Drops any line the eraser has taken off the grid entirely -- same "a drawn
- * line dies only once its last cell is gone" rule as filter.ts's
- * pruneErasedFilters. */
-export function pruneErasedRadiators(grid: SimGrid, instances: readonly RadiatorInstance[]): RadiatorInstance[] {
-  return instances.filter((instance) =>
-    radiatorLineCells(instance).some(({ x, y }) => grid.inBounds(x, y) && (grid.radiatorRadius[grid.index(x, y)] as number) > 0),
-  );
 }

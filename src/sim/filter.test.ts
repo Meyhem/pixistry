@@ -1,15 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  filterAllowMap,
-  moveFilterEndpoint,
-  moveFilterInstance,
-  nearestFilter,
-  placeFilterInstance,
-  pruneErasedFilters,
-  unstampFilter,
-  updateFilterInstance,
-  type FilterInstance,
-} from './filter';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { filterAllowMap, moveFilterEndpoint, moveFilterInstance, nearestFilter, placeFilterInstance, updateFilterInstance, type FilterInstance } from './filter';
 import { PhaseCode, SimGrid } from './grid';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
@@ -17,9 +8,20 @@ import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID, WALL_PHASE } from './walls';
 
+const speciesTable = new SpeciesTable();
+
+/** A membrane's mask cells are derived state (see entity-composite.ts): the
+ * instance holds the line, the compositor writes filterMask. Every assertion
+ * against the grid composites the whole bench first, exactly like worker.ts's
+ * mutateEntities does after each message. */
+function sync(grid: SimGrid, filters: readonly FilterInstance[]): void {
+  compositeEntities(grid, speciesTable, { ...NO_ENTITIES, filters });
+}
+
 function place(grid: SimGrid, filters: FilterInstance[], x0: number, y0: number, x1: number, y1: number, species: number[]): FilterInstance {
-  const filter = placeFilterInstance(grid, filters, x0, y0, x1, y1, species);
+  const filter = placeFilterInstance(filters, x0, y0, x1, y1, species);
   if (!filter) throw new Error('expected the line to be placed');
+  sync(grid, filters);
   return filter;
 }
 
@@ -41,8 +43,8 @@ describe('filter instances', () => {
     const grid = new SimGrid(10, 10);
     const filters: FilterInstance[] = [];
     const first = place(grid, filters, 0, 2, 4, 2, []);
-    unstampFilter(grid, first);
     filters.length = 0;
+    sync(grid, filters);
 
     expect(place(grid, filters, 0, 6, 4, 6, []).id).toBe(first.id);
   });
@@ -87,7 +89,8 @@ describe('filter instances', () => {
     const filters: FilterInstance[] = [];
     const filter = place(grid, filters, 1, 2, 4, 2, []);
 
-    moveFilterInstance(grid, filter, 0, 3);
+    moveFilterInstance(filter, 0, 3);
+    sync(grid, filters);
 
     expect(grid.filterMask[grid.index(2, 2)]).toBe(0);
     expect(grid.filterMask[grid.index(2, 5)]).toBe(filter.id);
@@ -95,7 +98,7 @@ describe('filter instances', () => {
     expect(filter.y1).toBe(5);
   });
 
-  it('unstamping a line leaves a newer line that crosses it intact', () => {
+  it('removing a line leaves a newer line that crosses it intact', () => {
     const grid = new SimGrid(10, 10);
     const filters: FilterInstance[] = [];
     const horizontal = place(grid, filters, 0, 4, 8, 4, []);
@@ -103,23 +106,10 @@ describe('filter instances', () => {
     // The crossing cell belongs to whichever line was drawn last.
     expect(grid.filterMask[grid.index(4, 4)]).toBe(vertical.id);
 
-    unstampFilter(grid, horizontal);
+    sync(grid, filters.filter((f) => f.id !== horizontal.id));
 
     expect(grid.filterMask[grid.index(4, 4)]).toBe(vertical.id);
     expect(grid.filterMask[grid.index(2, 4)]).toBe(0);
-  });
-
-  it('an instance survives a partial erase and dies only with its last cell', () => {
-    const grid = new SimGrid(10, 10);
-    const filters: FilterInstance[] = [];
-    const filter = place(grid, filters, 0, 2, 4, 2, []);
-
-    grid.filterMask[grid.index(2, 2)] = 0; // eraser took one cell out of the middle
-    expect(pruneErasedFilters(grid, filters)).toHaveLength(1);
-
-    for (let x = 0; x <= 4; x++) grid.filterMask[grid.index(x, 2)] = 0;
-    expect(pruneErasedFilters(grid, filters)).toHaveLength(0);
-    expect(filter.id).toBe(1);
   });
 
   it('drags one end without moving the other', () => {
@@ -127,7 +117,8 @@ describe('filter instances', () => {
     const filters: FilterInstance[] = [];
     const filter = place(grid, filters, 4, 10, 8, 10, []);
 
-    moveFilterEndpoint(grid, filter, 1, 8, 16);
+    moveFilterEndpoint(filter, 1, 8, 16);
+    sync(grid, filters);
 
     expect([filter.x0, filter.y0]).toEqual([4, 10]);
     expect([filter.x1, filter.y1]).toEqual([8, 16]);

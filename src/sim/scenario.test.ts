@@ -19,7 +19,7 @@ describe('applyScenarioSetup', () => {
     const grid = new SimGrid(160, 100);
     const species = new SpeciesTable();
     const scenario: Scenario = { ...SCENARIOS[0] as Scenario, setup: [] };
-    applyScenarioSetup(grid, species, [], scenario);
+    applyScenarioSetup(grid, species, { funnels: [], flasks: [], radiators: [] }, scenario);
     expect(grid.specId.every((s) => s === EMPTY)).toBe(true);
   });
 
@@ -30,7 +30,7 @@ describe('applyScenarioSetup', () => {
       ...(SCENARIOS[0] as Scenario),
       setup: [{ kind: 'rect', x: 10, y: 10, w: 3, h: 2, specId: SpeciesId.H2O, tempC: 21 }],
     };
-    applyScenarioSetup(grid, species, [], scenario);
+    applyScenarioSetup(grid, species, { funnels: [], flasks: [], radiators: [] }, scenario);
     for (let y = 10; y < 12; y++) {
       for (let x = 10; x < 13; x++) {
         expect(grid.specId[grid.index(x, y)]).toBe(SpeciesId.H2O);
@@ -49,7 +49,7 @@ describe('applyScenarioSetup', () => {
       ...(SCENARIOS[0] as Scenario),
       setup: [{ kind: 'wallRect', x: 10, y: 10, w: 5, h: 5, wall: 'glass' }],
     };
-    applyScenarioSetup(grid, species, [], scenario);
+    applyScenarioSetup(grid, species, { funnels: [], flasks: [], radiators: [] }, scenario);
     // Border cells are glass.
     expect(grid.specId[grid.index(10, 10)]).toBe(GLASS_WALL_SPEC_ID);
     expect(grid.specId[grid.index(14, 10)]).toBe(GLASS_WALL_SPEC_ID);
@@ -69,7 +69,7 @@ describe('applyScenarioSetup', () => {
         { kind: 'rect', x: 21, y: 21, w: 1, h: 1, specId: SpeciesId.NaCl },
       ],
     };
-    applyScenarioSetup(grid, species, [], scenario);
+    applyScenarioSetup(grid, species, { funnels: [], flasks: [], radiators: [] }, scenario);
     expect(grid.specId[grid.index(21, 21)]).toBe(SpeciesId.NaCl);
     expect(grid.specId[grid.index(20, 20)]).toBe(SpeciesId.H2O);
   });

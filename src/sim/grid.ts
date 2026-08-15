@@ -114,6 +114,22 @@ export class SimGrid {
    * bypasses a rule's minTempK ignition threshold -- see
    * .grill/campaign-mode.md's §6 point 16. */
   readonly catalystStrength: Uint8Array;
+  /** Which placed apparatus owns each cell -- 0 = nobody, otherwise the
+   * owning instance's `entityId` (see entity-id.ts). This is the bookkeeping
+   * that makes apparatus overlap safe: every cell an entity's footprint
+   * covers (its glass, its lumen, its membrane, a vessel's interior) is
+   * marked with that entity's id, so entity-composite.ts can clear *exactly*
+   * the apparatus-derived state on the grid and re-derive all of it from the
+   * instance list, without touching a single cell the player painted.
+   *
+   * The rule that makes it work: the compositor is the only code that writes
+   * this array, apparatus glass, tubeMask, filterMask, vesselMask or the
+   * radiator fields. Nothing incrementally unstamps anything anymore -- the
+   * three separate schemes that used to reconstruct overlap correctness
+   * (a "put back what went empty" repair pass, per-kind crossing rules, and
+   * the tube's own mask restamping) are what every "apparatus destroyed each
+   * other" regression came out of. */
+  readonly entityOwner: Uint32Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -130,6 +146,7 @@ export class SimGrid {
     this.vesselMask = new Uint8Array(size);
     this.sinkMask = new Uint8Array(size);
     this.catalystStrength = new Uint8Array(size);
+    this.entityOwner = new Uint32Array(size);
   }
 
   index(x: number, y: number): number {
@@ -166,7 +183,7 @@ export class SimGrid {
 
   /** Wipes every field back to its constructor-time state, in place --
    * `specId`/`phase`/`u` themselves plus every overlay (radiator/stirrer/
-   * tube/filter/vessel/sink/catalyst masks). Used by worker.ts's 'resetWorld'
+   * tube/filter/vessel/sink/catalyst masks and the entity-owner mask). Used by worker.ts's 'resetWorld'
    * handler ("start fresh" -- not the same as restoreWorldSnapshot's
    * "rewind to a saved point", see world-snapshot.ts) so the grid stays one
    * stable instance for the worker's whole lifetime rather than being
@@ -183,6 +200,7 @@ export class SimGrid {
     this.vesselMask.fill(0);
     this.sinkMask.fill(0);
     this.catalystStrength.fill(0);
+    this.entityOwner.fill(0);
   }
 
   swap(i: number, j: number): void {

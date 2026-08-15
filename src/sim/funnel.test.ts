@@ -4,6 +4,7 @@ import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
 import { funnelShapeFor, funnelSpawnOffset } from './apparatus-shapes';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
 import {
   intervalTicksForRate,
   moveFunnelInstance,
@@ -18,12 +19,20 @@ import {
 
 const species = new SpeciesTable();
 
+/** A funnel's glass is derived state now (see entity-composite.ts): the
+ * instance says where the outline goes, the compositor puts it there. Every
+ * test below that asserts against the grid composites first, exactly like
+ * worker.ts's mutateEntities does after each message. */
+function sync(grid: SimGrid, instances: readonly FunnelInstance[]): void {
+  compositeEntities(grid, species, { ...NO_ENTITIES, funnels: instances });
+}
+
 // A freshly placed funnel starts disabled (see FunnelInstance.enabled's doc
 // comment) -- every test below is about drip mechanics, not the enabled
 // gate itself, so `place` switches it on immediately, same as clicking
 // Running in the edit panel right after placement.
-function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelInstance>[2]> = {}): FunnelInstance {
-  const instance = placeFunnelInstance(grid, species, {
+function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelInstance>[0]> = {}): FunnelInstance {
+  const instance = placeFunnelInstance({
     x: 50,
     y: 50,
     facing: 'down',
@@ -34,6 +43,7 @@ function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFunnelIn
     ...overrides,
   });
   instance.enabled = true;
+  sync(grid, [instance]);
   return instance;
 }
 
@@ -62,7 +72,7 @@ describe('funnel', () => {
 
   it('starts disabled and never drips until enabled', () => {
     const grid = new SimGrid(100, 100);
-    const instance = placeFunnelInstance(grid, species, {
+    const instance = placeFunnelInstance({
       x: 50,
       y: 50,
       facing: 'down',
@@ -174,7 +184,7 @@ describe('funnel', () => {
   it('updateFunnelInstance changes species/rate/temp and clamps remaining to a lowered total', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, { total: 10 });
-    updateFunnelInstance(grid, species, instance, { specId: SpeciesId.NaCl, tempC: 100, ratePerMinute: 60, total: 3, facing: instance.facing });
+    updateFunnelInstance(instance, { specId: SpeciesId.NaCl, tempC: 100, ratePerMinute: 60, total: 3, facing: instance.facing });
 
     expect(instance.specId).toBe(SpeciesId.NaCl);
     expect(instance.total).toBe(3);
@@ -185,7 +195,7 @@ describe('funnel', () => {
   it('updateFunnelInstance switching to infinite clears the remaining budget', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, { total: 5 });
-    updateFunnelInstance(grid, species, instance, { specId: instance.specId, tempC: 21, ratePerMinute: 60, total: null, facing: instance.facing });
+    updateFunnelInstance(instance, { specId: instance.specId, tempC: 21, ratePerMinute: 60, total: null, facing: instance.facing });
     expect(instance.total).toBeNull();
     expect(instance.remaining).toBeNull();
   });
@@ -202,13 +212,14 @@ describe('funnel', () => {
     );
     if (!stale) throw new Error('expected the two facings to differ somewhere');
 
-    updateFunnelInstance(grid, species, instance, {
+    updateFunnelInstance(instance, {
       specId: instance.specId,
       tempC: 21,
       ratePerMinute: 60,
       total: instance.total,
       facing: 'right',
     });
+    sync(grid, [instance]);
 
     expect(instance.facing).toBe('right');
     expect(grid.specId[grid.index(instance.anchorX + stale.dx, instance.anchorY + stale.dy)]).not.toBe(GLASS_WALL_SPEC_ID);
@@ -222,7 +233,8 @@ describe('funnel', () => {
     const instance = place(grid);
     const shape = funnelShapeFor(instance.facing);
 
-    moveFunnelInstance(grid, species, instance, 30, 90); // far enough away (and in bounds) that the old and new outlines don't overlap
+    moveFunnelInstance(instance, 30, 90); // far enough away (and in bounds) that the old and new outlines don't overlap
+    sync(grid, [instance]);
 
     expect(instance.anchorX).toBe(30);
     expect(instance.anchorY).toBe(90);
@@ -239,7 +251,8 @@ describe('funnel', () => {
     const instance = place(grid);
     grid.set(70, 60, SpeciesId.Fe, PhaseCode.Solid);
 
-    moveFunnelInstance(grid, species, instance, 70, 60);
+    moveFunnelInstance(instance, 70, 60);
+    sync(grid, [instance]);
 
     expect(grid.specId[grid.index(70, 60)]).toBe(GLASS_WALL_SPEC_ID);
   });

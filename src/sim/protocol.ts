@@ -223,6 +223,13 @@ export type MainToWorkerMessage =
    * which tally they feed (see grid.ts's SinkMaskValue). One message for
    * both, since the drawn geometry is identical. */
   | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
+  /** Removes one placed apparatus outright. This is the *only* way to take
+   * apparatus off the bench: the eraser is matter-only now, since "erase part
+   * of a vessel" was a half-state nothing downstream could represent
+   * coherently (a tracked instance whose footprint has holes in it, which the
+   * next edit would silently heal anyway). The UI sends it from the Select
+   * tool -- Delete/Backspace, or the edit panel's Delete button. */
+  | { type: 'deleteApparatus'; kind: 'funnel' | 'tube' | 'flask' | 'filter' | 'radiator' | 'glass'; id: number }
   /** Zeroes both the sink and the vent tallies. */
   | { type: 'resetSinkCounts' }
   /** Rebuilds the world at a new grid height (the column count is fixed --

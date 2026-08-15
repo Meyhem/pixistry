@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { flaskFootprint, placeFlaskInstance } from './flask';
 import { PhaseCode, SimGrid } from './grid';
 import { stepStirrers } from './stirrer';
 import { mulberry32 } from './rng';
@@ -91,6 +92,50 @@ describe('stepStirrers', () => {
 
     expect(moved).toBe(true);
     expect(grid.specId).not.toEqual(before);
+  });
+
+  it("agitates a stirred flask's interior without any paint on the grid", () => {
+    // A stirred flask stopped stamping stirrerMask when apparatus state
+    // became derived (the compositor never touches painted terrain), so the
+    // union happens here instead. Losing it would silently un-stir every
+    // stirred vessel on the bench with nothing on screen to explain it.
+    const palette = buildPalette();
+    const water = findEntry(palette, 'H2O');
+    const hydrogen = findEntry(palette, 'H2');
+
+    const grid = new SimGrid(60, 60);
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: true, kind: 'beaker' });
+    const inside = flaskFootprint(flask).reservoirCells.filter((c) => grid.inBounds(c.x, c.y));
+    expect(inside.length).toBeGreaterThan(4);
+    inside.forEach((cell, i) => {
+      const isWater = i < inside.length / 2;
+      grid.set(cell.x, cell.y, isWater ? water.specId : hydrogen.specId, isWater ? PhaseCode.Liquid : PhaseCode.Gas);
+    });
+    const before = grid.specId.slice();
+    expect(grid.stirrerMask.every((v) => v === 0)).toBe(true);
+
+    const rng = mulberry32(11);
+    for (let i = 0; i < 10; i++) stepStirrers(grid, rng, [flask]);
+
+    expect(grid.specId).not.toEqual(before);
+    expect(grid.stirrerMask.every((v) => v === 0)).toBe(true);
+  });
+
+  it('leaves an unstirred flask alone', () => {
+    const palette = buildPalette();
+    const water = findEntry(palette, 'H2O');
+
+    const grid = new SimGrid(60, 60);
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: false, kind: 'beaker' });
+    for (const cell of flaskFootprint(flask).reservoirCells) {
+      if (grid.inBounds(cell.x, cell.y)) grid.set(cell.x, cell.y, water.specId, PhaseCode.Liquid);
+    }
+    const before = grid.specId.slice();
+
+    const rng = mulberry32(11);
+    for (let i = 0; i < 10; i++) stepStirrers(grid, rng, [flask]);
+
+    expect(grid.specId).toEqual(before);
   });
 
   it('pops some liquid cells up into empty headroom above the overlay', () => {

@@ -58,25 +58,42 @@ export function snapOctant(anchor: Point, raw: Point): Point {
   return { x: anchor.x + best.x * steps, y: anchor.y + best.y * steps };
 }
 
+/** Whether `b` is reachable from `a` by whole steps in one of the 8 octant
+ * directions -- the precondition every consecutive pair of tube knees is
+ * meant to satisfy (see snapOctant and the module comment). */
+export function isOctantAligned(a: Point, b: Point): boolean {
+  const dx = Math.abs(b.x - a.x);
+  const dy = Math.abs(b.y - a.y);
+  return dx === 0 || dy === 0 || dx === dy;
+}
+
 /** Walks every cell-by-cell step between consecutive (already octant-
- * snapped) waypoints, inclusive of every waypoint. Assumes each consecutive
- * pair differs by a whole multiple of a unit octant step -- true for any
- * polyline built from snapOctant results, so this never needs a general
+ * snapped) waypoints, inclusive of every waypoint. Each consecutive pair is
+ * expected to differ by a whole multiple of a unit octant step -- true for
+ * any polyline built from snapOctant results, so this never needs a general
  * Bresenham. Consecutive duplicate waypoints (a click that didn't move)
- * collapse naturally since the inner while loop simply doesn't run. */
+ * collapse naturally since the inner loop simply doesn't run.
+ *
+ * The step count is derived up front rather than walked until the cursor
+ * happens to land on `b`. Those are the same thing for an aligned pair, but
+ * for a misaligned one the "walk until you arrive" form never arrives: it
+ * spins forever appending cells, taking the whole worker down with it. A
+ * geometry helper shouldn't be able to hang the sim just because a caller
+ * handed it a pair it didn't expect. */
 export function polylineToLumenPath(points: readonly Point[]): Point[] {
   if (points.length === 0) return [];
   const path: Point[] = [points[0] as Point];
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1] as Point;
     const b = points[i] as Point;
-    const dx = Math.sign(b.x - a.x);
-    const dy = Math.sign(b.y - a.y);
+    const stepX = Math.sign(b.x - a.x);
+    const stepY = Math.sign(b.y - a.y);
+    const steps = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
     let cx = a.x;
     let cy = a.y;
-    while (cx !== b.x || cy !== b.y) {
-      cx += dx;
-      cy += dy;
+    for (let s = 0; s < steps; s++) {
+      if (cx !== b.x) cx += stepX;
+      if (cy !== b.y) cy += stepY;
       path.push({ x: cx, y: cy });
     }
   }

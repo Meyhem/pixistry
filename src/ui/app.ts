@@ -209,6 +209,8 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   flaskPanel: 'none',
   glassPanel: 'none',
   sinkPanel: 'none',
+  canDelete: false,
+  eraseHint: false,
 };
 
 /** The three tools with no per-instance config of their own -- just a
@@ -847,7 +849,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       };
     }
     const info = SIMPLE_TOOL_META[t.kind];
-    return { ...TOOL_META_DEFAULTS, label: info.label, color: info.color, category: 'TOOL' };
+    return { ...TOOL_META_DEFAULTS, label: info.label, color: info.color, category: 'TOOL', eraseHint: t.kind === 'erase' };
   }
 
   function setTool(next: Tool): void {
@@ -871,6 +873,20 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function togglePin(label: string): void {
     pinnedLabels = pinnedLabels.includes(label) ? pinnedLabels.filter((x) => x !== label) : [...pinnedLabels, label];
     savePinnedLabels(pinnedLabels);
+    render();
+  }
+
+  /** Takes the selected apparatus off the bench. The Select tool's Delete
+   * key and its panel's Delete button both land here, and they're the only
+   * two ways: the eraser stopped touching apparatus when apparatus state
+   * became derived (see sim/entity-composite.ts), because "erase half a
+   * vessel" isn't a state the bench can hold. */
+  function deleteSelectedApparatus(): void {
+    const ref = apparatusSelection.selectedRef();
+    if (!ref) return;
+    send({ type: 'deleteApparatus', kind: ref.kind, id: ref.id });
+    apparatusSelection.endDrag();
+    apparatusSelection.selectFunnel(null); // clears every kind's selection
     render();
   }
 
@@ -1343,6 +1359,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         targetTempC: selectedRadiator.targetTempC,
       };
     }
+    // Apparatus only comes off the bench through Delete now, so the button
+    // shows for every kind the Select tool can have picked up.
+    meta.canDelete = isEditMode && apparatusSelection.selectedRef() !== null;
     const isTubeEditMode = isEditMode && !!selectedTube;
     const isFlaskEditMode = isEditMode && !!selectedFlask;
     // Editing a placed radiator edits its own draft (pushed straight to the
@@ -1574,6 +1593,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         settingsDockOpen = false;
         render();
       },
+      onDeleteEntity: deleteSelectedApparatus,
     };
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
     renderSettingsDock();
@@ -2152,6 +2172,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
 
     if (typing || anyModalOpen() || event.ctrlKey || event.metaKey || event.altKey) return;
+
+    // Delete removes the selected apparatus -- the keyboard half of the
+    // Select tool's Delete button (see deleteSelectedApparatus). Backspace
+    // too, since it's the same gesture on a keyboard without a Delete key.
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (tool?.kind === 'select-apparatus' && apparatusSelection.selectedRef()) {
+        event.preventDefault();
+        deleteSelectedApparatus();
+      }
+      return;
+    }
 
     // Now that picking a tool means opening a modal, the things you do most
     // often between picks get keys of their own -- otherwise the redesign

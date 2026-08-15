@@ -2,13 +2,14 @@
 // wall or the radiator's flat per-cell overlay -- see apparatus-shapes.ts's
 // module comment), since it needs to remember a species/temperature/rate/
 // remaining-budget across ticks and isn't representable as a value per grid
-// cell. The glass outline stamped into the grid at placement time is the
-// only part of a funnel that's real matter; everything else here (the
-// drip timer, the remaining budget) lives in the instance object held by
-// worker.ts's `funnels` list.
+// cell. The glass outline is the only part of a funnel that's real matter,
+// and nothing here stamps it: funnelGlassCells is the footprint the
+// compositor (entity-composite.ts) derives it from every time the bench
+// changes. Everything else (the drip timer, the remaining budget) lives in
+// the instance object held by worker.ts's `funnels` list.
 import type { SimGrid } from './grid';
 import { funnelShapeFor, funnelSpawnOffset, type FunnelFacing } from './apparatus-shapes';
-import { clearCells, stampGlass } from './apparatus';
+import { nextEntityId } from './entity-id';
 import { celsiusToKelvin, clampEnergyToMaxTemp, energyForTemperature, massOf } from './heat';
 import type { SpeciesTable } from './species';
 import type { Point } from './tube-shapes';
@@ -20,6 +21,8 @@ export const FUNNEL_COLOR = '#a9d6e8'; // same glass tint the funnel is built fr
 
 export interface FunnelInstance {
   readonly id: number;
+  /** Placement order across every apparatus kind -- see entity-id.ts. */
+  readonly entityId: number;
   anchorX: number;
   anchorY: number;
   /** Mutable after placement: a selected funnel rotates on the scroll wheel
@@ -71,18 +74,13 @@ export interface FunnelPlacement {
   readonly total: number | null;
 }
 
-/** Stamps the funnel's glass outline into the grid -- overwriting whatever
- * was there, same as painting a wall material -- and returns the new tracked
- * instance, ready to drip on a future tick (see stepFunnels). */
-export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placement: FunnelPlacement): FunnelInstance {
-  const shape = funnelShapeFor(placement.facing);
-  stampGlass(
-    grid,
-    species,
-    shape.cells.map((cell) => ({ x: placement.x + cell.dx, y: placement.y + cell.dy })),
-  );
+/** Returns a new tracked instance, ready to drip on a future tick (see
+ * stepFunnels). Its glass outline reaches the grid when the caller composites
+ * the bench (see entity-composite.ts), not from here. */
+export function placeFunnelInstance(placement: FunnelPlacement): FunnelInstance {
   return {
     id: nextFunnelId++,
+    entityId: nextEntityId(),
     anchorX: placement.x,
     anchorY: placement.y,
     facing: placement.facing,
@@ -96,36 +94,19 @@ export function placeFunnelInstance(grid: SimGrid, species: SpeciesTable, placem
   };
 }
 
-/** The cells a placed funnel's glass outline occupies right now -- shared by
- * the stamp/unstamp pair below, and by worker.ts's cross-apparatus glass
- * repair, which needs to know what glass every *other* apparatus is holding
- * before an edit clears a footprint that overlaps it. */
+/** The cells a placed funnel's glass outline occupies right now -- its whole
+ * footprint, which the compositor stamps as glass (see entity-composite.ts). */
 export function funnelGlassCells(instance: FunnelInstance): Point[] {
   const shape = funnelShapeFor(instance.facing);
   return shape.cells.map((cell) => ({ x: instance.anchorX + cell.dx, y: instance.anchorY + cell.dy }));
 }
 
-/** Clears the glass outline a funnel currently occupies -- the inverse of the
- * stamp placeFunnelInstance does, shared by the move and the facing change
- * below (both of which redraw the outline somewhere the old one isn't). */
-function unstampFunnel(grid: SimGrid, instance: FunnelInstance): void {
-  clearCells(grid, funnelGlassCells(instance));
-}
-
-function stampFunnel(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance): void {
-  stampGlass(grid, species, funnelGlassCells(instance));
-}
-
-/** Moves a placed funnel to a new anchor: clears the glass outline at its
- * current position, re-stamps it at the new one (overwriting whatever's
- * there, same as placeFunnelInstance), and updates the instance's anchor in
- * place. Facing is unchanged -- the select-apparatus tool's drag only
- * translates; rotating is the scroll wheel's job (see updateFunnelInstance). */
-export function moveFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, x: number, y: number): void {
-  unstampFunnel(grid, instance);
+/** Moves a placed funnel to a new anchor. Facing is unchanged -- the
+ * select-apparatus tool's drag only translates; rotating is the scroll
+ * wheel's job (see updateFunnelInstance). */
+export function moveFunnelInstance(instance: FunnelInstance, x: number, y: number): void {
   instance.anchorX = x;
   instance.anchorY = y;
-  stampFunnel(grid, species, instance);
 }
 
 export interface FunnelConfig {
@@ -139,19 +120,14 @@ export interface FunnelConfig {
 /** Live-edits a placed funnel's species/temperature/rate/total/facing (the
  * select-apparatus tool's edit panel and its scroll-wheel rotation) --
  * position only ever changes via moveFunnelInstance (dragging), never here.
- * A facing change re-stamps the glass outline the same way a move does, so a
- * rotated funnel doesn't leave its previous outline behind; the reservoir's
- * contents (which aren't matter -- see frame.ts's computeFunnelFill) follow
- * the new shape on the next frame. Doesn't refill `remaining` on its own (see
- * resetFunnelInstance for that): lowering `total` below the current remaining
- * budget clamps it down, raising it (or switching to infinite) leaves the
- * current progress alone rather than granting a surprise refill. */
-export function updateFunnelInstance(grid: SimGrid, species: SpeciesTable, instance: FunnelInstance, config: FunnelConfig): void {
-  if (config.facing !== instance.facing) {
-    unstampFunnel(grid, instance);
-    instance.facing = config.facing;
-    stampFunnel(grid, species, instance);
-  }
+ * The reservoir's contents (which aren't matter -- see frame.ts's
+ * computeFunnelFill) follow a new facing's shape on the next frame. Doesn't
+ * refill `remaining` on its own (see resetFunnelInstance for that): lowering
+ * `total` below the current remaining budget clamps it down, raising it (or
+ * switching to infinite) leaves the current progress alone rather than
+ * granting a surprise refill. */
+export function updateFunnelInstance(instance: FunnelInstance, config: FunnelConfig): void {
+  instance.facing = config.facing;
   instance.specId = config.specId;
   instance.tempK = celsiusToKelvin(config.tempC);
   instance.intervalTicks = intervalTicksForRate(config.ratePerMinute);

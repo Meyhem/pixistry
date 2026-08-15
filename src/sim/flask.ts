@@ -9,12 +9,11 @@
 // which cells to clear to redraw it. So a flask is tracked state now, same
 // as funnel.ts's FunnelInstance and tube.ts's TubeInstance -- but unlike
 // those two it still has no per-tick step function of its own: the vessel
-// only ever acts through the glass walls and the vessel/stirrer masks it
-// stamps, which the movement/stirrer passes already handle.
-import { clearCells, stampGlass } from './apparatus';
+// only ever acts through the glass walls and the vessel interior its
+// footprint declares, which the compositor (entity-composite.ts) puts on the
+// grid and the movement/stirrer passes read.
 import { flaskShapeFor, type FlaskFacing, type FlaskKind } from './flask-shapes';
-import type { SimGrid } from './grid';
-import type { SpeciesTable } from './species';
+import { nextEntityId } from './entity-id';
 import type { Point } from './tube-shapes';
 
 export const FLASK_COLOR = '#a9d6e8'; // same glass tint as the funnel/tube/plain glass wall
@@ -30,6 +29,8 @@ export interface FlaskConfig {
 
 export interface FlaskInstance {
   readonly id: number;
+  /** Placement order across every apparatus kind -- see entity-id.ts. */
+  readonly entityId: number;
   x: number;
   y: number;
   facing: FlaskFacing;
@@ -47,12 +48,17 @@ export function resetFlaskIds(): void {
   nextFlaskId = 1;
 }
 
-interface Footprint {
+export interface FlaskFootprint {
+  /** The glass outline, as real wall matter. */
   readonly wallCells: Point[];
+  /** Everything inside that outline: the compositor marks it as vessel
+   * interior (which movement.ts's tryDiagonal reads to stop matter hopping
+   * diagonally through the glass instead of going in the mouth), and
+   * stirrer.ts agitates it every tick for the stirred variant. */
   readonly reservoirCells: Point[];
 }
 
-function footprintOf(instance: FlaskInstance): Footprint {
+export function flaskFootprint(instance: FlaskInstance): FlaskFootprint {
   const shape = flaskShapeFor(instance.facing, instance.sizeScale, instance.kind);
   return {
     wallCells: shape.cells.map((cell) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy })),
@@ -60,48 +66,10 @@ function footprintOf(instance: FlaskInstance): Footprint {
   };
 }
 
-/** The cells a placed flask's glass outline occupies right now -- exposed for
- * worker.ts's cross-apparatus glass repair, which needs to know what glass
- * every *other* apparatus is holding before an edit clears a footprint that
- * overlaps it. */
-export function flaskGlassCells(instance: FlaskInstance): readonly Point[] {
-  return footprintOf(instance).wallCells;
-}
-
-/** Draws the vessel: glass outline as real wall matter, plus vesselMask over
- * the interior (which movement.ts's tryDiagonal reads to stop matter hopping
- * diagonally through the glass instead of going in the mouth) and
- * stirrerMask over the same interior for the stirred variant. */
-export function stampFlask(grid: SimGrid, species: SpeciesTable, instance: FlaskInstance): void {
-  const { wallCells, reservoirCells } = footprintOf(instance);
-  stampGlass(grid, species, wallCells);
-  for (const { x, y } of reservoirCells) {
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    grid.vesselMask[idx] = 1;
-    if (instance.stirred) grid.stirrerMask[idx] = 1;
-  }
-}
-
-/** The inverse of stampFlask: clears the glass outline back to empty and
- * drops the interior's masks. Whatever the vessel was holding stays exactly
- * where it is -- only the glass and the overlays are erased, so a resize or
- * a move re-stamps around (or away from) the contents rather than deleting
- * them. */
-export function unstampFlask(grid: SimGrid, instance: FlaskInstance): void {
-  const { wallCells, reservoirCells } = footprintOf(instance);
-  clearCells(grid, wallCells);
-  for (const { x, y } of reservoirCells) {
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    grid.vesselMask[idx] = 0;
-    grid.stirrerMask[idx] = 0;
-  }
-}
-
-export function placeFlaskInstance(grid: SimGrid, species: SpeciesTable, config: FlaskConfig): FlaskInstance {
-  const instance: FlaskInstance = {
+export function placeFlaskInstance(config: FlaskConfig): FlaskInstance {
+  return {
     id: nextFlaskId++,
+    entityId: nextEntityId(),
     x: config.x,
     y: config.y,
     facing: config.facing,
@@ -109,32 +77,19 @@ export function placeFlaskInstance(grid: SimGrid, species: SpeciesTable, config:
     stirred: config.stirred,
     kind: config.kind,
   };
-  stampFlask(grid, species, instance);
-  return instance;
 }
 
-/** Applies an edit (shape/size/stirred/facing, any subset) by erasing the
- * old footprint first and re-stamping the new one -- the same
- * unstamp-mutate-restamp shape tube.ts uses for a knee drag, and the reason
- * a resize doesn't leave the previous outline behind as orphaned glass. */
-export function updateFlaskInstance(
-  grid: SimGrid,
-  species: SpeciesTable,
-  instance: FlaskInstance,
-  patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'kind'>>,
-): void {
-  unstampFlask(grid, instance);
+/** Applies an edit (shape/size/stirred/facing, any subset). The vessel's
+ * contents are untouched -- a resize or a move re-derives the glass around
+ * (or away from) whatever it was holding rather than deleting it. */
+export function updateFlaskInstance(instance: FlaskInstance, patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'kind'>>): void {
   if (patch.facing !== undefined) instance.facing = patch.facing;
   if (patch.sizeScale !== undefined) instance.sizeScale = patch.sizeScale;
   if (patch.stirred !== undefined) instance.stirred = patch.stirred;
   if (patch.kind !== undefined) instance.kind = patch.kind;
-  stampFlask(grid, species, instance);
 }
 
-export function moveFlaskInstance(grid: SimGrid, species: SpeciesTable, instance: FlaskInstance, x: number, y: number): void {
-  if (instance.x === x && instance.y === y) return;
-  unstampFlask(grid, instance);
+export function moveFlaskInstance(instance: FlaskInstance, x: number, y: number): void {
   instance.x = x;
   instance.y = y;
-  stampFlask(grid, species, instance);
 }

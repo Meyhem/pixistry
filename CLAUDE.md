@@ -93,6 +93,30 @@ no longer needed — don't just delete them because a specific test passes witho
 random-fuzz run (paint random species at random cells for thousands of ticks, assert every cell's `u` stays
 finite and under `MAX_TEMP_K`) to check, since the runaway only shows up over many ticks, not immediately.
 
+### Apparatus is derived state: the compositor is the only writer
+
+`src/sim/entity-composite.ts` derives *all* apparatus grid state (glass wall cells belonging to a placed
+funnel/tube/flask/glass polygon, `tubeMask`, `filterMask`, `vesselMask`, the radiator fields, and
+`entityOwner`) from the instance lists in one pass, on every edit. An edit is "mutate the instance, then
+recomposite" — `worker.ts`'s `mutateEntities`. Nothing else may write those arrays, and nothing
+incrementally unstamps anything. That single rule replaced three coexisting bookkeeping schemes (a "put
+back whatever went empty" repair pass, per-kind crossing rules in `unstampGlass`/`unstampFilter`/
+`unstampRadiator`, and the tube's own mask restamping) whose cross-interactions were the source of
+essentially every apparatus regression this project has had. A new apparatus feature goes through a
+`Footprint`, never through direct grid writes. See [.grill/entity-overhaul.md](.grill/entity-overhaul.md)
+for the multi-phase plan this is step one of, and check which phases are ticked before touching this area.
+
+Two corollaries that are easy to undo by accident: apparatus is **indestructible** (the eraser takes
+matter and painted terrain only; `deleteApparatus` is the sole way something leaves the bench), and
+`stirrerMask`/`sinkMask`/`catalystStrength` are **painted terrain the compositor must never touch** — a
+stirred flask is stirred because `stepStirrers` unions its interior in, not because it marked the grid.
+Scenario setup must place real tracked instances for the same reason: an untracked one-shot stamp vanishes
+on the first recomposite.
+
+`entity-fuzz.test.ts` must stay in the suite and grow with every new entity kind or operation. When an
+entity bug turns up in play, the fix lands together with a fuzz op or invariant that would have caught
+it, not just a targeted unit test — that suite found a live `moveTubeSegment` hang on its first run.
+
 ### The NaCl/AgCl dissolution calibration point
 
 `REACTIONS` has a rule for `NaCl + H2O -> Na+(aq) + Cl-(aq)` but no rule for `AgCl + H2O` at all — AgCl is

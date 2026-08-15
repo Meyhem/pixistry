@@ -128,6 +128,17 @@ walls can still land on a lumen).
   lumen/filter cells, all arrays finite. This suite grows in later phases.
 - Update existing tests that exercised erase-deletion and repair behavior.
 
+**Landed. Two things the implementation turned up that the plan didn't predict:**
+- The lumen bore has to run *after* every wall is stamped, not inline in z-order. A funnel placed later
+  than a tube otherwise stamps its outline straight across the channel and plugs the conveyor with its own
+  glass. (Caught by the fuzz suite's "a lumen is never wall matter" invariant.)
+- `moveTubeSegment` could produce an off-axis segment — dragging the *last* segment of a 3+ knee tube
+  resolved knee `i` against the old position of knee `j` and then translated `j` independently — and
+  `polylineToLumenPath`'s "walk until you arrive" loop never arrives for a misaligned pair, so it spun
+  forever appending cells and took the worker down. Fixed at both ends: a free end now keeps the segment
+  vector, `hasDegenerateSegment` refuses an off-axis result, and the path walk derives its step count up
+  front so it can't hang whatever it's handed. This was live on `main`, not introduced by the overhaul.
+
 **Behavior changes to note in the commit:** partial-line erase is gone; erase-the-anchor/knee
 deletion is gone (Delete key instead); overlap layering becomes stable placement order instead of
 last-edit-wins; painting a different wall material over apparatus glass reverts on that apparatus's
@@ -285,7 +296,7 @@ monotonicity); extend the fuzz suite with tube ops.
 
 ## Checklist
 
-- [ ] Phase 1: compositor + `entityOwner`; eraser matter-only; Delete key/button; snapshot slimming;
+- [x] Phase 1: compositor + `entityOwner`; eraser matter-only; Delete key/button; snapshot slimming;
       repair/crossing/prune machinery deleted; composite + fuzz tests green
 - [ ] Phase 2: diagonal corner rule; `vesselMask` deleted; diagonal-vessel containment test
 - [ ] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired

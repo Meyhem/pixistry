@@ -10,7 +10,16 @@
 // grid's existing typed arrays via .set() rather than replacing them, since
 // every array here stays the same fixed size (the grid's dimensions never
 // change) for the worker's whole lifetime.
+//
+// Only matter and painted terrain are stored. Everything apparatus-derived
+// (tubeMask, filterMask, vesselMask, the radiator fields, entityOwner) is
+// left out and rebuilt by compositing the restored instance lists -- storing
+// both would be storing the same fact twice, and the copy that drifted would
+// win.
+import { compositeEntities } from './entity-composite';
+import { reseedEntityIds } from './entity-id';
 import type { SimGrid } from './grid';
+import type { SpeciesTable } from './species';
 import type { FilterInstance } from './filter';
 import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
@@ -23,12 +32,7 @@ export interface WorldSnapshot {
   readonly specId: Uint16Array;
   readonly u: Float32Array;
   readonly phase: Uint8Array;
-  readonly radiatorRadius: Uint8Array;
-  readonly radiatorTargetK: Float32Array;
   readonly stirrerMask: Uint8Array;
-  readonly tubeMask: Uint8Array;
-  readonly filterMask: Uint8Array;
-  readonly vesselMask: Uint8Array;
   readonly sinkMask: Uint8Array;
   readonly catalystStrength: Uint8Array;
   readonly funnels: readonly FunnelInstance[];
@@ -49,7 +53,7 @@ export interface WorldSnapshot {
  * copies the underlying buffer, not just the view) plus the funnel/tube
  * instance lists (structuredClone -- TubeInstance nests a Set and
  * precomputed geometry arrays, so a shallow copy would still alias the
- * live instances) and the sink tally. Cheap at this grid's size (10 arrays
+ * live instances) and the sink tally. Cheap at this grid's size (six arrays
  * of ~16000 cells, well under a millisecond), so it's fine to call this on
  * every Run Test burst later, not just a one-off manual save. */
 export function captureWorldSnapshot(
@@ -68,12 +72,7 @@ export function captureWorldSnapshot(
     specId: grid.specId.slice(),
     u: grid.u.slice(),
     phase: grid.phase.slice(),
-    radiatorRadius: grid.radiatorRadius.slice(),
-    radiatorTargetK: grid.radiatorTargetK.slice(),
     stirrerMask: grid.stirrerMask.slice(),
-    tubeMask: grid.tubeMask.slice(),
-    filterMask: grid.filterMask.slice(),
-    vesselMask: grid.vesselMask.slice(),
     sinkMask: grid.sinkMask.slice(),
     catalystStrength: grid.catalystStrength.slice(),
     funnels: structuredClone(funnels as FunnelInstance[]),
@@ -104,21 +103,23 @@ export interface RestoredWorld {
   readonly tick: number;
 }
 
-/** Copies a snapshot's arrays back into `grid` in place and restores the
- * sink tally into `sinkCounter`. Returns the funnel/tube instance lists and
- * tick for the caller to reassign -- worker.ts holds those as plain `let`
- * bindings rather than SimGrid fields, so they can't be restored in place
- * here the way the grid's own arrays are. */
-export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ventCounter: SinkCounter, snapshot: WorldSnapshot): RestoredWorld {
+/** Copies a snapshot's matter and painted terrain back into `grid` in place,
+ * restores the sink tally, and re-derives every apparatus cell by compositing
+ * the restored instance lists. Returns those lists and the tick for the
+ * caller to reassign -- worker.ts holds them as plain `let` bindings rather
+ * than SimGrid fields, so they can't be restored in place here the way the
+ * grid's own arrays are. */
+export function restoreWorldSnapshot(
+  grid: SimGrid,
+  species: SpeciesTable,
+  sinkCounter: SinkCounter,
+  ventCounter: SinkCounter,
+  snapshot: WorldSnapshot,
+): RestoredWorld {
   grid.specId.set(snapshot.specId);
   grid.u.set(snapshot.u);
   grid.phase.set(snapshot.phase);
-  grid.radiatorRadius.set(snapshot.radiatorRadius);
-  grid.radiatorTargetK.set(snapshot.radiatorTargetK);
   grid.stirrerMask.set(snapshot.stirrerMask);
-  grid.tubeMask.set(snapshot.tubeMask);
-  grid.filterMask.set(snapshot.filterMask);
-  grid.vesselMask.set(snapshot.vesselMask);
   grid.sinkMask.set(snapshot.sinkMask);
   grid.catalystStrength.set(snapshot.catalystStrength);
   sinkCounter.totals.set(snapshot.sinkTotals);
@@ -126,7 +127,8 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ve
   sinkCounter.history = structuredClone(snapshot.sinkHistory);
   ventCounter.totals.set(snapshot.ventTotals);
   ventCounter.grandTotal = snapshot.ventGrandTotal;
-  return {
+
+  const restored: RestoredWorld = {
     funnels: structuredClone(snapshot.funnels as FunnelInstance[]),
     tubes: structuredClone(snapshot.tubes as TubeInstance[]),
     flasks: structuredClone(snapshot.flasks as FlaskInstance[]),
@@ -135,4 +137,28 @@ export function restoreWorldSnapshot(grid: SimGrid, sinkCounter: SinkCounter, ve
     glass: structuredClone(snapshot.glass as GlassInstance[]),
     tick: snapshot.tick,
   };
+  // Zeroed *before* compositing, not by it: the owner marks still on the grid
+  // belong to the world being thrown away, and the compositor's final pass
+  // clears unclaimed glass at every previously-owned cell -- so a stale owner
+  // sitting on a cell the snapshot restored as painted glass would eat it.
+  grid.entityOwner.fill(0);
+  compositeEntities(grid, species, {
+    funnels: restored.funnels,
+    tubes: restored.tubes,
+    flasks: restored.flasks,
+    filters: restored.filters,
+    radiators: restored.radiators,
+    glass: restored.glass,
+  });
+  // The counter was handing out ids in the world we just discarded; a
+  // restored entity may hold one at or above where it now sits.
+  reseedEntityIds([
+    ...restored.funnels.map((f) => f.entityId),
+    ...restored.tubes.map((t) => t.entityId),
+    ...restored.flasks.map((f) => f.entityId),
+    ...restored.filters.map((f) => f.entityId),
+    ...restored.radiators.map((r) => r.entityId),
+    ...restored.glass.map((g) => g.entityId),
+  ]);
+  return restored;
 }

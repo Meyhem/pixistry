@@ -17,7 +17,11 @@
 // Ids are 1-based and capped at MAX_FILTER_ID because the mask is a
 // Uint8Array; freed ids are reused (see allocateFilterId), so a session that
 // draws and erases filters all day never runs out.
-import type { SimGrid } from './grid';
+//
+// Nothing here writes grid.filterMask: the membrane cells a line declares are
+// its footprint, and the compositor (entity-composite.ts) is what puts them
+// on the grid.
+import { nextEntityId } from './entity-id';
 import { sinkLineCells } from './sink';
 import { pointSegmentDistance } from './tube-shapes';
 
@@ -29,6 +33,11 @@ export const MAX_FILTER_ID = 255;
 
 export interface FilterInstance {
   readonly id: number;
+  /** Placement order across every apparatus kind -- see entity-id.ts. Note
+   * this is not `id`: `id` is what grid.filterMask carries per cell (a
+   * Uint8Array, hence the 255 cap and the reuse), and is retired in favor of
+   * entityOwner in a later phase. */
+  readonly entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -71,60 +80,27 @@ export function filterLineCells(filter: FilterInstance): { x: number; y: number 
   return sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0);
 }
 
-function stampFilter(grid: SimGrid, filter: FilterInstance): void {
-  for (const { x, y } of filterLineCells(filter)) {
-    if (grid.inBounds(x, y)) grid.filterMask[grid.index(x, y)] = filter.id;
-  }
-}
-
-/** Clears only the cells still carrying this instance's id -- a newer line
- * drawn across an older one owns the crossing cell, and unstamping the older
- * one must not punch a hole in the newer one. */
-export function unstampFilter(grid: SimGrid, filter: FilterInstance): void {
-  for (const { x, y } of filterLineCells(filter)) {
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    if (grid.filterMask[idx] === filter.id) grid.filterMask[idx] = 0;
-  }
-}
-
-export function placeFilterInstance(
-  grid: SimGrid,
-  filters: FilterInstance[],
-  x0: number,
-  y0: number,
-  x1: number,
-  y1: number,
-  species: readonly number[],
-): FilterInstance | null {
+export function placeFilterInstance(filters: FilterInstance[], x0: number, y0: number, x1: number, y1: number, species: readonly number[]): FilterInstance | null {
   const id = allocateFilterId(filters);
   if (id === null) return null;
-  const filter: FilterInstance = { id, x0, y0, x1, y1, species: new Set(species) };
-  stampFilter(grid, filter);
+  const filter: FilterInstance = { id, entityId: nextEntityId(), x0, y0, x1, y1, species: new Set(species) };
   filters.push(filter);
   return filter;
 }
 
 /** Slides a whole line by (dx, dy), keeping its length and angle. */
-export function moveFilterInstance(grid: SimGrid, filter: FilterInstance, dx: number, dy: number): void {
-  if (dx === 0 && dy === 0) return;
-  unstampFilter(grid, filter);
+export function moveFilterInstance(filter: FilterInstance, dx: number, dy: number): void {
   filter.x0 += dx;
   filter.y0 += dy;
   filter.x1 += dx;
   filter.y1 += dy;
-  stampFilter(grid, filter);
 }
 
 /** Drags one end of the line to (x, y), leaving the other where it is -- the
  * reshaping a membrane has instead of a tube's knees, so a line drawn a
  * little short (or at the wrong angle) can be stretched into place rather
  * than erased and redrawn. */
-export function moveFilterEndpoint(grid: SimGrid, filter: FilterInstance, endIndex: 0 | 1, x: number, y: number): void {
-  const cx = endIndex === 0 ? filter.x0 : filter.x1;
-  const cy = endIndex === 0 ? filter.y0 : filter.y1;
-  if (cx === x && cy === y) return;
-  unstampFilter(grid, filter);
+export function moveFilterEndpoint(filter: FilterInstance, endIndex: 0 | 1, x: number, y: number): void {
   if (endIndex === 0) {
     filter.x0 = x;
     filter.y0 = y;
@@ -132,21 +108,10 @@ export function moveFilterEndpoint(grid: SimGrid, filter: FilterInstance, endInd
     filter.x1 = x;
     filter.y1 = y;
   }
-  stampFilter(grid, filter);
 }
 
 export function updateFilterInstance(filter: FilterInstance, species: readonly number[]): void {
   filter.species = new Set(species);
-}
-
-/** Drops any instance the eraser has wiped off the grid entirely, and
- * re-stamps the survivors' remaining cells. Erasing part of a line leaves
- * the rest of it working (it's a drawn membrane, not an object with an
- * anchor), so an instance only dies once none of its cells are left. */
-export function pruneErasedFilters(grid: SimGrid, filters: FilterInstance[]): FilterInstance[] {
-  return filters.filter((filter) =>
-    filterLineCells(filter).some(({ x, y }) => grid.inBounds(x, y) && grid.filterMask[grid.index(x, y)] === filter.id),
-  );
 }
 
 /** Nearest filter line within `radius` grid cells of (x, y), or null -- the

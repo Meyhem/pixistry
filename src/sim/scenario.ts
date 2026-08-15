@@ -7,9 +7,10 @@
 import { AMBIENT_TEMPERATURE_K, celsiusToKelvin, energyForTemperature, massOf } from './heat';
 import { SinkMaskValue, type SimGrid } from './grid';
 import { forEachCellInRadius } from './geometry';
-import { stampGlass } from './apparatus';
-import { flaskShapeFor } from './flask-shapes';
+import { DEFAULT_FLASK_KIND } from './flask-shapes';
+import { placeFlaskInstance, type FlaskInstance } from './flask';
 import { placeFunnelInstance, setFunnelEnabledInstance, type FunnelInstance } from './funnel';
+import { placeRadiatorInstance, type RadiatorInstance } from './radiators';
 import { sinkLineCells } from './sink';
 import type { SpeciesTable } from './species';
 import type { Restrictions, Scenario, SetupCommand, ToolKind } from './scenario-data';
@@ -68,24 +69,16 @@ function applyWallLine(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupC
   }
 }
 
-/** A one-shot glass stamp, same as the interactive Flask tool's 'placeFlask'
- * handler (worker.ts) -- not tracked instance state, since a flask has no
- * per-tick behavior of its own beyond the vessel/stirrer masks it sets. */
-function applyFlask(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
-  const shape = flaskShapeFor(cmd.facing, cmd.sizeScale, cmd.glassware);
-  stampGlass(
-    grid,
-    species,
-    shape.cells.map((cell) => ({ x: cmd.x + cell.dx, y: cmd.y + cell.dy })),
+/** A tracked flask instance, exactly like the interactive Flask tool's
+ * 'placeFlask' handler produces. Scenario glassware used to be an untracked
+ * one-shot stamp, which stopped being possible once apparatus became derived
+ * state: the first recomposite clears every cell no live entity claims, so an
+ * untracked scenario bench would simply vanish the first time the player
+ * placed anything. */
+function applyFlask(flasks: FlaskInstance[], cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
+  flasks.push(
+    placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, kind: cmd.glassware ?? DEFAULT_FLASK_KIND }),
   );
-  for (const cell of shape.reservoirCells) {
-    const x = cmd.x + cell.dx;
-    const y = cmd.y + cell.dy;
-    if (!grid.inBounds(x, y)) continue;
-    const idx = grid.index(x, y);
-    grid.vesselMask[idx] = 1;
-    if (cmd.stirred) grid.stirrerMask[idx] = 1;
-  }
 }
 
 /** Places a funnel already dripping if the scenario says so -- unlike the
@@ -95,8 +88,8 @@ function applyFlask(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupComm
  * the bench loads, with no player action to enable it. Defaults to ambient
  * temperature -- SetupCommand's 'funnel' kind has no tempC of its own,
  * matching .grill/campaign-mode.md's §3 SetupCommand type. */
-function applyFunnel(grid: SimGrid, species: SpeciesTable, funnels: FunnelInstance[], cmd: Extract<SetupCommand, { kind: 'funnel' }>): void {
-  const instance = placeFunnelInstance(grid, species, {
+function applyFunnel(funnels: FunnelInstance[], cmd: Extract<SetupCommand, { kind: 'funnel' }>): void {
+  const instance = placeFunnelInstance({
     x: cmd.x,
     y: cmd.y,
     facing: cmd.facing,
@@ -109,19 +102,26 @@ function applyFunnel(grid: SimGrid, species: SpeciesTable, funnels: FunnelInstan
   funnels.push(instance);
 }
 
-/** A non-physical per-cell heat-source overlay, same as the interactive
- * Radiator tool's 'paintRadiatorLine' handler (worker.ts) -- a single `radius`
- * doubles as both the painted brush area and each cell's own radiation
- * reach, since SetupCommand's 'radiator' kind (matching the design doc)
- * exposes only one radius parameter, not the tool's separate brush/radiation
- * radii. */
-function applyRadiator(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'radiator' }>): void {
-  const targetK = celsiusToKelvin(cmd.targetTempC);
-  forEachCellInRadius(grid, cmd.x, cmd.y, cmd.radius, (px, py) => {
-    const idx = grid.index(px, py);
-    grid.radiatorRadius[idx] = cmd.radius;
-    grid.radiatorTargetK[idx] = targetK;
-  });
+/** A tracked radiator instance, same as the interactive Radiator tool's
+ * 'paintRadiatorLine' handler produces -- and tracked for the same reason
+ * applyFlask's vessels are. A single `radius` doubles as both the emitter's
+ * own painted area and each cell's radiation reach, since SetupCommand's
+ * 'radiator' kind (matching the design doc) exposes only one radius
+ * parameter, not the tool's separate brush/radiation radii; a zero-length
+ * line of that width is exactly the disc this used to paint by hand (see
+ * radiators.ts's `width`). */
+function applyRadiator(radiators: RadiatorInstance[], cmd: Extract<SetupCommand, { kind: 'radiator' }>): void {
+  radiators.push(
+    placeRadiatorInstance({
+      x0: cmd.x,
+      y0: cmd.y,
+      x1: cmd.x,
+      y1: cmd.y,
+      radius: cmd.radius,
+      targetK: celsiusToKelvin(cmd.targetTempC),
+      width: cmd.radius,
+    }),
+  );
 }
 
 /** A pre-placed sink -- unlike every other scenario so far (where the player
@@ -146,17 +146,25 @@ function applyCatalyst(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'cataly
   });
 }
 
+/** The worker's own live instance arrays, mutated in place (pushed onto) the
+ * same way worker.ts's own 'placeFunnel' handler does. There's no 'tube'
+ * SetupCommand yet, so no tubes array (the design doc's own sketch signature
+ * includes one; added only once a scenario actually needs to pre-place a
+ * tube, same "don't pre-build untested primitives" rule this file's own
+ * history follows). */
+export interface ScenarioEntities {
+  readonly funnels: FunnelInstance[];
+  readonly flasks: FlaskInstance[];
+  readonly radiators: RadiatorInstance[];
+}
+
 /** Stamps every one of a scenario's setup commands onto a freshly-cleared
- * grid, in order. Callers are responsible for clearing prior state first
+ * grid, in order, and places its apparatus into `entities`. Callers are
+ * responsible for clearing prior state first and for compositing afterwards
  * (see worker.ts's 'loadScenario' handler) -- this only adds, it never
- * clears. `funnels` is the worker's own live instance array, mutated in
- * place (pushed onto) the same way worker.ts's own 'placeFunnel' handler
- * does -- there's no 'tube' SetupCommand yet, so applyScenarioSetup doesn't
- * take a tubes array too (the design doc's own sketch signature includes
- * one; added only once a scenario actually needs to pre-place a tube, same
- * "don't pre-build untested primitives" rule this file's own history
- * follows). */
-export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, funnels: FunnelInstance[], scenario: Scenario): void {
+ * clears, and the apparatus it places reaches the grid the same way the
+ * player's own does. */
+export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, entities: ScenarioEntities, scenario: Scenario): void {
   for (const cmd of scenario.setup) {
     switch (cmd.kind) {
       case 'rect':
@@ -169,13 +177,13 @@ export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, funnels
         applyWallLine(grid, species, cmd);
         break;
       case 'flask':
-        applyFlask(grid, species, cmd);
+        applyFlask(entities.flasks, cmd);
         break;
       case 'funnel':
-        applyFunnel(grid, species, funnels, cmd);
+        applyFunnel(entities.funnels, cmd);
         break;
       case 'radiator':
-        applyRadiator(grid, cmd);
+        applyRadiator(entities.radiators, cmd);
         break;
       case 'sink':
         applySink(grid, cmd);

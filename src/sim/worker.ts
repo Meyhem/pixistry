@@ -15,13 +15,8 @@
 // independently testable) -- this module is just the live grid/instance
 // state and the tick loop/message dispatch that mutate it.
 import { SimGrid, SinkMaskValue } from './grid';
-import {
-  editApparatus as repairingApparatus,
-  refreshTubeOverlays,
-  type ApparatusRef,
-  type PlacedApparatus,
-} from './apparatus-repair';
-import { forEachCellInRadius, withinRadius } from './geometry';
+import { compositeEntities, type PlacedEntities } from './entity-composite';
+import { forEachCellInRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import { buildFrame } from './frame';
 import {
@@ -63,32 +58,16 @@ import {
   normalizeTubePoints,
   placeTubeInstance,
   stepTubes,
-  unstampTube,
   updateTubeInstance,
   type TubeInstance,
 } from './tube';
-import { moveFlaskInstance, placeFlaskInstance, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
-import {
-  filterAllowMap,
-  moveFilterEndpoint,
-  moveFilterInstance,
-  placeFilterInstance,
-  pruneErasedFilters,
-  updateFilterInstance,
-  type FilterInstance,
-} from './filter';
-import {
-  moveGlassInstance,
-  placeGlassInstance,
-  pruneErasedGlass,
-  rotateGlassInstance,
-  type GlassInstance,
-} from './glass';
+import { moveFlaskInstance, placeFlaskInstance, updateFlaskInstance, type FlaskInstance } from './flask';
+import { filterAllowMap, moveFilterEndpoint, moveFilterInstance, placeFilterInstance, updateFilterInstance, type FilterInstance } from './filter';
+import { moveGlassInstance, placeGlassInstance, rotateGlassInstance, type GlassInstance } from './glass';
 import {
   moveRadiatorEndpoint,
   moveRadiatorInstance,
   placeRadiatorInstance,
-  pruneErasedRadiators,
   updateRadiatorInstance,
   type RadiatorInstance,
 } from './radiators';
@@ -161,9 +140,10 @@ let tubes: TubeInstance[] = [];
 
 // Placed glassware (see flask.ts) -- tracked so the select-apparatus tool
 // can pick a flask back up and re-stamp it at a new size/shape/facing.
-// Scenario-authored flasks (scenario.ts's applyFlask) stay untracked
-// one-shot stamps: they're part of the bench a scenario hands the player,
-// not something the player placed and may want to re-edit.
+// Scenario-authored flasks land here too (scenario.ts's applyFlask): an
+// untracked stamp isn't representable anymore, since the compositor derives
+// every apparatus cell from these lists and clears whatever no live instance
+// claims.
 let flasks: FlaskInstance[] = [];
 
 // Placed filter membranes (see filter.ts) -- tracked like the funnels/tubes/
@@ -263,16 +243,20 @@ function withGlass(id: number, fn: (instance: GlassInstance) => void): void {
   if (instance) fn(instance);
 }
 
-/** The bench as apparatus-repair.ts wants it -- a thunk, since the lists it
- * reads are mutated (and `tubes` rebound) by the edits it wraps. */
-function placedApparatus(): PlacedApparatus {
-  return { funnels, tubes, flasks, glass: glassPolys };
+/** Everything on the bench, read fresh -- the lists are rebound, not just
+ * mutated, by several handlers. */
+function placedEntities(): PlacedEntities {
+  return { funnels, tubes, flasks, filters, radiators, glass: glassPolys };
 }
 
-/** Runs an apparatus placement/move/resize with the cross-apparatus repair
- * around it -- see apparatus-repair.ts for what gets repaired and why. */
-function editApparatus(exclude: ApparatusRef | null, edit: () => void): void {
-  repairingApparatus(grid, species, placedApparatus, exclude, edit);
+/** Runs an apparatus placement/move/reshape/delete and re-derives the grid
+ * from the instance lists afterwards. Every handler that touches an instance
+ * goes through this and nothing else writes apparatus state -- see
+ * entity-composite.ts for why that single rule replaces the three
+ * bookkeeping schemes this used to need. */
+function mutateEntities(edit: () => void): void {
+  edit();
+  compositeEntities(grid, species, placedEntities());
 }
 
 function runOneTick(): void {
@@ -281,7 +265,7 @@ function runOneTick(): void {
   stepTubes(grid, tubes);
   if (tick % STIR_INTERVAL_TICKS === 0) {
     if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
-    stepStirrers(grid, rng);
+    stepStirrers(grid, rng, flasks);
   }
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
@@ -387,26 +371,28 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // the tool was configured with, captured once at placement time -- same
       // "settings are a snapshot, not a live global" convention as the
       // funnel's species and the filter line's allow-list.
-      radiators.push(
-        placeRadiatorInstance(grid, {
-          x0: msg.x0,
-          y0: msg.y0,
-          x1: msg.x1,
-          y1: msg.y1,
-          radius: msg.radiationRadius,
-          targetK: celsiusToKelvin(msg.targetTempC),
-        }),
+      mutateEntities(() =>
+        radiators.push(
+          placeRadiatorInstance({
+            x0: msg.x0,
+            y0: msg.y0,
+            x1: msg.x1,
+            y1: msg.y1,
+            radius: msg.radiationRadius,
+            targetK: celsiusToKelvin(msg.targetTempC),
+          }),
+        ),
       );
       break;
     }
     case 'updateRadiator':
-      withRadiator(msg.id, (instance) => updateRadiatorInstance(grid, instance, msg.radiationRadius, celsiusToKelvin(msg.targetTempC)));
+      mutateEntities(() => withRadiator(msg.id, (instance) => updateRadiatorInstance(instance, msg.radiationRadius, celsiusToKelvin(msg.targetTempC))));
       break;
     case 'moveRadiator':
-      withRadiator(msg.id, (instance) => moveRadiatorInstance(grid, radiators, instance, msg.dx, msg.dy));
+      mutateEntities(() => withRadiator(msg.id, (instance) => moveRadiatorInstance(instance, msg.dx, msg.dy)));
       break;
     case 'moveRadiatorEndpoint':
-      withRadiator(msg.id, (instance) => moveRadiatorEndpoint(grid, radiators, instance, msg.endIndex, msg.x, msg.y));
+      mutateEntities(() => withRadiator(msg.id, (instance) => moveRadiatorEndpoint(instance, msg.endIndex, msg.x, msg.y)));
       break;
     case 'paintCatalyst':
       if (!isToolAllowed(activeRestrictions, 'catalyst')) break;
@@ -426,70 +412,59 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // the tool was configured with, captured once at placement time --
       // same "settings are a snapshot, not a live global" convention as the
       // funnel's species and the tube's own filter.
-      placeFilterInstance(grid, filters, msg.x0, msg.y0, msg.x1, msg.y1, msg.species);
+      mutateEntities(() => placeFilterInstance(filters, msg.x0, msg.y0, msg.x1, msg.y1, msg.species));
       break;
     case 'updateFilter':
-      withFilter(msg.id, (filter) => updateFilterInstance(filter, msg.species));
+      mutateEntities(() => withFilter(msg.id, (filter) => updateFilterInstance(filter, msg.species)));
       break;
     case 'moveFilter':
-      withFilter(msg.id, (filter) => moveFilterInstance(grid, filter, msg.dx, msg.dy));
+      mutateEntities(() => withFilter(msg.id, (filter) => moveFilterInstance(filter, msg.dx, msg.dy)));
       break;
     case 'moveFilterEndpoint':
-      withFilter(msg.id, (filter) => moveFilterEndpoint(grid, filter, msg.endIndex, msg.x, msg.y));
+      mutateEntities(() => withFilter(msg.id, (filter) => moveFilterEndpoint(filter, msg.endIndex, msg.x, msg.y)));
       break;
     case 'erase':
+      // Matter and painted terrain only. Apparatus is indestructible: it goes
+      // away through 'deleteApparatus' (the Select tool's Delete) and no
+      // other way, which is what makes "a placed vessel can't be
+      // half-destroyed" true by construction rather than by six per-kind
+      // conventions about which cell of a footprint counts as its anchor.
       if (!isToolAllowed(activeRestrictions, 'erase')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
-        grid.clear(px, py);
-        grid.radiatorRadius[grid.index(px, py)] = 0;
-        grid.stirrerMask[grid.index(px, py)] = 0;
-        grid.tubeMask[grid.index(px, py)] = 0;
-        grid.filterMask[grid.index(px, py)] = 0;
-        grid.vesselMask[grid.index(px, py)] = 0;
-        grid.sinkMask[grid.index(px, py)] = 0;
-        grid.catalystStrength[grid.index(px, py)] = 0;
+        const idx = grid.index(px, py);
+        // An entity's own glass survives; anything else on the cell doesn't.
+        // Cargo riding in a tube's lumen, or a vessel's contents, is matter
+        // like any other and erases normally -- only the apparatus itself is
+        // protected.
+        if (!(grid.entityOwner[idx] !== 0 && isWallSpecId(grid.specId[idx] as number))) grid.clearAt(idx);
+        grid.stirrerMask[idx] = 0;
+        grid.sinkMask[idx] = 0;
+        grid.catalystStrength[idx] = 0;
       });
-      // Erasing a funnel's anchor (its spout tip) removes the whole tracked
-      // instance, not just whatever glass cells the brush touched -- the
-      // only way to delete a placed funnel, since there's no dedicated
-      // delete button (see side-panel.ts's Reset-only funnel edit panel).
-      funnels = funnels.filter((f) => !withinRadius(msg.x, msg.y, f.anchorX, f.anchorY, msg.radius));
-      // Same convention for a tube: erasing any one of its knee points
-      // deletes the whole instance (there's no dedicated delete button
-      // here either), rather than leaving a stale tracked path behind
-      // whenever the eraser only grazes a wall/lumen cell in its middle.
-      // The whole tube comes off the grid with it -- glass and overlay, not
-      // just the cells the brush physically covered (see tube.ts's
-      // unstampTube).
-      tubes = tubes.filter((t) => {
-        if (!t.points.some((p) => withinRadius(msg.x, msg.y, p.x, p.y, msg.radius))) return true;
-        unstampTube(grid, t);
-        return false;
+      break;
+    case 'deleteApparatus':
+      mutateEntities(() => {
+        switch (msg.kind) {
+          case 'funnel':
+            funnels = funnels.filter((f) => f.id !== msg.id);
+            break;
+          case 'tube':
+            tubes = tubes.filter((t) => t.id !== msg.id);
+            break;
+          case 'flask':
+            flasks = flasks.filter((f) => f.id !== msg.id);
+            break;
+          case 'filter':
+            filters = filters.filter((f) => f.id !== msg.id);
+            break;
+          case 'radiator':
+            radiators = radiators.filter((r) => r.id !== msg.id);
+            break;
+          case 'glass':
+            glassPolys = glassPolys.filter((g) => g.id !== msg.id);
+            break;
+        }
       });
-      // Same convention again for a flask, keyed on its anchor (the middle
-      // of its base): erasing there drops the whole vessel -- glass, masks
-      // and tracked instance together -- rather than leaving a tracked
-      // flask whose footprint the brush has already half-erased.
-      // A filter line is a drawn membrane rather than an object with an
-      // anchor, so erasing part of one leaves the rest working; the instance
-      // only goes away once the brush has taken its last cell (see
-      // pruneErasedFilters).
-      // Same "a drawn line/polygon dies only once its last cell is gone"
-      // rule for the radiator lines and hand-drawn glass polygons.
-      filters = pruneErasedFilters(grid, filters);
-      radiators = pruneErasedRadiators(grid, radiators);
-      glassPolys = pruneErasedGlass(grid, glassPolys);
-      flasks = flasks.filter((f) => {
-        if (!withinRadius(msg.x, msg.y, f.x, f.y, msg.radius)) return true;
-        unstampFlask(grid, f);
-        return false;
-      });
-      // A tube the brush only grazed is still on the bench, but the mask wipe
-      // above just took its lumen protection away wherever the brush landed
-      // -- put it back, or the survivor spends the rest of its life leaking
-      // cargo out through the gap. Its glass is not put back: the eraser is
-      // the one tool that's meant to be able to take glassware off the grid.
-      refreshTubeOverlays(grid, tubes);
       break;
     case 'setRunning':
       running = msg.running;
@@ -532,9 +507,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'placeFunnel':
       if (!isToolAllowed(activeRestrictions, 'funnel') || !isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      editApparatus(null, () =>
+      mutateEntities(() =>
         funnels.push(
-          placeFunnelInstance(grid, species, {
+          placeFunnelInstance({
             x: msg.x,
             y: msg.y,
             facing: msg.facing,
@@ -548,9 +523,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       break;
     case 'updateFunnel':
       if (!isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      editApparatus({ kind: 'funnel', id: msg.id }, () =>
+      mutateEntities(() =>
         withFunnel(msg.id, (instance) =>
-          updateFunnelInstance(grid, species, instance, {
+          updateFunnelInstance(instance, {
             specId: msg.specId,
             tempC: msg.tempC,
             ratePerMinute: msg.ratePerMinute,
@@ -567,7 +542,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       withFunnel(msg.id, (instance) => setFunnelEnabledInstance(instance, msg.enabled));
       break;
     case 'moveFunnel':
-      editApparatus({ kind: 'funnel', id: msg.id }, () => withFunnel(msg.id, (instance) => moveFunnelInstance(grid, species, instance, msg.x, msg.y)));
+      mutateEntities(() => withFunnel(msg.id, (instance) => moveFunnelInstance(instance, msg.x, msg.y)));
       break;
     case 'placeTube': {
       if (!isToolAllowed(activeRestrictions, 'tube')) break;
@@ -576,29 +551,25 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // (see tube.ts's normalizeTubePoints).
       const points = normalizeTubePoints(msg.points);
       if (points.length < 2) break;
-      editApparatus(null, () =>
-        tubes.push(placeTubeInstance(grid, species, { points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
-      );
+      mutateEntities(() => tubes.push(placeTubeInstance(grid, { points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })));
       break;
     }
     case 'moveTubeKnee':
-      editApparatus({ kind: 'tube', id: msg.id }, () =>
-        withTube(msg.id, (instance) => moveTubeKnee(grid, species, instance, msg.kneeIndex, { x: msg.x, y: msg.y })),
-      );
+      mutateEntities(() => withTube(msg.id, (instance) => moveTubeKnee(grid, instance, msg.kneeIndex, { x: msg.x, y: msg.y })));
       break;
     case 'moveTubeSegment':
-      editApparatus({ kind: 'tube', id: msg.id }, () => withTube(msg.id, (instance) => moveTubeSegment(grid, species, instance, msg.segIndex, msg.dx, msg.dy)));
+      mutateEntities(() => withTube(msg.id, (instance) => moveTubeSegment(grid, instance, msg.segIndex, msg.dx, msg.dy)));
       break;
     case 'updateTube':
-      editApparatus({ kind: 'tube', id: msg.id }, () =>
-        withTube(msg.id, (instance) => updateTubeInstance(grid, species, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
+      mutateEntities(() =>
+        withTube(msg.id, (instance) => updateTubeInstance(grid, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
       );
       break;
     case 'placeFlask':
       if (!isToolAllowed(activeRestrictions, 'flask')) break;
-      editApparatus(null, () =>
+      mutateEntities(() =>
         flasks.push(
-          placeFlaskInstance(grid, species, {
+          placeFlaskInstance({
             x: msg.x,
             y: msg.y,
             facing: msg.facing,
@@ -610,9 +581,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       );
       break;
     case 'updateFlask':
-      editApparatus({ kind: 'flask', id: msg.id }, () =>
+      mutateEntities(() =>
         withFlask(msg.id, (instance) =>
-          updateFlaskInstance(grid, species, instance, {
+          updateFlaskInstance(instance, {
             facing: msg.facing,
             sizeScale: msg.sizeScale,
             stirred: msg.stirred,
@@ -622,24 +593,20 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       );
       break;
     case 'moveFlask':
-      editApparatus({ kind: 'flask', id: msg.id }, () => withFlask(msg.id, (instance) => moveFlaskInstance(grid, species, instance, msg.x, msg.y)));
+      mutateEntities(() => withFlask(msg.id, (instance) => moveFlaskInstance(instance, msg.x, msg.y)));
       break;
     case 'placeGlassPolyline':
       // Glass is a paintable wall material, not a ToolKind of its own, so
       // this is gated by the same isPaintAllowed check the free-draw brush
       // used to go through as an ordinary 'paint' message.
       if (!isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID)) break;
-      editApparatus(null, () => glassPolys.push(placeGlassInstance(grid, species, msg.points)));
+      mutateEntities(() => glassPolys.push(placeGlassInstance(msg.points)));
       break;
     case 'moveGlass':
-      editApparatus({ kind: 'glass', id: msg.id }, () =>
-        withGlass(msg.id, (instance) => moveGlassInstance(grid, species, glassPolys, instance, msg.dx, msg.dy)),
-      );
+      mutateEntities(() => withGlass(msg.id, (instance) => moveGlassInstance(instance, msg.dx, msg.dy)));
       break;
     case 'rotateGlass':
-      editApparatus({ kind: 'glass', id: msg.id }, () =>
-        withGlass(msg.id, (instance) => rotateGlassInstance(grid, species, glassPolys, instance, msg.rotation)),
-      );
+      mutateEntities(() => withGlass(msg.id, (instance) => rotateGlassInstance(instance, msg.rotation)));
       break;
     case 'paintSinkLine':
       if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;
@@ -708,14 +675,14 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       maxTempKObserved = 0;
       activeScenario = msg.scenario;
       activeRestrictions = msg.scenario.rules;
-      applyScenarioSetup(grid, species, funnels, msg.scenario);
+      mutateEntities(() => applyScenarioSetup(grid, species, { funnels, flasks, radiators }, msg.scenario));
       break;
     case 'snapshotWorld':
       worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, radiators, glassPolys, sinkCounter, ventCounter, tick);
       break;
     case 'restoreWorld': {
       if (!worldSnapshot) break;
-      const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
+      const restored = restoreWorldSnapshot(grid, species, sinkCounter, ventCounter, worldSnapshot);
       funnels = restored.funnels;
       tubes = restored.tubes;
       flasks = restored.flasks;
@@ -748,7 +715,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // explicit 'restoreWorld', rather than leaving a half-finished test's
       // world state live.
       if (worldSnapshot) {
-        const restored = restoreWorldSnapshot(grid, sinkCounter, ventCounter, worldSnapshot);
+        const restored = restoreWorldSnapshot(grid, species, sinkCounter, ventCounter, worldSnapshot);
         funnels = restored.funnels;
         tubes = restored.tubes;
         flasks = restored.flasks;

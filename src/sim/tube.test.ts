@@ -11,22 +11,33 @@ import {
   moveTubeSegment,
   normalizeTubePoints,
   placeTubeInstance,
-  restampTubeMask,
   stepTubes,
-  unstampTube,
   updateTubeInstance,
   type TubeInstance,
 } from './tube';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { placeGlassInstance } from './glass';
 import type { Point } from './tube-shapes';
 
 const species = new SpeciesTable();
 
+/** A tube's wall ring and lumen/cone overlay are derived state (see
+ * entity-composite.ts): the instance holds the knee points, the compositor
+ * puts the glass and the mask on the grid. Every assertion against the grid
+ * composites the whole bench first, exactly like worker.ts's mutateEntities
+ * does after each message. */
+function sync(grid: SimGrid, instances: readonly TubeInstance[]): void {
+  compositeEntities(grid, species, { ...NO_ENTITIES, tubes: instances });
+}
+
 function place(grid: SimGrid, points: Point[], overrides: { coneSize?: number; filter?: Set<number> | null } = {}): TubeInstance {
-  return placeTubeInstance(grid, species, {
+  const instance = placeTubeInstance(grid, {
     points,
     coneSize: overrides.coneSize ?? DEFAULT_TUBE_CONE_SIZE,
     filter: overrides.filter ?? null,
   });
+  sync(grid, [instance]);
+  return instance;
 }
 
 const STRAIGHT: Point[] = [
@@ -242,7 +253,8 @@ describe('moveTubeKnee / moveTubeSegment', () => {
     const instance = place(grid, STRAIGHT);
     const oldWalls = instance.geometry.wallCells.map((c) => grid.index(c.x, c.y));
 
-    moveTubeKnee(grid, species, instance, 1, { x: 26, y: 26 });
+    moveTubeKnee(grid, instance, 1, { x: 26, y: 26 });
+    sync(grid, [instance]);
 
     for (const cell of instance.geometry.wallCells) {
       expect(grid.specId[grid.index(cell.x, cell.y)]).toBe(GLASS_WALL_SPEC_ID);
@@ -261,7 +273,8 @@ describe('moveTubeKnee / moveTubeSegment', () => {
     grid.setAt(midIdx, SpeciesId.H2O, PhaseCode.Liquid, 0);
 
     // Shrink the tube down to a 2-cell stub that no longer covers midIdx.
-    moveTubeKnee(grid, species, instance, 1, { x: 21, y: 20 });
+    moveTubeKnee(grid, instance, 1, { x: 21, y: 20 });
+    sync(grid, [instance]);
 
     const newLumenSet = new Set(instance.geometry.lumenIdx);
     if (!newLumenSet.has(midIdx)) {
@@ -277,7 +290,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
       { x: 60, y: 50 },
       { x: 60, y: 60 },
     ]);
-    moveTubeKnee(grid, species, instance, 1, { x: 55, y: 40 });
+    moveTubeKnee(grid, instance, 1, { x: 55, y: 40 });
     for (let i = 1; i < instance.points.length; i++) {
       const a = instance.points[i - 1] as Point;
       const b = instance.points[i] as Point;
@@ -295,7 +308,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
       { x: 70, y: 50 },
       { x: 70, y: 60 },
     ]);
-    moveTubeSegment(grid, species, instance, 1, 0, 10);
+    moveTubeSegment(grid, instance, 1, 0, 10);
     for (let i = 1; i < instance.points.length; i++) {
       const a = instance.points[i - 1] as Point;
       const b = instance.points[i] as Point;
@@ -312,7 +325,7 @@ describe('updateTubeInstance', () => {
     const instance = place(grid, STRAIGHT);
     const wallsBefore = instance.geometry.wallCells;
 
-    updateTubeInstance(grid, species, instance, { coneSize: instance.coneSize, filter: new Set([SpeciesId.H2O]) });
+    updateTubeInstance(grid, instance, { coneSize: instance.coneSize, filter: new Set([SpeciesId.H2O]) });
 
     expect(instance.filter?.has(SpeciesId.H2O)).toBe(true);
     expect(instance.geometry.wallCells).toBe(wallsBefore);
@@ -323,7 +336,8 @@ describe('updateTubeInstance', () => {
     const instance = place(grid, STRAIGHT, { coneSize: 1 });
     expect(instance.geometry.coneSrcIdx.length).toBe(1);
 
-    updateTubeInstance(grid, species, instance, { coneSize: 3, filter: null });
+    updateTubeInstance(grid, instance, { coneSize: 3, filter: null });
+    sync(grid, [instance]);
     expect(instance.geometry.coneSrcIdx.length).toBe(1 + 3 + 5);
     for (const i of instance.geometry.coneSrcIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Cone);
   });
@@ -395,34 +409,55 @@ describe('coneHoldMap', () => {
   });
 });
 
-describe('unstampTube', () => {
+describe('removing a tube', () => {
   it('takes the whole tube off the grid -- no orphaned glass, no stranded lumen mask', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);
 
-    unstampTube(grid, instance);
+    sync(grid, []);
 
     for (const cell of instance.geometry.wallCells) {
       expect(grid.isEmptyAt(grid.index(cell.x, cell.y))).toBe(true);
+      expect(grid.entityOwner[grid.index(cell.x, cell.y)]).toBe(0);
     }
     for (const i of instance.geometry.lumenIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.None);
     for (const i of instance.geometry.coneSrcIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.None);
   });
-});
 
-describe('restampTubeMask', () => {
-  it('puts back an overlay something else wiped, without re-stamping the glass', () => {
+  it('leaves the cargo it was carrying behind as ordinary matter', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);
-    const wall = instance.geometry.wallCells[0] as Point;
-    // What the eraser does: wipes cells and every overlay under its brush.
-    for (const i of instance.geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.None;
-    grid.clear(wall.x, wall.y);
+    const midIdx = instance.geometry.lumenIdx[2] as number;
+    grid.setAt(midIdx, SpeciesId.H2O, PhaseCode.Liquid, 0);
 
-    restampTubeMask(grid, instance);
+    sync(grid, []);
 
-    for (const i of instance.geometry.lumenIdx) expect(grid.tubeMask[i]).toBe(TubeMaskValue.Lumen);
-    expect(grid.isEmptyAt(grid.index(wall.x, wall.y))).toBe(true);
+    expect(grid.specId[midIdx]).toBe(SpeciesId.H2O);
+  });
+});
+
+describe('a tube crossing other glass', () => {
+  it('bores through a wall in its way, and the wall heals once the tube moves off it', () => {
+    // The f8f5379 regression, as an invariant: a lumen displaces glass rather
+    // than destroying it, because the wall is re-derived from whoever owns it.
+    const grid = new SimGrid(100, 100);
+    const beaker = placeGlassInstance([
+      { x: 23, y: 14 },
+      { x: 23, y: 26 },
+    ]);
+    const tube = placeTubeInstance(grid, { points: STRAIGHT, coneSize: DEFAULT_TUBE_CONE_SIZE, filter: null });
+    const bench = { ...NO_ENTITIES, tubes: [tube], glass: [beaker] };
+    compositeEntities(grid, species, bench);
+
+    const bored = grid.index(23, 20);
+    expect(grid.tubeMask[bored]).toBe(TubeMaskValue.Lumen);
+    expect(grid.isEmptyAt(bored)).toBe(true); // the tube is plumbed through the wall
+
+    moveTubeKnee(grid, tube, 0, { x: 32, y: 20 });
+    moveTubeKnee(grid, tube, 1, { x: 38, y: 20 });
+    compositeEntities(grid, species, bench);
+
+    expect(grid.specId[bored]).toBe(GLASS_WALL_SPEC_ID); // the hole closed behind it
   });
 });
 
@@ -435,7 +470,7 @@ describe('degenerate geometry', () => {
 
     // Dropping the mouth exactly on the exit collapses the tube to one cell:
     // no mouth, no exit, no cone, and nothing can ever bring it back.
-    moveTubeKnee(grid, species, instance, 0, { x: 26, y: 20 });
+    moveTubeKnee(grid, instance, 0, { x: 26, y: 20 });
 
     expect(instance.points).toEqual(pointsBefore);
     expect(instance.geometry.wallCells.length).toBe(wallsBefore);
@@ -446,7 +481,7 @@ describe('degenerate geometry', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);
 
-    moveTubeKnee(grid, species, instance, 0, { x: 25, y: 20 });
+    moveTubeKnee(grid, instance, 0, { x: 25, y: 20 });
 
     expect(instance.points[0]).toEqual({ x: 25, y: 20 });
   });
@@ -469,7 +504,7 @@ describe('degenerate geometry', () => {
       [0, 12],
       [-20, -20],
     ]) {
-      moveTubeSegment(grid, species, instance, 1, dx as number, dy as number);
+      moveTubeSegment(grid, instance, 1, dx as number, dy as number);
       for (let i = 1; i < instance.points.length; i++) {
         expect(instance.points[i]).not.toEqual(instance.points[i - 1]);
       }

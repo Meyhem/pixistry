@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { flaskShapeFor } from './flask-shapes';
-import { moveFlaskInstance, placeFlaskInstance, resetFlaskIds, unstampFlask, updateFlaskInstance, type FlaskInstance } from './flask';
+import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { moveFlaskInstance, placeFlaskInstance, resetFlaskIds, updateFlaskInstance, type FlaskInstance } from './flask';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
@@ -8,8 +9,16 @@ import { GLASS_WALL_SPEC_ID } from './walls';
 
 const species = new SpeciesTable();
 
-function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskInstance>[2]> = {}): FlaskInstance {
-  return placeFlaskInstance(grid, species, {
+/** A flask's glass and vessel interior are derived state (see
+ * entity-composite.ts): the instance says what shape it is, the compositor
+ * puts it on the grid. Every assertion here composites first, exactly like
+ * worker.ts's mutateEntities does after each message. */
+function sync(grid: SimGrid, instances: readonly FlaskInstance[]): void {
+  compositeEntities(grid, species, { ...NO_ENTITIES, flasks: instances });
+}
+
+function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskInstance>[0]> = {}): FlaskInstance {
+  const instance = placeFlaskInstance({
     x: 50,
     y: 60,
     facing: 'up',
@@ -18,6 +27,8 @@ function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskIns
     kind: 'erlenmeyer',
     ...overrides,
   });
+  sync(grid, [instance]);
+  return instance;
 }
 
 function wallCells(instance: FlaskInstance): { x: number; y: number }[] {
@@ -42,15 +53,30 @@ describe('placeFlaskInstance', () => {
     }
     for (const { x, y } of reservoirCells(instance)) {
       expect(grid.vesselMask[grid.index(x, y)]).toBe(1);
-      expect(grid.stirrerMask[grid.index(x, y)]).toBe(0);
     }
   });
 
-  it('stamps the stirrer over the interior only for the stirred variant', () => {
+  it('claims its glass cells for itself in the owner mask, but not its interior', () => {
+    const grid = new SimGrid(160, 100);
+    const instance = place(grid);
+    for (const { x, y } of wallCells(instance)) {
+      expect(grid.entityOwner[grid.index(x, y)]).toBe(instance.entityId);
+    }
+    // The interior is open space the vessel merely surrounds -- claiming it
+    // would make the eraser refuse to clear the vessel's own contents.
+    for (const { x, y } of reservoirCells(instance)) {
+      expect(grid.entityOwner[grid.index(x, y)]).toBe(0);
+    }
+  });
+
+  it('never writes the stirrer overlay, stirred or not', () => {
+    // stirrerMask is painted terrain the compositor deliberately doesn't own
+    // (see entity-composite.ts); a stirred flask is stirred because
+    // stepStirrers unions its interior in, not because it marked the grid.
     const grid = new SimGrid(160, 100);
     const instance = place(grid, { stirred: true, kind: 'beaker' });
     for (const { x, y } of reservoirCells(instance)) {
-      expect(grid.stirrerMask[grid.index(x, y)]).toBe(1);
+      expect(grid.stirrerMask[grid.index(x, y)]).toBe(0);
     }
   });
 
@@ -60,23 +86,23 @@ describe('placeFlaskInstance', () => {
   });
 });
 
-describe('unstampFlask', () => {
-  it('clears the glass and both masks, leaving the contents alone', () => {
+describe('deleting a flask', () => {
+  it('clears the glass and the vessel mask, leaving the contents alone', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid, { stirred: true });
     const inside = reservoirCells(instance)[0] as { x: number; y: number };
     grid.set(inside.x, inside.y, SpeciesId.H2O, PhaseCode.Liquid);
 
-    unstampFlask(grid, instance);
+    sync(grid, []); // the vessel is gone from the bench
 
     for (const { x, y } of wallCells(instance)) {
       expect(grid.specId[grid.index(x, y)]).toBe(EMPTY);
+      expect(grid.entityOwner[grid.index(x, y)]).toBe(0);
     }
     for (const { x, y } of reservoirCells(instance)) {
       expect(grid.vesselMask[grid.index(x, y)]).toBe(0);
-      expect(grid.stirrerMask[grid.index(x, y)]).toBe(0);
     }
-    // The contents are not the vessel -- unstamping erases glass, not matter.
+    // The contents are not the vessel -- removing it takes glass, not matter.
     expect(grid.specId[grid.index(inside.x, inside.y)]).toBe(SpeciesId.H2O);
   });
 });
@@ -87,7 +113,8 @@ describe('updateFlaskInstance', () => {
     const instance = place(grid, { sizeScale: 2 });
     const before = wallCells(instance);
 
-    updateFlaskInstance(grid, species, instance, { sizeScale: 0.5 });
+    updateFlaskInstance(instance, { sizeScale: 0.5 });
+    sync(grid, [instance]);
 
     const after = new Set(wallCells(instance).map((c) => `${c.x},${c.y}`));
     for (const { x, y } of before) {
@@ -102,22 +129,22 @@ describe('updateFlaskInstance', () => {
   it('swaps the shape in place, re-stamping the new outline', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid);
-    updateFlaskInstance(grid, species, instance, { kind: 'beaker' });
+    updateFlaskInstance(instance, { kind: 'beaker' });
+    sync(grid, [instance]);
     expect(instance.kind).toBe('beaker');
     for (const { x, y } of wallCells(instance)) {
       expect(grid.specId[grid.index(x, y)]).toBe(GLASS_WALL_SPEC_ID);
     }
   });
 
-  it('adds and removes the stirrer overlay when the stirred setting is toggled', () => {
+  it('records the stirred setting without touching the grid', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid);
     const sample = reservoirCells(instance)[0] as { x: number; y: number };
 
-    updateFlaskInstance(grid, species, instance, { stirred: true });
-    expect(grid.stirrerMask[grid.index(sample.x, sample.y)]).toBe(1);
-
-    updateFlaskInstance(grid, species, instance, { stirred: false });
+    updateFlaskInstance(instance, { stirred: true });
+    sync(grid, [instance]);
+    expect(instance.stirred).toBe(true);
     expect(grid.stirrerMask[grid.index(sample.x, sample.y)]).toBe(0);
   });
 });
@@ -128,7 +155,8 @@ describe('moveFlaskInstance', () => {
     const instance = place(grid);
     const before = wallCells(instance);
 
-    moveFlaskInstance(grid, species, instance, 100, 60);
+    moveFlaskInstance(instance, 100, 60);
+    sync(grid, [instance]);
 
     expect(instance.x).toBe(100);
     const after = new Set(wallCells(instance).map((c) => `${c.x},${c.y}`));
@@ -141,13 +169,14 @@ describe('moveFlaskInstance', () => {
     }
   });
 
-  it('is a no-op when the anchor has not changed', () => {
+  it('leaves the contents where they are when the anchor has not changed', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid);
     const inside = reservoirCells(instance)[0] as { x: number; y: number };
     grid.set(inside.x, inside.y, SpeciesId.H2O, PhaseCode.Liquid);
 
-    moveFlaskInstance(grid, species, instance, instance.x, instance.y);
+    moveFlaskInstance(instance, instance.x, instance.y);
+    sync(grid, [instance]);
 
     expect(grid.specId[grid.index(inside.x, inside.y)]).toBe(SpeciesId.H2O);
   });

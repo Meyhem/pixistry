@@ -331,6 +331,19 @@ export class ApparatusSelection {
     this.glassRotationDraft = this.findGlass(id)?.rotation ?? null;
   }
 
+  /** What's selected, as the worker's own kind+id pair -- what a Delete
+   * (key or panel button) needs to name (see protocol.ts's
+   * 'deleteApparatus'). Null when nothing is selected. */
+  selectedRef(): { kind: 'funnel' | 'tube' | 'flask' | 'filter' | 'radiator' | 'glass'; id: number } | null {
+    if (this.selectedFunnelId !== null) return { kind: 'funnel', id: this.selectedFunnelId };
+    if (this.selectedTubeId !== null) return { kind: 'tube', id: this.selectedTubeId };
+    if (this.selectedFlaskId !== null) return { kind: 'flask', id: this.selectedFlaskId };
+    if (this.selectedFilterId !== null) return { kind: 'filter', id: this.selectedFilterId };
+    if (this.selectedRadiatorId !== null) return { kind: 'radiator', id: this.selectedRadiatorId };
+    if (this.selectedGlassId !== null) return { kind: 'glass', id: this.selectedGlassId };
+    return null;
+  }
+
   /** Drops a selection whose apparatus no longer exists (it was erased, or a
    * Reset/Restore replaced the whole instance list) -- called once per
    * render so an edit panel never points at nothing. */

@@ -4,17 +4,19 @@
 // ticks, and the transport itself needs a stable ordered path to walk every
 // tick rather than re-deriving one from the grid each time.
 //
-// Unlike the funnel's glass outline, the tube's lumen is NOT stamped as
-// matter: only the wall ring (see tube-shapes.ts's lumenWallCells) is real
-// glass. The lumen and cone are a pure overlay (grid.tubeMask), and
-// whatever real matter happens to sit in a lumen cell IS the tube's cargo --
-// movement.ts already knows to leave those cells alone (blocked as both a
-// mover and a destination) so only stepTubes below ever touches them.
+// Unlike the funnel's glass outline, the tube's lumen is NOT matter: only the
+// wall ring (see tube-shapes.ts's lumenWallCells) is real glass. The lumen
+// and cone are a pure overlay (grid.tubeMask), and whatever real matter
+// happens to sit in a lumen cell IS the tube's cargo -- movement.ts already
+// knows to leave those cells alone (blocked as both a mover and a
+// destination) so only stepTubes below ever touches them. Both halves of that
+// footprint reach the grid through the compositor (entity-composite.ts);
+// nothing here stamps or unstamps anything.
 import { SimGrid, TubeMaskValue } from './grid';
-import { clearCells, stampGlass } from './apparatus';
-import type { SpeciesTable } from './species';
+import { nextEntityId } from './entity-id';
 import {
   coneCells,
+  isOctantAligned,
   lumenOpenEnds,
   lumenWallCells,
   polylineToLumenPath,
@@ -37,6 +39,10 @@ export const DEFAULT_TUBE_CONE_SIZE = 3;
  * so stepTubes' hot path is just array walks with no geometry math. */
 interface TubeGeometry {
   readonly wallCells: readonly Point[];
+  /** The lumen as cells (the compositor's footprint) and as grid indices
+   * (stepOneTube's hot path) -- the same path in both forms, since one is
+   * what declares the tube's shape and the other is what walks it. */
+  readonly lumenCells: readonly Point[];
   readonly lumenIdx: readonly number[];
   readonly exitOpenIdx: number | null;
   /** Parallel arrays: coneSrcIdx[i] is a cone cell, conePullTargetIdx[i] is
@@ -52,6 +58,8 @@ interface TubeGeometry {
 
 export interface TubeInstance {
   readonly id: number;
+  /** Placement order across every apparatus kind -- see entity-id.ts. */
+  readonly entityId: number;
   points: Point[];
   coneSize: number;
   /** null = accept every species (the default "all" filter). */
@@ -90,7 +98,7 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[], coneSize: nu
   if (openEnds) {
     const mouthCell = openEnds.mouthCell;
     // A cone cell whose one-step-toward-the-mouth target lands on the
-    // tube's own wall would be permanently stuck once stampTubeGeometry
+    // tube's own wall would be permanently stuck once the compositor
     // flags it Cone (see movement.ts -- a Cone cell can only move via this
     // pull, and a wall cell is never empty, so that pull would never fire).
     // Excluded from coneSrcIdx entirely rather than marked Cone with nowhere
@@ -110,22 +118,7 @@ function buildTubeGeometry(grid: SimGrid, points: readonly Point[], coneSize: nu
   }
 
   const allCells = [...lumenCells, ...wallCells, ...cone];
-  return { wallCells, lumenIdx, exitOpenIdx, coneSrcIdx, conePullTargetIdx, bounds: tubeBounds(allCells) };
-}
-
-/** Clears a tube's wall footprint back to empty and resets its overlay mask
- * -- matter sitting in old lumen/cone cells is left exactly where it is,
- * just no longer flagged as tube cargo (see the module comment: this is
- * the "released as ordinary matter" behavior for cells that fall outside a
- * new geometry after an edit). */
-function unstampTubeGeometry(grid: SimGrid, geometry: TubeGeometry): void {
-  clearCells(grid, geometry.wallCells);
-  for (const i of geometry.lumenIdx) {
-    if ((grid.tubeMask[i] as TubeMaskValue) === TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.None;
-  }
-  for (const i of geometry.coneSrcIdx) {
-    if ((grid.tubeMask[i] as TubeMaskValue) === TubeMaskValue.Cone) grid.tubeMask[i] = TubeMaskValue.None;
-  }
+  return { wallCells, lumenCells, lumenIdx, exitOpenIdx, coneSrcIdx, conePullTargetIdx, bounds: tubeBounds(allCells) };
 }
 
 /** The lumen is a bored hole, never cargo: any wall matter sitting in a
@@ -141,58 +134,6 @@ function boreWallsFromLumen(grid: SimGrid, lumenIdx: readonly number[]): void {
   for (const i of lumenIdx) {
     if (isWallSpecId(grid.specId[i] as number)) grid.clearAt(i);
   }
-}
-
-function markTubeMask(grid: SimGrid, geometry: TubeGeometry): void {
-  for (const i of geometry.lumenIdx) grid.tubeMask[i] = TubeMaskValue.Lumen;
-  for (const i of geometry.coneSrcIdx) {
-    if ((grid.tubeMask[i] as TubeMaskValue) !== TubeMaskValue.Lumen) grid.tubeMask[i] = TubeMaskValue.Cone;
-  }
-}
-
-/** Re-marks one tube's overlay without touching its glass, for the two ways
- * a tube's mask gets wiped by something that isn't the tube itself: the
- * eraser zeroes grid.tubeMask under its brush (see worker.ts) while leaving
- * any tube whose knee points it missed alive, and one tube's
- * unstampTubeGeometry clears mask cells a second, overlapping tube also
- * claims. Either way the surviving tube kept its tracked path but silently
- * lost the lumen protection movement.ts reads, so its cargo started leaking
- * out sideways -- a conveyor that "sometimes doesn't work" with nothing
- * visibly wrong with it. Glass is deliberately not re-stamped: the eraser is
- * the one tool allowed to take glassware off the grid. */
-export function restampTubeMask(grid: SimGrid, instance: TubeInstance): void {
-  markTubeMask(grid, instance.geometry);
-}
-
-/** Re-bores every tube's lumen (see boreWallsFromLumen) -- called after any
- * apparatus edit that may have stamped fresh glass across a lumen, so a tube
- * isn't left visibly plugged until the next tick gets around to it. */
-export function boreTubeLumens(grid: SimGrid, instances: readonly TubeInstance[]): void {
-  for (const instance of instances) boreWallsFromLumen(grid, instance.geometry.lumenIdx);
-}
-
-/** Takes a whole tube back off the grid -- glass ring and overlay together --
- * for the eraser, which deletes the tracked instance when its brush catches
- * any knee point. Without this the brush only cleared the handful of cells it
- * physically covered, leaving the rest of the tube behind as orphaned glass
- * and, worse, leaving its lumen mask on the grid: an invisible barrier no
- * matter could ever enter again, belonging to a tube that no longer exists.
- * The flask's eraser path already worked this way (see flask.ts's
- * unstampFlask). */
-export function unstampTube(grid: SimGrid, instance: TubeInstance): void {
-  unstampTubeGeometry(grid, instance.geometry);
-}
-
-/** Stamps wall cells as glass (see apparatus.ts's stampGlass -- same
- * "overwrite, seed at ambient" convention placeFunnelInstance uses) and
- * marks lumen/cone cells in the overlay mask -- lumen cells' existing
- * contents are left alone (a cell that was already lumen cargo before an
- * edit, and still is after, keeps its contents automatically since nothing
- * here clears it). */
-function stampTubeGeometry(grid: SimGrid, species: SpeciesTable, geometry: TubeGeometry): void {
-  stampGlass(grid, species, geometry.wallCells);
-  boreWallsFromLumen(grid, geometry.lumenIdx);
-  markTubeMask(grid, geometry);
 }
 
 export interface TubePlacement {
@@ -217,16 +158,17 @@ export function normalizeTubePoints(points: readonly Point[]): Point[] {
   return out;
 }
 
-/** Places a new tube: stamps its walls/overlay and returns the tracked
- * instance. `points` must already be octant-snapped (see tube-shapes.ts's
- * snapOctant) -- the drawing UI is responsible for that, same as the
- * funnel tool owns its own facing before calling placeFunnelInstance. */
-export function placeTubeInstance(grid: SimGrid, species: SpeciesTable, placement: TubePlacement): TubeInstance {
+/** Places a new tube and returns the tracked instance (its walls and overlay
+ * reach the grid when the caller composites the bench). `points` must already
+ * be octant-snapped (see tube-shapes.ts's snapOctant) -- the drawing UI is
+ * responsible for that, same as the funnel tool owns its own facing before
+ * calling placeFunnelInstance. */
+export function placeTubeInstance(grid: SimGrid, placement: TubePlacement): TubeInstance {
   const points = normalizeTubePoints(placement.points);
   const geometry = buildTubeGeometry(grid, points, placement.coneSize);
-  stampTubeGeometry(grid, species, geometry);
   return {
     id: nextTubeId++,
+    entityId: nextEntityId(),
     points,
     coneSize: placement.coneSize,
     filter: placement.filter ? new Set(placement.filter) : null,
@@ -234,16 +176,13 @@ export function placeTubeInstance(grid: SimGrid, species: SpeciesTable, placemen
   };
 }
 
-/** Re-derives and re-stamps a tube's geometry after its points or cone size
- * changed -- shared by moveTubeKnee/moveTubeSegment (points change) and
+/** Re-derives a tube's cached geometry after its points or cone size changed
+ * -- shared by moveTubeKnee/moveTubeSegment (points change) and
  * updateTubeInstance's cone-size edits. */
-function rebuildTubeGeometry(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, newPoints: Point[], newConeSize: number): void {
-  unstampTubeGeometry(grid, instance.geometry);
-  const geometry = buildTubeGeometry(grid, newPoints, newConeSize);
-  stampTubeGeometry(grid, species, geometry);
+function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: Point[], newConeSize: number): void {
   instance.points = newPoints;
   instance.coneSize = newConeSize;
-  instance.geometry = geometry;
+  instance.geometry = buildTubeGeometry(grid, newPoints, newConeSize);
 }
 
 /** Whether any two consecutive knees land on the same cell, which would
@@ -264,6 +203,12 @@ function hasDegenerateSegment(points: readonly Point[]): boolean {
     const a = points[i - 1] as Point;
     const b = points[i] as Point;
     if (a.x === b.x && a.y === b.y) return true;
+    // Off-axis pairs are meant to be impossible (every knee is octant-snapped
+    // against its neighbour), but a resolve that can't satisfy both of an
+    // interior knee's neighbours at once falls back to a point that satisfies
+    // neither. A tube built from one has walls that don't join, so refuse the
+    // drag step the same way a collapsed one is refused.
+    if (!isOctantAligned(a, b)) return true;
   }
   return false;
 }
@@ -274,7 +219,7 @@ function hasDegenerateSegment(points: readonly Point[]): boolean {
  * has two fixed neighbors and must satisfy both at once, which
  * resolveKneePosition solves for -- see its doc comment for why a single
  * point generally can't land exactly under the cursor in that case. */
-export function moveTubeKnee(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, kneeIndex: number, raw: Point): void {
+export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: number, raw: Point): void {
   const points = instance.points;
   if (kneeIndex < 0 || kneeIndex >= points.length) return;
   const prev = points[kneeIndex - 1];
@@ -292,7 +237,7 @@ export function moveTubeKnee(grid: SimGrid, species: SpeciesTable, instance: Tub
   const newPoints = points.slice();
   newPoints[kneeIndex] = newPoint;
   if (hasDegenerateSegment(newPoints)) return;
-  rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
 }
 
 /** Drags segment (segIndex, segIndex+1) by (dx, dy): both its points
@@ -304,7 +249,7 @@ export function moveTubeKnee(grid: SimGrid, species: SpeciesTable, instance: Tub
  * points don't" rule moveTubeKnee applies to a single knee, applied to both
  * ends of the dragged segment in sequence (segIndex first, so segIndex+1
  * resolves against segIndex's already-updated position). */
-export function moveTubeSegment(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, segIndex: number, dx: number, dy: number): void {
+export function moveTubeSegment(grid: SimGrid, instance: TubeInstance, segIndex: number, dx: number, dy: number): void {
   const points = instance.points;
   const i = segIndex;
   const j = segIndex + 1;
@@ -314,12 +259,19 @@ export function moveTubeSegment(grid: SimGrid, species: SpeciesTable, instance: 
   const outerPrev = points[i - 1];
   const newI = outerPrev ? resolveKneePosition(outerPrev, points[j] as Point, rawI) : rawI;
   const outerNext = points[j + 1];
-  const newJ = outerNext ? resolveKneePosition(newI, outerNext, rawJ) : rawJ;
+  // With an outer neighbour past j, resolving against it keeps both of j's
+  // connections valid at once. Without one, j is a free end and simply keeps
+  // the segment: translating it to `rawJ` would leave i wherever the resolve
+  // above put it and j a plain translation away, which is generally not an
+  // octant step apart at all -- the segment stops being a segment.
+  const newJ = outerNext
+    ? resolveKneePosition(newI, outerNext, rawJ)
+    : { x: newI.x + ((points[j] as Point).x - (points[i] as Point).x), y: newI.y + ((points[j] as Point).y - (points[i] as Point).y) };
   const newPoints = points.slice();
   newPoints[i] = newI;
   newPoints[j] = newJ;
   if (hasDegenerateSegment(newPoints)) return;
-  rebuildTubeGeometry(grid, species, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
 }
 
 export interface TubeConfig {
@@ -331,10 +283,10 @@ export interface TubeConfig {
  * apparatus tool's edit panel) -- geometry (points) only ever changes via
  * moveTubeKnee/moveTubeSegment, never here, so a cone-size change is the
  * only case that needs a re-stamp. */
-export function updateTubeInstance(grid: SimGrid, species: SpeciesTable, instance: TubeInstance, config: TubeConfig): void {
+export function updateTubeInstance(grid: SimGrid, instance: TubeInstance, config: TubeConfig): void {
   instance.filter = config.filter ? new Set(config.filter) : null;
   if (config.coneSize !== instance.coneSize) {
-    rebuildTubeGeometry(grid, species, instance, instance.points, config.coneSize);
+    rebuildTubeGeometry(grid, instance, instance.points, config.coneSize);
   }
 }
 
@@ -459,7 +411,21 @@ export function coneHolds(hold: ConeHold, idx: number, specId: number): boolean 
 }
 
 /** A tube's glass footprint -- the wall ring, not the lumen (which is a bored
- * hole, never matter). Exposed for worker.ts's cross-apparatus glass repair. */
+ * hole, never matter). */
 export function tubeGlassCells(instance: TubeInstance): readonly Point[] {
   return instance.geometry.wallCells;
+}
+
+/** A tube's lumen footprint -- the bored channel its cargo rides in. */
+export function tubeLumenCells(instance: TubeInstance): readonly Point[] {
+  return instance.geometry.lumenCells;
+}
+
+/** The suction-cone cells, which the compositor flags in grid.tubeMask so
+ * movement.ts can suppress ordinary gravity for matter the tube is about to
+ * pull in (see coneHoldMap for the conditional half of that hold). Derived
+ * from the same precomputed pairs stepOneTube walks, so a cone cell whose
+ * pull could never fire isn't flagged at all. */
+export function tubeConeIndices(instance: TubeInstance): readonly number[] {
+  return instance.geometry.coneSrcIdx;
 }
