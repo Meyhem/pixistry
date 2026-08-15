@@ -52,6 +52,8 @@ export interface FlaskWire extends EntityWireBase {
   sizeScale: number;
   stirred: boolean;
   flaskKind: FlaskKind;
+  /** The sep funnel's stopcock state; inert for the other kinds. */
+  open: boolean;
 }
 
 export interface FilterWire extends EntityWireBase {
@@ -129,7 +131,7 @@ export type EntityKind = EntityWire['kind'];
 export type PlaceEntityWire =
   | { kind: 'funnel'; x: number; y: number; facing: FunnelFacing; specId: number; tempC: number; ratePerMinute: number; total: number | null }
   | { kind: 'tube'; points: Point[]; filter: number[] | null }
-  | { kind: 'flask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
+  | { kind: 'flask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind; open: boolean }
   | { kind: 'filter'; x0: number; y0: number; x1: number; y1: number; species: number[] }
   | { kind: 'radiator'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
   | { kind: 'glass'; points: Point[] }
@@ -145,7 +147,7 @@ export type PlaceEntityWire =
 export type EntitySettingsWire =
   | { kind: 'funnel'; specId: number; tempC: number; ratePerMinute: number; total: number | null; facing: FunnelFacing }
   | { kind: 'tube'; filter: number[] | null }
-  | { kind: 'flask'; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
+  | { kind: 'flask'; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind; open: boolean }
   | { kind: 'filter'; species: number[] }
   | { kind: 'radiator'; radiationRadius: number; targetTempC: number }
   | { kind: 'sink'; width: number }

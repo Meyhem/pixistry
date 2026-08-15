@@ -41,6 +41,15 @@ export type SetupCommand =
       /** Which piece of glassware -- defaults to the Erlenmeyer, which is
        * what every scenario authored before the beaker existed means. */
       readonly glassware?: FlaskKind;
+      /** Whether a sep funnel's stopcock starts open (defaults closed).
+       * Inert for glassware without an aperture. */
+      readonly open?: boolean;
+      /** Scenario furniture locks by default (see scenario.ts's lock). A
+       * vessel the *player* is meant to operate -- a sep funnel whose
+       * stopcock is the whole puzzle -- must opt out, because a locked
+       * entity's panel is read-only (side-panel.ts) and the worker refuses
+       * its settings edits outright. */
+      readonly playerOperated?: boolean;
     }
   | {
       readonly kind: 'funnel';
@@ -232,6 +241,70 @@ export const SCENARIOS: readonly Scenario[] = [
     par: { seconds: 150 },
   },
 
+  // A separation puzzle built on the sep funnel glassware (flask-shapes.ts's
+  // 'sepfunnel'): bromine is ~3x denser than water and has no reaction rule
+  // with it, so the two settle into clean layers -- the player drains the
+  // heavy Br2 layer through the 3px stopcock into a fixed sink below, and
+  // must close it again before the water follows. Firsts worth noting: the
+  // funnel is placed `playerOperated` (unlocked -- a locked entity's panel is
+  // read-only, and toggling the stopcock IS the puzzle), the sink is
+  // pre-placed and locked with `tools: []` so the stopcock is the player's
+  // only lever, and the `limit` goal gives the campaign its first real live
+  // fail state. The Br2 charge is deliberately stacked ABOVE the water at
+  // setup so the opening seconds show it sinking through -- the density
+  // lesson plays itself before the player touches anything. Pausing and
+  // toggling the stopcock while paused is legitimate technique (real
+  // burettes are run in pulses), which keeps the timing challenge fair
+  // without a reflex requirement.
+  {
+    id: 'liquid-layers',
+    title: 'Layer Cake',
+    blurb: 'Drain the heavy bromine layer, and close the tap before the water follows.',
+    briefing: [
+      'Bromine is a liquid three times denser than water -- poured together, it sinks straight to the bottom.',
+      'The separating funnel above the sink is already charged with both. Select it to reach its Stopcock.',
+      'Drain in short pulses with the sim paused -- once the tap is open the bromine is gone in under a second, and the water is right behind it.',
+    ],
+    hints: [
+      'Pause, open the Stopcock, step forward a little, then close it again -- exactly how a chemist runs a burette. Holding it open and watching is how you lose.',
+      'Pick the funnel up with the Select tool; the Stopcock switch is at the bottom of its panel.',
+      'Stop as soon as the dark bromine in the stem gives way to blue -- everything below that boundary is water you must not collect.',
+    ],
+    fact: 'A real separating funnel works exactly like this: immiscible liquids settle into layers by density, and you run the bottom layer out through the stopcock.',
+    setup: [
+      { kind: 'flask', x: 80, y: 78, facing: 'up', sizeScale: 1.6, stirred: false, glassware: 'sepfunnel', playerOperated: true },
+      // Water first, bromine stacked above it -- Br2 sinks through on load.
+      { kind: 'rect', x: 73, y: 55, w: 15, h: 6, specId: S.H2O, tempC: 21 },
+      { kind: 'rect', x: 70, y: 51, w: 21, h: 4, specId: S.Br2, tempC: 21 },
+      // Wide, thick, and close under the stem. A thin distant line loses a
+      // large fraction of the charge: pulse-draining dumps a slug faster
+      // than one row can swallow, and the overflow spreads sideways past
+      // the line's ends and pools on the floor uncounted (measured live --
+      // 33 of 84 Br2 lost that way against a 13-wide, 10-rows-down line).
+      { kind: 'sink', x0: 66, y0: 84, x1: 94, y1: 84, width: 2 },
+    ],
+    rules: { paintSpecies: 'none', tools: [], funnelSpecies: 'none' },
+    // Tuned on measurement, not guesswork. The charge is 84 Br2 / 90 H2O,
+    // and the drain window is deliberately sub-second, which is why the
+    // briefing (not hint 3) teaches pulse-draining with the sim paused --
+    // the bench being paused by default is what makes this a puzzle rather
+    // than a reflex test. Measured routes against goal 60 / limit 20:
+    //
+    //   hold the tap open and watch    84 Br2 / 90 H2O   FAIL
+    //   two coarse 20-tick pulses      82 / 17           pass, barely
+    //   a 20-tick then an 8-tick pulse 72 / 0            clean win
+    //   live play, closing ~15 ticks
+    //     after blue reaches the stem  62 / 3            clean win
+    //
+    // So sloppiness fails, several honest routes win, and precision earns a
+    // wider margin -- which is the gradient this level exists for.
+    goals: [
+      { kind: 'collect', specId: S.Br2, amount: 60 },
+      { kind: 'limit', specId: S.H2O, max: 20 },
+    ],
+    par: { seconds: 90 },
+  },
+
   // Ladder #6: a two-step chain -- CaO hydrolyzes to limewater, then CO2
   // bubbled through it turns milky with CaCO3. CO2 isn't directly paintable
   // (species-data.ts), so a pre-plumbed, always-on funnel stands in for
@@ -285,29 +358,39 @@ export const SCENARIOS: readonly Scenario[] = [
   // fix that actually worked for 'salt-line' -- applies the same way here:
   // neither NH3 nor HCl has anywhere to rise to, so they stay pinned in
   // contact at their shared boundary the whole time.
+  //
+  // Reworked from its original "draw a sink on the chamber floor" shape: the
+  // collection port is now pre-placed, locked, and OUTSIDE the sealed
+  // chamber, and the Sink tool is gone from the granted set -- the player
+  // has to bore a Tube through the chamber glass (a tube's lumen clears any
+  // wall in its way, see entity-composite.ts's boring pass) and convey the
+  // fallen smoke out to the port. Same chemistry, but the sink is no longer
+  // the answer key: routing product to a port you don't control is the
+  // puzzle, the same shape 'rube-goldberg' uses.
   {
     id: 'white-smoke',
     title: 'White Smoke',
-    blurb: 'Make solid smoke by combining two gases.',
+    blurb: 'Make solid smoke from two gases, and pipe it out of the chamber.',
     briefing: [
       'Ammonia gas and hydrogen chloride gas react on contact -- no water needed at all.',
-      "There's a sealed chamber with both gases already packed in, side by side.",
-      'Watch the white smoke of NH4Cl form and fall where the two gases meet.',
+      "There's a sealed chamber with both gases already packed in, and the white smoke of NH4Cl falls where they meet.",
+      'The collection port is bolted to the bench outside -- bore a Tube through the glass to deliver the smoke to it.',
     ],
     hints: [
-      "You can't paint anything here -- the gases are already in place and already reacting.",
-      'NH4Cl is a solid, so it falls once it forms -- put your sink at the bottom of the chamber.',
-      'Use Run Test to fast-forward and see how much has collected.',
+      'The NH4Cl piles up on the chamber floor where the two gas blocks touch -- put the tube mouth right on that pile.',
+      "Drag the tube from the pile, through the right-hand wall, and finish above the port -- its channel bores straight through glass.",
+      "With the Tube selected you can set its species filter to NH4Cl only, so it doesn't gulp the unreacted gases.",
     ],
     fact: 'NH3 + HCl -> NH4Cl is the classic "white smoke" demo -- two invisible gases making a visible solid.',
     setup: [
       { kind: 'wallRect', x: 40, y: 15, w: 80, h: 80, wall: 'glass' },
       { kind: 'rect', x: 41, y: 16, w: 19, h: 78, specId: S.NH3, tempC: 21 },
       { kind: 'rect', x: 60, y: 16, w: 19, h: 78, specId: S.HCl, tempC: 21 },
+      { kind: 'sink', x0: 135, y0: 97, x1: 150, y1: 97, width: 1 },
     ],
-    rules: { paintSpecies: 'none', tools: ['erase', 'sink'], funnelSpecies: 'none' },
+    rules: { paintSpecies: 'none', tools: ['erase', 'tube'], funnelSpecies: 'none' },
     goals: [{ kind: 'collect', specId: S.NH4Cl, amount: 100 }],
-    par: { seconds: 120 },
+    par: { seconds: 150 },
   },
 
   // Ladder #9: precipitation, originally paired with a purity goal.

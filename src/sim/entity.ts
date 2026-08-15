@@ -513,6 +513,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
         sizeScale: params.sizeScale,
         stirred: params.stirred,
         flaskKind: params.flaskKind,
+        open: params.open,
       }),
     toWire: (flask) => ({
       kind: 'flask',
@@ -524,6 +525,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       sizeScale: flask.sizeScale,
       stirred: flask.stirred,
       flaskKind: flask.flaskKind,
+      open: flask.open,
     }),
     settingsSchema: (mode) => [
       // Pre-placement the shape is whatever you picked in the Tool Chest;
@@ -537,6 +539,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
               options: [
                 { value: 'erlenmeyer', label: 'Erlenmeyer' },
                 { value: 'beaker', label: 'Beaker' },
+                { value: 'sepfunnel', label: 'Sep. funnel' },
               ],
             },
           ] as const)
@@ -551,17 +554,34 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
           { value: true, label: 'Stirred' },
         ],
       },
+      // Only rendered while the shape is the sep funnel -- the other
+      // glassware has no aperture for it to act on (side-panel.ts hides it
+      // the same way it hides a funnel's Amount in infinite mode).
+      ...(mode === 'edit'
+        ? ([
+            {
+              field: 'segmented',
+              key: 'open',
+              label: 'Stopcock',
+              options: [
+                { value: false, label: 'Closed' },
+                { value: true, label: 'Open' },
+              ],
+            },
+          ] as const)
+        : []),
     ],
     panelHint: (mode) =>
       mode === 'config'
-        ? 'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.'
-        : 'Drag the vessel to move it, or rotate it with the scroll wheel over the grid (45-degree steps), same as before placement. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline.',
+        ? 'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside. A sep funnel places with its bottom stopcock closed -- open it from this panel after placing.'
+        : 'Drag the vessel to move it, or rotate it with the scroll wheel over the grid (45-degree steps), same as before placement. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline. The sep funnel\'s Stopcock seals or opens the 3px drain at the bottom of its stem.',
     applySettings: (flask, settings) =>
       updateFlaskInstance(flask, {
         facing: settings.facing,
         sizeScale: settings.sizeScale,
         stirred: settings.stirred,
         flaskKind: settings.flaskKind,
+        open: settings.open,
       }),
   },
   filter: {

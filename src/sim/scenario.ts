@@ -77,9 +77,16 @@ function applyWallLine(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupC
  * untracked scenario bench would simply vanish the first time the player
  * placed anything. */
 function applyFlask(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
-  entities.push(
-    lock(placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, flaskKind: cmd.glassware ?? DEFAULT_FLASK_KIND })),
-  );
+  const instance = placeFlaskInstance({
+    x: cmd.x,
+    y: cmd.y,
+    facing: cmd.facing,
+    sizeScale: cmd.sizeScale,
+    stirred: cmd.stirred,
+    flaskKind: cmd.glassware ?? DEFAULT_FLASK_KIND,
+    open: cmd.open ?? false,
+  });
+  entities.push(cmd.playerOperated ? instance : lock(instance));
 }
 
 /** Scenario apparatus is the level's own bench furniture, not the player's:

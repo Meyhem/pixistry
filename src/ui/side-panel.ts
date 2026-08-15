@@ -237,12 +237,15 @@ function addSpeciesButton(container: HTMLElement, label: string, swatch: string,
   container.appendChild(wrap);
 }
 
-/** Whether a field applies given the current values. The one conditional the
- * schema needs so far: a funnel's Amount is meaningless while its supply is
- * infinite, and showing a number you can edit but that can't apply is worse
- * than hiding it. */
+/** Whether a field applies given the current values. The two conditionals
+ * the schema needs so far: a funnel's Amount is meaningless while its supply
+ * is infinite, and a flask's Stopcock only exists on the sep funnel --
+ * showing a control you can edit but that can't apply is worse than hiding
+ * it. */
 function fieldApplies(field: EntityField, values: EntityValues): boolean {
-  return !(field.field === 'number' && field.key === 'totalAmount' && values['totalMode'] === 'infinite');
+  if (field.field === 'number' && field.key === 'totalAmount' && values['totalMode'] === 'infinite') return false;
+  if (field.field === 'segmented' && field.key === 'open' && values['flaskKind'] !== undefined && values['flaskKind'] !== 'sepfunnel') return false;
+  return true;
 }
 
 function formatFieldValue(format: 'plain' | 'celsius' | 'scale', value: number): string {

@@ -189,7 +189,16 @@ describe('entity fuzz', () => {
       {
         name: 'place flask',
         run: () =>
-          place({ kind: 'flask', x: coord(WIDTH), y: coord(HEIGHT), facing: 'up', sizeScale: 0.5 + rng(), stirred: rng() < 0.5, flaskKind: rng() < 0.5 ? 'beaker' : 'erlenmeyer' }),
+          place({
+            kind: 'flask',
+            x: coord(WIDTH),
+            y: coord(HEIGHT),
+            facing: 'up',
+            sizeScale: 0.5 + rng(),
+            stirred: rng() < 0.5,
+            flaskKind: rng() < 0.34 ? 'beaker' : rng() < 0.5 ? 'erlenmeyer' : 'sepfunnel',
+            open: rng() < 0.5,
+          }),
       },
       {
         name: 'place filter',
@@ -260,7 +269,18 @@ describe('entity fuzz', () => {
         run: () => {
           const f = pick('flask');
           if (f && f.kind === 'flask') {
-            applyEntitySettings(f, { kind: 'flask', facing: f.facing, sizeScale: 0.5 + rng() * 1.5, stirred: rng() < 0.5, flaskKind: f.flaskKind });
+            // Also rolls the stopcock and the glassware shape: toggling a
+            // sep funnel's aperture (and morphing a vessel into/out of one)
+            // is exactly the kind of footprint churn the compositor must
+            // absorb without leaving stale glass behind.
+            applyEntitySettings(f, {
+              kind: 'flask',
+              facing: f.facing,
+              sizeScale: 0.5 + rng() * 1.5,
+              stirred: rng() < 0.5,
+              flaskKind: rng() < 0.2 ? 'sepfunnel' : f.flaskKind,
+              open: rng() < 0.5,
+            });
           }
         },
       },
@@ -339,7 +359,7 @@ describe('entity fuzz', () => {
       return entity;
     };
     const glass = placed({ kind: 'glass', points: [{ x: 12, y: 8 }, { x: 12, y: 34 }, { x: 40, y: 34 }] });
-    const flask = placed({ kind: 'flask', x: 30, y: 30, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker' });
+    const flask = placed({ kind: 'flask', x: 30, y: 30, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker', open: false });
     const tube = placed({ kind: 'tube', points: [{ x: 4, y: 20 }, { x: 24, y: 20 }], filter: null }) as TubeInstance;
     const funnel = placed({ kind: 'funnel', x: 20, y: 12, facing: 'down', specId: SpeciesId.H2O, tempC: 21, ratePerMinute: 60, total: null });
     compositeEntities(grid, species, bench);

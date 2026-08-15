@@ -67,6 +67,7 @@ export type RailSlot =
   | 'Grab'
   | 'Erlenmeyer'
   | 'Beaker'
+  | 'Sep. funnel'
   | 'Glass (polygon)'
   | 'Radiator'
   | 'Stirrer'
@@ -318,6 +319,16 @@ export async function selectSpecies(page: Page, label: string): Promise<void> {
   await page.locator('.palette-btn').filter({ hasText: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).first().click();
   await expect(search).toBeHidden();
   await expect(page.locator('.hud-active-label')).toHaveText(label);
+}
+
+/** Clicks a segmented-control button in the side panel by its label. The
+ * panel's DOM is rebuilt on worker frames (app.ts's renderSidePanel), so a
+ * plain locator.click() can spin forever: its stability wait keeps losing to
+ * the rebuild replacing the node. dispatchEvent resolves the locator and
+ * fires the click in one shot instead. */
+export async function clickPanelButton(page: Page, label: string): Promise<void> {
+  await page.locator('.funnel-toggle-btn', { hasText: label }).dispatchEvent('click');
+  await settle(page);
 }
 
 /** Runs the sim for a number of ticks and waits for them to land, leaving the

@@ -84,7 +84,7 @@ describe('undo checkpoints', () => {
 
   it('restores the bench a gesture started from', () => {
     const grid = new SimGrid(60, 40);
-    const flask = placeEntityFromWire(grid, { kind: 'flask', x: 20, y: 20, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker' });
+    const flask = placeEntityFromWire(grid, { kind: 'flask', x: 20, y: 20, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker', open: false });
     if (!flask) throw new Error('expected the flask to place');
     const entities = [flask];
     compositeEntities(grid, species, entities);
@@ -120,7 +120,7 @@ describe('locked scenario entities', () => {
     expect(entities).toHaveLength(3);
     for (const entity of entities) expect(entity.locked).toBe(true);
 
-    const playerPlaced = placeEntityFromWire(grid, { kind: 'flask', x: 100, y: 60, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker' });
+    const playerPlaced = placeEntityFromWire(grid, { kind: 'flask', x: 100, y: 60, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker', open: false });
     expect(playerPlaced?.locked).toBeUndefined();
   });
 
@@ -146,7 +146,7 @@ function depth(history: EntityHistory): number {
 
 function benchOf(x: number): AnyEntity[] {
   const grid = new SimGrid(60, 40);
-  const flask = placeEntityFromWire(grid, { kind: 'flask', x, y: 20, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker' });
+  const flask = placeEntityFromWire(grid, { kind: 'flask', x, y: 20, facing: 'up', sizeScale: 1, stirred: false, flaskKind: 'beaker', open: false });
   if (!flask) throw new Error('expected the flask to place');
   return [flask];
 }

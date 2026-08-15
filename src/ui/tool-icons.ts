@@ -12,6 +12,7 @@ export type IconName =
   | 'species'
   | 'erlenmeyer'
   | 'beaker'
+  | 'sepfunnel'
   | 'glass'
   | 'radiator'
   | 'stirrer'
@@ -37,6 +38,9 @@ const ICONS: Record<IconName, string> = {
     '<ellipse cx="12" cy="12" rx="9.4" ry="4" transform="rotate(120 12 12)"/>',
   erlenmeyer: '<path d="M9 3v6.3L4.7 18.3A1.7 1.7 0 0 0 6.2 20.8h11.6a1.7 1.7 0 0 0 1.5-2.5L15 9.3V3"/><path d="M8 3h8"/><path d="M7.1 15.2h9.8"/>',
   beaker: '<path d="M5.6 3.6v13.6A3.6 3.6 0 0 0 9.2 20.8h5.6a3.6 3.6 0 0 0 3.6-3.6V3.6"/><path d="M4.2 3.6h15.6"/><path d="M5.6 14h12.8"/>',
+  // A separating funnel: cone into a narrow stem, the stopcock as a crossbar,
+  // and a drip below the outlet.
+  sepfunnel: '<path d="M3.8 3.6h16.4L14 11.2v6h-4v-6z"/><path d="M8.2 14.2h7.6"/><path d="M12 19.6v1.4"/>',
   // A drawn polygon: the segments plus the corners you click to place them.
   glass: '<path d="M4.4 20V9.4l7.6-5 7.6 5V20"/><circle cx="4.4" cy="9.4" r="1.5"/><circle cx="12" cy="4.4" r="1.5"/><circle cx="19.6" cy="9.4" r="1.5"/>',
   radiator:

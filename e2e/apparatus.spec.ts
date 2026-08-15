@@ -12,6 +12,7 @@ import { expect, test } from '@playwright/test';
 import {
   boundsOf,
   clickCell,
+  clickPanelButton,
   clickCellShaky,
   countCells,
   countLabel,
@@ -25,6 +26,7 @@ import {
   openSandbox,
   paintDirect,
   rightClickCell,
+  runTicks,
   selectTool,
   size,
   specIdOf,
@@ -211,4 +213,40 @@ test('a stirred flask shows its stirrer overlay', async ({ page }) => {
   expect((await getCell(page, x, y - 1))?.stirred).toBe(true);
   // Outside the vessel is not stirred.
   expect((await getCell(page, 2, 2))?.stirred).toBe(false);
+});
+
+test('the sep funnel holds water while closed and drains it once the stopcock opens', async ({ page }) => {
+  await openSandbox(page);
+  const { width } = await size(page);
+  const x = Math.floor(width / 2);
+  // High enough that drained water visibly falls clear of the stem.
+  const y = 60;
+
+  await selectTool(page, 'Sep. funnel');
+  await clickCell(page, x, y);
+  expect(await countCells(page, GLASS_SPEC_ID)).toBeGreaterThan(10);
+
+  // Charge the cone with water (inside the interior, clear of the glass).
+  await paintDirect(page, x, 49, 'H2O', { radius: 2 });
+  const water = await specIdOf(page, 'H2O');
+  const charge = await countCells(page, water);
+  expect(charge).toBeGreaterThan(5);
+
+  // Closed: the stem's aperture is stamped glass, so nothing escapes.
+  await runTicks(page, 180);
+  expect(await countCells(page, water)).toBe(charge);
+  const held = await boundsOf(page, water);
+  expect(held?.maxY ?? 99).toBeLessThan(y);
+
+  // Open the stopcock from the vessel's own panel.
+  await selectTool(page, 'Select');
+  await clickCell(page, x, y - 5);
+  await clickPanelButton(page, 'Open');
+  await runTicks(page, 300);
+
+  // The water passed through the 3px stem and fell below the funnel -- and
+  // none of it was destroyed on the way.
+  expect(await countCells(page, water)).toBe(charge);
+  const drained = await boundsOf(page, water);
+  expect(drained?.maxY ?? 0).toBeGreaterThan(y + 5);
 });

@@ -37,6 +37,7 @@ export type ToolKind =
   | 'vent'
   | 'flask-erlenmeyer'
   | 'flask-beaker'
+  | 'flask-sepfunnel'
   | 'select-apparatus';
 
 export const SELECT_APPARATUS_LABEL = 'Select';
@@ -146,6 +147,14 @@ function railGroups(walls: readonly WallMaterial[], cb: ToolRailCallbacks): Rail
     // panel), not a slot per combination.
     toolSlot('Erlenmeyer', 'A conical flask. Scroll to rotate, click to place.', FUNNEL_COLOR, 'erlenmeyer', 'flask-erlenmeyer', cb),
     toolSlot('Beaker', 'A straight-walled vessel with a wide mouth. Scroll to rotate, click to place.', FUNNEL_COLOR, 'beaker', 'flask-beaker', cb),
+    toolSlot(
+      'Sep. funnel',
+      'A separating funnel: a cone over a narrow stem with a 3px stopcock you open and close from its panel. Fill it, let layers settle, then drain the bottom one.',
+      FUNNEL_COLOR,
+      'sepfunnel',
+      'flask-sepfunnel',
+      cb,
+    ),
   ];
   if (glassWall) {
     glassware.push(

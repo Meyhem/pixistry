@@ -30,7 +30,7 @@ function place(params: PlaceEntityWire): { entity: AnyEntity; wire: EntityWire }
   return { entity, wire: entityToWire(entity) };
 }
 
-const FLASK: PlaceEntityWire = { kind: 'flask', x: 40, y: 40, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' };
+const FLASK: PlaceEntityWire = { kind: 'flask', x: 40, y: 40, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker', open: false };
 
 beforeEach(() => {
   resetEntityIds();
@@ -130,7 +130,7 @@ describe('body cells and bounds', () => {
 describe('rotation', () => {
   it('reports the current step for the kinds that turn, and null for the ones that do not', () => {
     const funnel = place({ kind: 'funnel', x: 30, y: 30, facing: 'left', specId: SpeciesId.H2O, tempC: 21, ratePerMinute: 60, total: null });
-    const flask = place({ kind: 'flask', x: 40, y: 40, facing: 'right', sizeScale: 1, stirred: false, flaskKind: 'beaker' });
+    const flask = place({ kind: 'flask', x: 40, y: 40, facing: 'right', sizeScale: 1, stirred: false, flaskKind: 'beaker', open: false });
     const filter = place({ kind: 'filter', x0: 5, y0: 60, x1: 15, y1: 60, species: [] });
 
     // The index into each kind's own facing cycle, which is what a wheel
@@ -168,7 +168,7 @@ describe('moving', () => {
     // vanished instead.
     const bench = new SimGrid(120, 80);
     const species = new SpeciesTable();
-    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
+    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker', open: false });
     if (!flask || flask.kind !== 'flask') throw new Error('expected a flask');
     const entities = [flask];
     compositeEntities(bench, species, entities);
@@ -194,7 +194,7 @@ describe('moving', () => {
   it('leaves matter outside the vessel where it is', () => {
     const bench = new SimGrid(120, 80);
     const species = new SpeciesTable();
-    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
+    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker', open: false });
     if (!flask || flask.kind !== 'flask') throw new Error('expected a flask');
     const entities = [flask];
     compositeEntities(bench, species, entities);

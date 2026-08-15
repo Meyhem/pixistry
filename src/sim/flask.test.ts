@@ -4,6 +4,8 @@ import { compositeEntities } from './entity-composite';
 import { moveFlaskInstance, placeFlaskInstance, updateFlaskInstance, type FlaskInstance } from './flask';
 import { resetEntityIds } from './entity-id';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
+import { stepMovement } from './movement';
+import { mulberry32 } from './rng';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
@@ -180,5 +182,70 @@ describe('moveFlaskInstance', () => {
     sync(grid, [instance]);
 
     expect(grid.specId[grid.index(inside.x, inside.y)]).toBe(SpeciesId.H2O);
+  });
+});
+
+describe('sep funnel stopcock', () => {
+  function apertureCells(instance: FlaskInstance): { x: number; y: number }[] {
+    return flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind).apertureCells.map((c) => ({
+      x: instance.x + c.dx,
+      y: instance.y + c.dy,
+    }));
+  }
+
+  it('stamps the aperture as owned glass while closed, and leaves it empty while open', () => {
+    const grid = new SimGrid(160, 100);
+    const instance = place(grid, { flaskKind: 'sepfunnel' });
+    const aperture = apertureCells(instance);
+    expect(aperture.length).toBe(3);
+    for (const { x, y } of aperture) {
+      expect(grid.specId[grid.index(x, y)]).toBe(GLASS_WALL_SPEC_ID);
+      expect(grid.entityOwner[grid.index(x, y)]).toBe(instance.entityId);
+    }
+
+    updateFlaskInstance(instance, { open: true });
+    sync(grid, [instance]);
+    for (const { x, y } of aperture) {
+      expect(grid.specId[grid.index(x, y)]).toBe(EMPTY);
+    }
+
+    // Closing it again reseals -- the compositor re-derives, no unstamping.
+    updateFlaskInstance(instance, { open: false });
+    sync(grid, [instance]);
+    for (const { x, y } of aperture) {
+      expect(grid.specId[grid.index(x, y)]).toBe(GLASS_WALL_SPEC_ID);
+    }
+  });
+
+  it('holds liquid indefinitely while closed, and drains it through the 3px stem once opened', () => {
+    const grid = new SimGrid(160, 100);
+    const instance = place(grid, { flaskKind: 'sepfunnel', x: 50, y: 60 });
+    const reservoir = reservoirCells(instance);
+    for (const { x, y } of reservoir) grid.set(x, y, SpeciesId.H2O, PhaseCode.Liquid);
+    const total = reservoir.length;
+
+    const shape = flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind);
+    const mouthHalfWidth = Math.max(...shape.cells.map((c) => Math.abs(c.dx)));
+    const waterBelowOrOutside = () => {
+      let count = 0;
+      for (let y = 0; y < 100; y++) {
+        for (let x = 0; x < 160; x++) {
+          if (grid.specId[grid.index(x, y)] !== SpeciesId.H2O) continue;
+          if (y > instance.y || Math.abs(x - instance.x) > mouthHalfWidth) count++;
+        }
+      }
+      return count;
+    };
+
+    const rng = mulberry32(7);
+    for (let tick = 0; tick < 240; tick++) stepMovement(grid, species, rng, tick);
+    // Sealed: nothing below the aperture row, nothing past the cone's sides.
+    expect(waterBelowOrOutside()).toBe(0);
+
+    updateFlaskInstance(instance, { open: true });
+    sync(grid, [instance]);
+    for (let tick = 0; tick < 900; tick++) stepMovement(grid, species, rng, tick);
+    // Open: the bulk of the charge has passed through the stem.
+    expect(waterBelowOrOutside()).toBeGreaterThan(total / 2);
   });
 });

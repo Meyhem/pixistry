@@ -72,6 +72,8 @@ export interface FlaskEditDraft {
   sizeScale: number;
   stirred: boolean;
   flaskKind: FlaskKind;
+  /** The sep funnel's stopcock; inert for the other glassware. */
+  open: boolean;
 }
 
 /** A glass polygon's only editable value is which way round it is, so its
@@ -114,7 +116,7 @@ function draftFor(wire: EntityWire, fallbackTotalAmount: number): EntityDraft {
     case 'tube':
       return { kind: 'tube', filter: wire.filter ? new Set(wire.filter) : null };
     case 'flask':
-      return { kind: 'flask', facing: wire.facing, sizeScale: wire.sizeScale, stirred: wire.stirred, flaskKind: wire.flaskKind };
+      return { kind: 'flask', facing: wire.facing, sizeScale: wire.sizeScale, stirred: wire.stirred, flaskKind: wire.flaskKind, open: wire.open };
     case 'filter':
       return { kind: 'filter', species: new Set(wire.species) };
     case 'radiator':

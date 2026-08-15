@@ -124,3 +124,55 @@ describe('flask-shapes', () => {
     expect(height(normal)).toBeLessThan(height(large));
   });
 });
+
+describe('sep funnel shape', () => {
+  it('keeps the aperture exactly 3 cells wide at every size (the stem does not scale)', () => {
+    for (const scale of [0.5, 1.0, 1.5, 2.0]) {
+      const shape = flaskShapeFor('up', scale, 'sepfunnel');
+      expect(shape.apertureCells.length).toBe(3);
+      const dxs = shape.apertureCells.map((c) => c.dx).sort((a, b) => a - b);
+      expect(dxs).toEqual([-1, 0, 1]);
+      for (const c of shape.apertureCells) expect(c.dy).toBe(0);
+    }
+  });
+
+  it('seals the bottom row completely when the aperture cells are treated as glass', () => {
+    const shape = flaskShapeFor('up', 1.0, 'sepfunnel');
+    const bottom = [...shape.cells, ...shape.apertureCells].filter((c) => c.dy === 0).map((c) => c.dx);
+    bottom.sort((a, b) => a - b);
+    expect(bottom).toEqual([-2, -1, 0, 1, 2]);
+  });
+
+  it('never flares by more than one cell per row, so the sloped glass stays a leak-proof 1px diagonal wall', () => {
+    // movement.ts's corner-cut rule only stops diagonal tunnelling when
+    // adjacent wall cells touch at least diagonally -- a 2-cell jump between
+    // rows would be a genuine hole (see tryDiagonal's doc comment).
+    for (const scale of [0.5, 1.0, 1.5, 2.0]) {
+      const shape = flaskShapeFor('up', scale, 'sepfunnel');
+      const halfWidthByRow = new Map<number, number>();
+      for (const c of shape.cells) {
+        const prev = halfWidthByRow.get(c.dy) ?? 0;
+        halfWidthByRow.set(c.dy, Math.max(prev, Math.abs(c.dx)));
+      }
+      const rows = [...halfWidthByRow.keys()].sort((a, b) => b - a); // dy 0 upward
+      for (let i = 1; i < rows.length; i++) {
+        const delta = (halfWidthByRow.get(rows[i] as number) as number) - (halfWidthByRow.get(rows[i - 1] as number) as number);
+        expect(delta).toBeGreaterThanOrEqual(0);
+        expect(delta).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('gives the other glassware kinds no aperture at all', () => {
+    expect(flaskShapeFor('up', 1.0, 'erlenmeyer').apertureCells).toEqual([]);
+    expect(flaskShapeFor('up', 1.0, 'beaker').apertureCells).toEqual([]);
+  });
+
+  it('keeps the reservoir strictly clear of both the walls and the aperture', () => {
+    const shape = flaskShapeFor('up', 1.0, 'sepfunnel');
+    const solid = new Set([...shape.cells, ...shape.apertureCells].map((c) => `${c.dx},${c.dy}`));
+    for (const cell of shape.reservoirCells) {
+      expect(solid.has(`${cell.dx},${cell.dy}`)).toBe(false);
+    }
+  });
+});

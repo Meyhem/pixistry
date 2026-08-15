@@ -7,9 +7,16 @@
 //                   narrowing up into a straight glass neck.
 //   'beaker'     -- straight vertical walls on a flat closed base, mouth as
 //                   wide as the body.
+//   'sepfunnel'  -- a separating funnel: a wide conical mouth tapering down
+//                   into a narrow stem whose bottom row is an aperture
+//                   (apertureCells) the instance can open and close, like a
+//                   real stopcock. The other two kinds have no aperture.
 //
-// Unlike the funnel neither has a spout: the base row is fully closed (real
-// glassware sits sealed on a benchtop), only the top row is open.
+// Unlike the funnel neither of the first two has a spout: the base row is
+// fully closed (real glassware sits sealed on a benchtop), only the top row
+// is open. The sep funnel's base is its aperture -- sealed with glass while
+// closed, empty while open, decided by the instance (see flask.ts's
+// flaskFootprint), not baked into the shape.
 //
 // The canonical shape is authored once for facing "up" (mouth up, base
 // resting at the anchor) at sizeScale 1, then rotated for the other 7
@@ -18,9 +25,10 @@ import type { Offset } from './apparatus-shapes';
 
 export type FlaskFacing = 'up' | 'up-right' | 'right' | 'down-right' | 'down' | 'down-left' | 'left' | 'up-left';
 
-/** Which piece of glassware the flask tool stamps. Both share the tool, the
- * facing/size settings and the stirred toggle -- only the outline differs. */
-export type FlaskKind = 'erlenmeyer' | 'beaker';
+/** Which piece of glassware the flask tool stamps. All kinds share the tool,
+ * the facing/size settings and the stirred toggle -- only the outline (and,
+ * for the sep funnel, the openable aperture) differs. */
+export type FlaskKind = 'erlenmeyer' | 'beaker' | 'sepfunnel';
 
 export const DEFAULT_FLASK_KIND: FlaskKind = 'erlenmeyer';
 
@@ -39,6 +47,14 @@ const NECK_ROWS = 10; // straight neck rows above the cone
 // at the same size scale.
 const BEAKER_HALF_WIDTH = 10; // -> 21px across at scale 1
 const BEAKER_ROWS = 22; // straight wall rows above the closed base
+// The separating funnel's stem interior deliberately does NOT scale: the
+// openable bottom aperture is exactly 3px wide at every size, so the drain
+// rate through an open stopcock is a property of the vessel kind rather
+// than of how big the player drew it.
+const SEP_STEM_HALF_WIDTH = 2; // walls at +/-2 -> a fixed 3px open interior
+const SEP_STEM_ROWS = 6; // straight stem rows above the aperture row
+const SEP_CONE_ROWS = 15; // rows the cone flares over, stem up to the mouth
+const SEP_MOUTH_HALF_WIDTH = 12; // -> 25px across at scale 1
 
 interface ScaledProfile {
   readonly neckHalfWidth: number;
@@ -111,6 +127,74 @@ function buildCanonicalBeakerReservoirCells(p: BeakerProfile): Offset[] {
   return cells;
 }
 
+interface SepFunnelProfile {
+  readonly stemRows: number;
+  readonly coneRows: number;
+  readonly mouthHalfWidth: number;
+}
+
+function scaledSepFunnelProfile(sizeScale: number): SepFunnelProfile {
+  const mouthHalfWidth = Math.max(SEP_STEM_HALF_WIDTH + 2, Math.round(SEP_MOUTH_HALF_WIDTH * sizeScale));
+  return {
+    stemRows: Math.max(2, Math.round(SEP_STEM_ROWS * sizeScale)),
+    // The cone must always out-row its flare: keeping the per-row half-width
+    // delta at 0 or 1 is what makes the sloped glass a proper 1px diagonal
+    // wall movement.ts's corner-cut rule can't tunnel through (tryDiagonal).
+    coneRows: Math.max(mouthHalfWidth - SEP_STEM_HALF_WIDTH, Math.round(SEP_CONE_ROWS * sizeScale)),
+    mouthHalfWidth,
+  };
+}
+
+/** Half-width of the cone at row r (0 = the row just above the stem),
+ * tapering linearly from the stem's width up to the mouth's. */
+function sepConeHalfWidth(p: SepFunnelProfile, r: number): number {
+  const t = (r + 1) / p.coneRows;
+  return Math.round(SEP_STEM_HALF_WIDTH + (p.mouthHalfWidth - SEP_STEM_HALF_WIDTH) * t);
+}
+
+/** Canonical "facing up" separating funnel: the aperture row at the anchor
+ * (dy = 0, its walls only -- the 3 interior cells are apertureCells, owned
+ * by the instance's open/closed state), a straight narrow stem above it,
+ * then the cone flaring out to an open mouth. */
+function buildCanonicalSepFunnelCells(p: SepFunnelProfile): Offset[] {
+  const cells: Offset[] = [];
+  for (let row = 0; row < p.stemRows; row++) {
+    cells.push({ dx: -SEP_STEM_HALF_WIDTH, dy: -row });
+    cells.push({ dx: SEP_STEM_HALF_WIDTH, dy: -row });
+  }
+  for (let r = 0; r < p.coneRows; r++) {
+    const halfWidth = sepConeHalfWidth(p, r);
+    const dy = -(p.stemRows + r);
+    cells.push({ dx: -halfWidth, dy });
+    cells.push({ dx: halfWidth, dy });
+  }
+  return cells;
+}
+
+/** The 3 cells sealing the stem's bottom -- glass while the stopcock is
+ * closed, empty while it's open (see flask.ts's flaskFootprint). */
+function buildCanonicalSepFunnelApertureCells(): Offset[] {
+  const cells: Offset[] = [];
+  for (let dx = -(SEP_STEM_HALF_WIDTH - 1); dx <= SEP_STEM_HALF_WIDTH - 1; dx++) cells.push({ dx, dy: 0 });
+  return cells;
+}
+
+/** The sep funnel's open interior, same "strictly between the wall edges"
+ * rule as the other kinds. Starts one row above the aperture row -- the
+ * aperture cells belong to the stopcock, not the reservoir. */
+function buildCanonicalSepFunnelReservoirCells(p: SepFunnelProfile): Offset[] {
+  const cells: Offset[] = [];
+  for (let row = 1; row < p.stemRows; row++) {
+    for (let dx = -(SEP_STEM_HALF_WIDTH - 1); dx <= SEP_STEM_HALF_WIDTH - 1; dx++) cells.push({ dx, dy: -row });
+  }
+  for (let r = 0; r < p.coneRows; r++) {
+    const halfWidth = sepConeHalfWidth(p, r);
+    const dy = -(p.stemRows + r);
+    for (let dx = -(halfWidth - 1); dx <= halfWidth - 1; dx++) cells.push({ dx, dy });
+  }
+  return cells;
+}
+
 /** The flask's open interior per canonical row (strictly between the two
  * wall edges, one cell short on each side) -- used for the stirred variant's
  * stirrerMask paint region (see worker.ts's 'placeFlask' handler). Excludes
@@ -158,22 +242,33 @@ export function nextFlaskFacing(current: FlaskFacing, delta: number): FlaskFacin
 export interface FlaskShape {
   readonly cells: readonly Offset[];
   readonly reservoirCells: readonly Offset[];
+  /** The openable stopcock cells -- empty for every kind but 'sepfunnel'.
+   * Not part of `cells`: whether they exist as glass is the instance's
+   * open/closed state, resolved in flask.ts's flaskFootprint. */
+  readonly apertureCells: readonly Offset[];
 }
 
 export function flaskShapeFor(facing: FlaskFacing, sizeScale: number, kind: FlaskKind = DEFAULT_FLASK_KIND): FlaskShape {
-  const canonical =
-    kind === 'beaker'
-      ? (() => {
-          const p = scaledBeakerProfile(sizeScale);
-          return { cells: buildCanonicalBeakerCells(p), reservoirCells: buildCanonicalBeakerReservoirCells(p) };
-        })()
-      : (() => {
-          const p = scaledProfile(sizeScale);
-          return { cells: buildCanonicalCells(p), reservoirCells: buildCanonicalReservoirCells(p) };
-        })();
+  const canonical = (() => {
+    if (kind === 'beaker') {
+      const p = scaledBeakerProfile(sizeScale);
+      return { cells: buildCanonicalBeakerCells(p), reservoirCells: buildCanonicalBeakerReservoirCells(p), apertureCells: [] as Offset[] };
+    }
+    if (kind === 'sepfunnel') {
+      const p = scaledSepFunnelProfile(sizeScale);
+      return {
+        cells: buildCanonicalSepFunnelCells(p),
+        reservoirCells: buildCanonicalSepFunnelReservoirCells(p),
+        apertureCells: buildCanonicalSepFunnelApertureCells(),
+      };
+    }
+    const p = scaledProfile(sizeScale);
+    return { cells: buildCanonicalCells(p), reservoirCells: buildCanonicalReservoirCells(p), apertureCells: [] as Offset[] };
+  })();
   return {
     cells: canonical.cells.map((o) => rotateFlaskOffset(o, facing)),
     reservoirCells: canonical.reservoirCells.map((o) => rotateFlaskOffset(o, facing)),
+    apertureCells: canonical.apertureCells.map((o) => rotateFlaskOffset(o, facing)),
   };
 }
 

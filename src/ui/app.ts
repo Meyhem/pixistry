@@ -208,6 +208,7 @@ function toSimToolKind(kind: UiToolKind): SimToolKind | null {
   switch (kind) {
     case 'flask-erlenmeyer':
     case 'flask-beaker':
+    case 'flask-sepfunnel':
       return 'flask';
     case 'select-apparatus':
       return null;
@@ -256,7 +257,7 @@ const SIMPLE_TOOL_META: Record<'erase' | 'mixer' | 'grabber', { label: string; c
  * the stirred setting (one tool with a toggle, rather than the two separate
  * "Erlenmeyer"/"Erlenmeyer (stirred)" tools this replaced). */
 function flaskLabel(kind: FlaskKind, stirred: boolean): string {
-  const base = kind === 'beaker' ? 'Beaker' : 'Erlenmeyer';
+  const base = kind === 'beaker' ? 'Beaker' : kind === 'sepfunnel' ? 'Sep. funnel' : 'Erlenmeyer';
   return stirred ? `${base} (stirred)` : base;
 }
 
@@ -681,7 +682,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // whether a placed flask comes with a stirrer over its interior -- one
   // setting shared by both glassware shapes, replacing the separate
   // "Erlenmeyer (stirred)" chest entry.
-  const flaskDraft: FlaskEditDraft = { facing: 'up', sizeScale: DEFAULT_FLASK_SIZE_SCALE, stirred: false, flaskKind: DEFAULT_FLASK_KIND };
+  const flaskDraft: FlaskEditDraft = { facing: 'up', sizeScale: DEFAULT_FLASK_SIZE_SCALE, stirred: false, flaskKind: DEFAULT_FLASK_KIND, open: false };
 
   // Radiator config (pre-placement) -- captured into the instance when a line
   // is drawn, so moving these afterwards never changes a placed radiator.
@@ -790,7 +791,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       case 'tube':
         return { kind: 'tube', filter: draft.filter ? [...draft.filter] : null };
       case 'flask':
-        return { kind: 'flask', facing: draft.facing, sizeScale: draft.sizeScale, stirred: draft.stirred, flaskKind: draft.flaskKind };
+        return { kind: 'flask', facing: draft.facing, sizeScale: draft.sizeScale, stirred: draft.stirred, flaskKind: draft.flaskKind, open: draft.open };
       case 'filter':
         return { kind: 'filter', species: [...draft.species] };
       case 'radiator':
@@ -824,7 +825,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       case 'tube':
         return { kind: 'tube', points: wire.points.map((p) => ({ x: p.x + dx, y: p.y + dy })), filter: wire.filter };
       case 'flask':
-        return { kind: 'flask', x: wire.x + dx, y: wire.y + dy, facing: wire.facing, sizeScale: wire.sizeScale, stirred: wire.stirred, flaskKind: wire.flaskKind };
+        return { kind: 'flask', x: wire.x + dx, y: wire.y + dy, facing: wire.facing, sizeScale: wire.sizeScale, stirred: wire.stirred, flaskKind: wire.flaskKind, open: wire.open };
       case 'filter':
         return { kind: 'filter', x0: wire.x0 + dx, y0: wire.y0 + dy, x1: wire.x1 + dx, y1: wire.y1 + dy, species: wire.species };
       case 'radiator':
@@ -1227,6 +1228,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function isToolKindActive(kind: UiToolKind): boolean {
     if (kind === 'flask-erlenmeyer') return tool?.kind === 'flask' && tool.flask === 'erlenmeyer';
     if (kind === 'flask-beaker') return tool?.kind === 'flask' && tool.flask === 'beaker';
+    if (kind === 'flask-sepfunnel') return tool?.kind === 'flask' && tool.flask === 'sepfunnel';
     if (kind === 'sink') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Sink;
     if (kind === 'vent') return tool?.kind === 'sink' && tool.port === SinkMaskValue.Vent;
     return tool?.kind === kind;
@@ -1235,6 +1237,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function selectToolKind(kind: UiToolKind): void {
     if (kind === 'flask-erlenmeyer') setTool({ kind: 'flask', flask: 'erlenmeyer' });
     else if (kind === 'flask-beaker') setTool({ kind: 'flask', flask: 'beaker' });
+    else if (kind === 'flask-sepfunnel') setTool({ kind: 'flask', flask: 'sepfunnel' });
     else if (kind === 'sink') setTool({ kind: 'sink', port: SinkMaskValue.Sink });
     else if (kind === 'vent') setTool({ kind: 'sink', port: SinkMaskValue.Vent });
     else setTool({ kind });
@@ -1867,7 +1870,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (showFlaskGhost) {
       previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
       const shape = flaskShapeFor(flaskDraft.facing, flaskDraft.sizeScale, tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND);
-      for (const cell of shape.cells) {
+      // A sep funnel always places with its stopcock closed, so the ghost
+      // shows the aperture cells as glass too.
+      for (const cell of [...shape.cells, ...shape.apertureCells]) {
         const px = x + cell.dx;
         const py = y + cell.dy;
         previewCtx.fillRect(px * cellPxX, py * cellPxY, cellPxX + 0.5, cellPxY + 0.5);
@@ -2010,7 +2015,9 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // a repeated per-move paint like the other brush tools.
         break;
       case 'flask':
-        send({ type: 'placeEntity', entity: { kind: 'flask', x, y, facing: flaskDraft.facing, sizeScale: flaskDraft.sizeScale, stirred: flaskDraft.stirred, flaskKind: tool.flask } });
+        // Always placed closed -- a sep funnel's stopcock is opened from the
+        // edit panel once it's holding something worth draining.
+        send({ type: 'placeEntity', entity: { kind: 'flask', x, y, facing: flaskDraft.facing, sizeScale: flaskDraft.sizeScale, stirred: flaskDraft.stirred, flaskKind: tool.flask, open: false } });
         break;
       case 'grabber':
         break;

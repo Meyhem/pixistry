@@ -25,6 +25,9 @@ export interface FlaskConfig {
   readonly sizeScale: number;
   readonly stirred: boolean;
   readonly flaskKind: FlaskKind;
+  /** Whether a sep funnel's bottom aperture starts open. Meaningless (and
+   * inert) for kinds without an aperture. */
+  readonly open?: boolean;
 }
 
 export interface FlaskInstance {
@@ -41,10 +44,16 @@ export interface FlaskInstance {
   facing: FlaskFacing;
   sizeScale: number;
   stirred: boolean;
-  /** Which glassware shape (Erlenmeyer/beaker -- see flask-shapes.ts).
-   * Named flaskKind rather than plain kind because `kind` is the entity
-   * discriminant ('flask') shared by every apparatus instance. */
+  /** Which glassware shape (Erlenmeyer/beaker/sep funnel -- see
+   * flask-shapes.ts). Named flaskKind rather than plain kind because `kind`
+   * is the entity discriminant ('flask') shared by every apparatus
+   * instance. */
   flaskKind: FlaskKind;
+  /** The sep funnel's stopcock: closed (false) seals the aperture cells with
+   * glass, open (true) leaves them empty so contents drain through. Carried
+   * (but inert) on the kinds without an aperture, so switching a placed
+   * vessel's shape needs no state surgery. */
+  open: boolean;
 }
 
 export interface FlaskFootprint {
@@ -59,9 +68,14 @@ export interface FlaskFootprint {
 
 export function flaskFootprint(instance: FlaskInstance): FlaskFootprint {
   const shape = flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind);
+  const at = (cell: { dx: number; dy: number }) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy });
+  // A closed stopcock is real glass; an open one is simply absent, so the
+  // compositor's derive-everything pass makes toggling it "mutate, then
+  // recomposite" like every other apparatus edit -- no special unstamping.
+  const wallCells = instance.open ? shape.cells.map(at) : [...shape.cells.map(at), ...shape.apertureCells.map(at)];
   return {
-    wallCells: shape.cells.map((cell) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy })),
-    reservoirCells: shape.reservoirCells.map((cell) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy })),
+    wallCells,
+    reservoirCells: shape.reservoirCells.map(at),
   };
 }
 
@@ -75,17 +89,19 @@ export function placeFlaskInstance(config: FlaskConfig): FlaskInstance {
     sizeScale: config.sizeScale,
     stirred: config.stirred,
     flaskKind: config.flaskKind,
+    open: config.open ?? false,
   };
 }
 
-/** Applies an edit (shape/size/stirred/facing, any subset). The vessel's
- * contents are untouched -- a resize or a move re-derives the glass around
- * (or away from) whatever it was holding rather than deleting it. */
-export function updateFlaskInstance(instance: FlaskInstance, patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'flaskKind'>>): void {
+/** Applies an edit (shape/size/stirred/facing/stopcock, any subset). The
+ * vessel's contents are untouched -- a resize or a move re-derives the glass
+ * around (or away from) whatever it was holding rather than deleting it. */
+export function updateFlaskInstance(instance: FlaskInstance, patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'flaskKind' | 'open'>>): void {
   if (patch.facing !== undefined) instance.facing = patch.facing;
   if (patch.sizeScale !== undefined) instance.sizeScale = patch.sizeScale;
   if (patch.stirred !== undefined) instance.stirred = patch.stirred;
   if (patch.flaskKind !== undefined) instance.flaskKind = patch.flaskKind;
+  if (patch.open !== undefined) instance.open = patch.open;
 }
 
 export function moveFlaskInstance(instance: FlaskInstance, x: number, y: number): void {
