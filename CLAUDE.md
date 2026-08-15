@@ -33,7 +33,11 @@ npm run typecheck     # tsc --noEmit
 npm test               # vitest run -- the whole suite
 npm run test:watch      # vitest watch mode
 npm run dev               # vite dev server
+npm run test:e2e           # playwright test -- the browser suite in e2e/
+npm run test:e2e:ui         # playwright's interactive runner
 ```
+
+First run of the browser suite on a new machine needs `npx playwright install chromium`.
 
 Run a single test file: `npx vitest run src/sim/react.test.ts`
 Run tests by name: `npx vitest run -t "NaCl"`
@@ -134,3 +138,23 @@ same way: either give it a dissolution rule, or don't.
 Unit tests are colocated (`foo.ts` + `foo.test.ts`) under `src/sim`. `react.test.ts` is the closest thing
 to a system-level suite: it exercises the reaction table end-to-end on the grid (dissolution firing, AgCl
 not dissolving, ignition threshold gating, probability gating, energy bookkeeping).
+
+`e2e/` is the browser suite (Playwright, `npm run test:e2e`) — the only tests that touch `src/ui` and
+`src/render` at all, which is why UI regressions kept getting through. Two rules make it stable:
+
+- **Act through the UI, assert through the grid.** Tests click the real tool rail and drag the real canvas,
+  but check the result via `window.__pixistry` (`src/ui/debug-hook.ts`) — cell species, temperature, counts.
+  Never screenshot-diff a falling-sand canvas. `e2e/bench.ts` holds every helper (`openSandbox`,
+  `selectTool`, `dragCells`, `countCells`, `runTicks`); a test that reaches past it for a raw selector or a
+  hand-rolled `page.evaluate` is how the suite starts rotting.
+- **Never sleep.** `runTicks` resumes, waits for the tick counter, and pauses again; `settle` waits for the
+  worker round-trip. A bench is paused by default (`waitForBench`), so tests are deterministic unless they
+  ask for time to pass.
+
+The debug hook is `import.meta.env.DEV`-gated, so the suite runs against the Vite dev server (Playwright
+starts it itself) and never a production build — don't "fix" the hook by exposing it in prod.
+
+Because it drives a real browser, `npm run test:e2e` is *not* part of the pre-commit gate (`npm run
+typecheck` + `npm test` still are) — but run it before landing anything in `src/ui`, `src/render`, or
+apparatus, and add a case there when a UI regression turns up in play, the same way an entity bug lands
+with a fuzz op.

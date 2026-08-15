@@ -56,6 +56,13 @@ example-based, because the bugs they guard only show up over long runs or across
 `fuzz.test.ts` (numerical stability — every cell finite and under `MAX_TEMP_K` across thousands of ticks
 of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity-composite.ts`).
 
+Above those sits `e2e/` (Playwright, `npm run test:e2e`): the real app in a real browser, driven through
+the menu, the tool rail, and actual pointer drags on the sim canvas. It exists because `src/sim`'s suites
+never touch `src/ui` or `src/render` — every regression that lives in the wiring between them (a tool that
+no longer selects, a click that maps to the wrong cell, a flask that places but can't be deleted) was
+invisible to the unit tests. It asserts on grid state read back through `window.__pixistry`, never on
+pixels: `e2e/bench.ts` is the harness and carries the conventions.
+
 ## `src/sim`: grid, movement, and energy
 
 - **`grid.ts`** — `SimGrid`: flat typed arrays for `specId` (u16, `EMPTY` sentinel), `u` (f32, internal
