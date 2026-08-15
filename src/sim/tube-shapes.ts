@@ -138,25 +138,62 @@ export function lumenOpenEnds(lumenPath: readonly Point[]): TubeOpenEnds | null 
   };
 }
 
-/** Every 8-neighbor of every lumen cell that is itself neither lumen nor one
- * of the two open end cells -- the "two parallel lines" glass wall,
- * including knee joins, all from this one flat rule (see the module
- * comment for why octant-snapping is what makes that safe). */
-export function lumenWallCells(lumenPath: readonly Point[]): Point[] {
-  if (lumenPath.length === 0) return [];
-  const lumenSet = new Set(lumenPath.map(key));
-  const openEnds = lumenOpenEnds(lumenPath);
-  const openSet = new Set<string>();
-  if (openEnds) {
-    openSet.add(key(openEnds.mouthOpenCell));
-    openSet.add(key(openEnds.exitOpenCell));
+/** The channel itself: every cell within Chebyshev distance 1 of the center
+ * path, so the bore is 3 cells wide on straight runs *and* on diagonals (a
+ * Euclidean or Manhattan band would pinch to 1-2 cells across a 45-degree
+ * segment, and a conveyor that narrows at every bend jams there). Ordered by
+ * the path index that first reached each cell, which is what makes the
+ * distance field below monotone along the tube. */
+export function lumenBand(centerPath: readonly Point[]): Point[] {
+  const seen = new Set<string>();
+  const band: Point[] = [];
+  for (const cell of centerPath) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const p = { x: cell.x + dx, y: cell.y + dy };
+        const k = key(p);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        band.push(p);
+      }
+    }
   }
+  return band;
+}
+
+/** The open row just beyond one end of the band: three cells across the
+ * perpendicular. That's the tube's whole interface with the outside world --
+ * matter is taken in through the mouth's three and discharged through the
+ * exit's three, and everything else around the band is wall. Three rather
+ * than one so a 3-wide channel isn't fed (or drained) through a single-cell
+ * bottleneck.
+ *
+ * Two steps out from `end`, not one: the band is a Chebyshev-1 dilation of
+ * the centre path, so it already caps one cell past the last centre cell. One
+ * step would put the aperture *inside* the channel, which reads as a tube
+ * whose mouth is its own first cell -- intake and discharge would both be
+ * no-ops against themselves. */
+export function apertureCells(end: Point, dir: Point): Point[] {
+  const perp = { x: -dir.y, y: dir.x };
+  const center = { x: end.x + dir.x * 2, y: end.y + dir.y * 2 };
+  return [-1, 0, 1].map((k) => ({ x: center.x + perp.x * k, y: center.y + perp.y * k }));
+}
+
+/** Every 8-neighbor of the band that is neither band nor aperture -- the
+ * glass wall, including knee joins, all from this one flat rule (see the
+ * module comment for why octant-snapping is what makes that safe). The rule
+ * is unchanged from the single-file lumen it replaced; only what counts as
+ * "inside" grew. */
+export function lumenWallCells(band: readonly Point[], apertures: readonly Point[] = []): Point[] {
+  if (band.length === 0) return [];
+  const inside = new Set(band.map(key));
+  const openSet = new Set(apertures.map(key));
   const wallSet = new Set<string>();
-  for (const cell of lumenPath) {
+  for (const cell of band) {
     for (const n of NEIGHBORS_8) {
       const p = { x: cell.x + n.x, y: cell.y + n.y };
       const k = key(p);
-      if (lumenSet.has(k) || openSet.has(k) || wallSet.has(k)) continue;
+      if (inside.has(k) || openSet.has(k) || wallSet.has(k)) continue;
       wallSet.add(k);
     }
   }
@@ -166,24 +203,43 @@ export function lumenWallCells(lumenPath: readonly Point[]): Point[] {
   });
 }
 
-/** Cells the suction cone covers, widening linearly from a single cell at
- * the mouth out to `coneSize` rows -- same "authored once, not physically
- * derived" spirit as apparatus-shapes.ts's funnel taper. `coneSize <= 0`
- * yields no cone (suction only affects the mouth cell itself via stepTubes'
- * own adjacency, not this cone). */
-export function coneCells(openEnds: TubeOpenEnds, coneSize: number): Point[] {
-  if (coneSize <= 0) return [];
-  const { mouthCell, mouthDir } = openEnds;
-  const perp = { x: -mouthDir.y, y: mouthDir.x };
-  const cells: Point[] = [];
-  for (let r = 1; r <= coneSize; r++) {
-    const center = { x: mouthCell.x + mouthDir.x * r, y: mouthCell.y + mouthDir.y * r };
-    const halfWidth = Math.min(r - 1, coneSize - 1);
-    for (let k = -halfWidth; k <= halfWidth; k++) {
-      cells.push({ x: center.x + perp.x * k, y: center.y + perp.y * k });
+/** How many 8-connected steps each band cell is from leaving through the
+ * exit, by BFS seeded at the band cells touching an exit aperture. Transport
+ * walks this downhill (see tube.ts's stepOneTube), which is what carries
+ * cargo around a bend without any per-segment direction bookkeeping: BFS
+ * guarantees every reachable cell has a strictly-smaller-distance neighbour,
+ * so there is always a way forward and never a loop.
+ *
+ * Returned as a map keyed the same way the band is indexed -- position i in
+ * the returned array is the distance for `band[i]`. Unreachable cells (a band
+ * that got severed, which shouldn't happen for a well-formed tube) get
+ * Infinity and are simply never advanced. */
+export function distanceToExit(band: readonly Point[], exitApertures: readonly Point[]): number[] {
+  const indexByKey = new Map<string, number>();
+  band.forEach((cell, i) => indexByKey.set(key(cell), i));
+  const dist = new Array<number>(band.length).fill(Infinity);
+  const queue: number[] = [];
+  // Seed: band cells orthogonally or diagonally touching the way out.
+  for (const aperture of exitApertures) {
+    for (const n of NEIGHBORS_8) {
+      const i = indexByKey.get(key({ x: aperture.x + n.x, y: aperture.y + n.y }));
+      if (i === undefined || dist[i] === 0) continue;
+      dist[i] = 0;
+      queue.push(i);
     }
   }
-  return cells;
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head] as number;
+    const cell = band[i] as Point;
+    const next = (dist[i] as number) + 1;
+    for (const n of NEIGHBORS_8) {
+      const j = indexByKey.get(key({ x: cell.x + n.x, y: cell.y + n.y }));
+      if (j === undefined || (dist[j] as number) <= next) continue;
+      dist[j] = next;
+      queue.push(j);
+    }
+  }
+  return dist;
 }
 
 /** Resolves where an interior knee should land when dragged, given its two

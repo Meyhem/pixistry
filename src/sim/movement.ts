@@ -6,7 +6,6 @@ import { NO_FILTERS, type FilterAllow } from './filter';
 import { EMPTY, PhaseCode, SimGrid, TubeMaskValue } from './grid';
 import { massOf, temperatureOf } from './heat';
 import type { SpeciesTable } from './species';
-import { coneHolds, NO_CONE_HOLD, type ConeHold } from './tube';
 import { isWallSpecId } from './walls';
 
 type Rng = () => number;
@@ -314,14 +313,7 @@ function moveRising(
  * `coneHold` says which suction-cone cells are really held this tick (see
  * tube.ts's coneHoldMap) -- defaults to empty, i.e. "no cone holds
  * anything", so a caller with no tubes placed doesn't need to pass one. */
-export function stepMovement(
-  grid: SimGrid,
-  species: SpeciesTable,
-  rng: Rng,
-  tick: number,
-  filterAllow: FilterAllow = NO_FILTERS,
-  coneHold: ConeHold = NO_CONE_HOLD,
-): void {
+export function stepMovement(grid: SimGrid, species: SpeciesTable, rng: Rng, tick: number, filterAllow: FilterAllow = NO_FILTERS): void {
   const { width, height } = grid;
   const leftToRight = tick % 2 === 0;
   const moved = new Uint8Array(width * height);
@@ -338,22 +330,13 @@ export function stepMovement(
       // infinitely-dense solid, since that would still cost a canDisplace
       // check every tick for no benefit.
       if (isWallSpecId(specId)) continue;
-      // A cell inside a tube's lumen or suction cone only moves via
-      // stepTubes' own exit-first advance / mouth-outward pull (tube.ts) --
-      // ordinary gravity/buoyancy is suppressed there so contents can't
-      // fall/spread sideways out of the lumen, or escape the cone once
-      // grabbed by it, before the tube gets a chance to walk them inward.
-      // Cone cells are still a normal (unblocked) *target* for ordinary
-      // movement below -- this only stops a cell already inside the cone
-      // from wandering back out, it doesn't stop new matter falling in.
-      //
-      // The cone half of that is conditional on the tube actually being
-      // willing and able to pull this particular cell (see tube.ts's
-      // ConeHold): holding one it will never take leaves it frozen in
-      // mid-air forever, since nothing else moves a cone cell either.
-      const idxTubeMask = grid.tubeMask[idx] as TubeMaskValue;
-      if (idxTubeMask === TubeMaskValue.Lumen) continue;
-      if (idxTubeMask === TubeMaskValue.Cone && coneHolds(coneHold, idx, specId)) continue;
+      // A cell inside a tube's channel only moves via stepTubes' own
+      // transport passes (tube.ts) -- ordinary gravity/buoyancy is suppressed
+      // there so cargo can't fall or spread sideways out of the bore before
+      // the tube gets a chance to carry it along. Nothing outside the channel
+      // is held: matter standing in front of a mouth falls past it normally
+      // if the tube doesn't take it that tick.
+      if ((grid.tubeMask[idx] as TubeMaskValue) === TubeMaskValue.Lumen) continue;
       const phase = grid.phase[idx] as PhaseCode;
       if (phase === PhaseCode.Solid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, false, filterAllow);
       else if (phase === PhaseCode.Liquid) moveFalling(grid, species, moved, x, y, idx, specId, phase, rng, true, filterAllow);

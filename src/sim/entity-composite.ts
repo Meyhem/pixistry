@@ -32,22 +32,19 @@ import { glassCells, type GlassInstance } from './glass';
 import { glassWallEnergyAtAmbient } from './heat';
 import { radiatorStamp, type RadiatorInstance } from './radiators';
 import type { SpeciesTable } from './species';
-import { tubeConeIndices, tubeGlassCells, tubeLumenCells, type TubeInstance } from './tube';
+import { tubeGlassCells, tubeLumenCells, type TubeInstance } from './tube';
 import type { Point } from './tube-shapes';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 
 /** What one entity puts on the grid. Every field is optional; a kind fills in
  * only the roles it has (a filter is nothing but a membrane, a flask is just
- * walls, a tube is walls plus a lumen plus a suction cone). */
+ * walls, a tube is walls plus the channel bored through them). */
 export interface Footprint {
   /** Real glass wall matter in specId. Claims the cell (grid.entityOwner). */
   readonly wall?: readonly Point[];
   /** A bored channel: clears any wall matter in the way and flags the cell
    * as tube cargo space (TubeMaskValue.Lumen). */
   readonly lumen?: readonly Point[];
-  /** Suction-cone cells, as grid indices (tube geometry precomputes them in
-   * that form -- see tube.ts's tubeConeIndices). */
-  readonly cone?: readonly number[];
   /** Filter membrane cells; `maskValue` is the owning line's per-cell id, the
    * one movement.ts looks an allow-list up by (see filter.ts). */
   readonly membrane?: { readonly cells: readonly Point[]; readonly maskValue: number };
@@ -76,7 +73,7 @@ export function entityFootprints(placed: PlacedEntities): { entityId: number; fo
   const out: { entityId: number; footprint: Footprint }[] = [];
   for (const f of placed.funnels) out.push({ entityId: f.entityId, footprint: { wall: funnelGlassCells(f) } });
   for (const t of placed.tubes) {
-    out.push({ entityId: t.entityId, footprint: { wall: tubeGlassCells(t), lumen: tubeLumenCells(t), cone: tubeConeIndices(t) } });
+    out.push({ entityId: t.entityId, footprint: { wall: tubeGlassCells(t), lumen: tubeLumenCells(t) } });
   }
   for (const f of placed.flasks) out.push({ entityId: f.entityId, footprint: { wall: flaskFootprint(f).wallCells } });
   for (const f of placed.filters) {
@@ -137,12 +134,6 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
       if (i === null) continue;
       grid.tubeMask[i] = TubeMaskValue.Lumen;
       lumenCells.push(i);
-    }
-    for (const i of footprint.cone ?? []) {
-      // Never over a lumen: a cone cell that's also some tube's cargo space
-      // is cargo space. (A later lumen overwrites an earlier cone, which is
-      // the same rule seen from the other side.)
-      if ((grid.tubeMask[i] as TubeMaskValue) === TubeMaskValue.None) grid.tubeMask[i] = TubeMaskValue.Cone;
     }
     const membrane = footprint.membrane;
     if (membrane) {

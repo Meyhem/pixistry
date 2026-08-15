@@ -174,23 +174,37 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   after tick can't climb unboundedly.
 - **`tube-shapes.ts`** / **`tube.ts`** — the conveyor-tube apparatus: a player-drawn, multi-segment
   polyline (knees snapped to one of 8 directions from the previous knee, in `tube-shapes.ts`'s
-  `snapOctant`) turned into a cell-by-cell lumen path, a wall ring (every 8-neighbor of a lumen cell that
-  isn't itself lumen — watertight at any knee angle by construction, no per-angle special casing), and a
-  widening suction cone at the mouth. Unlike the funnel's glass outline, the lumen itself isn't stamped as
-  matter — only the wall ring is real glass — so a tube's lumen is a pure overlay (`grid.tubeMask`,
+  `snapOctant`) turned into a **3-cell-wide channel** — every cell within Chebyshev distance 1 of the
+  centre path, so the bore stays 3 wide on diagonals too (a Euclidean band pinches across a 45-degree run,
+  and a conveyor that narrows at every bend jams there) — plus a wall ring (every 8-neighbour of the
+  channel that isn't channel or aperture — watertight at any knee angle by construction, no per-angle
+  special casing). The tube's only openings are the two **apertures**: three cells across the
+  perpendicular, one step clear of each end of the band. Unlike the funnel's glass outline, the channel
+  isn't stamped as matter — only the wall ring is real glass — so it's a pure overlay (`grid.tubeMask`,
   alongside `radiatorRadius`/`stirrerMask`'s "fixed background field" convention) and whatever real matter
-  sits in a lumen cell *is* the tube's cargo. `movement.ts` already knows to leave lumen cells alone as
-  both a mover and a destination, so `tube.ts`'s `stepTubes` is the only thing that ever moves them: an
-  exit-first backward pass (so a full column advances by exactly one cell per tick, not cascading) with
-  backpressure falling out for free when the exit or mouth is blocked, plus a mouth-outward cone-suction
-  pass pulling matching cells (per an optional species allowlist) one step toward the mouth per tick.
+  sits in a channel cell *is* the tube's cargo. `movement.ts` knows to leave those cells alone as both a
+  mover and a destination, so `stepTubes` is the only thing that ever moves them, in three passes per
+  tick: discharge (band cells touching an exit aperture push out), advance (every occupied cell steps to
+  an 8-adjacent cell strictly closer to the exit, walked nearest-exit-first so nothing cascades the whole
+  length in one tick), and intake (matter sitting in a mouth aperture is drawn in). "Closer to the exit"
+  is a BFS distance field precomputed at build time (`distanceToExit`), which is what carries cargo around
+  a bend with no per-segment direction bookkeeping — BFS guarantees every cell has a strictly-closer
+  neighbour, so there is always a way forward and never a loop. Backpressure falls out for free: a blocked
+  exit means those cells stay, and pass 2 can only move into cells that are empty *now*.
+
+  Intake at the mouth is the whole suction model. This replaced a widening cone in front of the mouth that
+  pulled matter in from several cells away; the cone had to suppress ordinary gravity for everything
+  standing in it, and anything the tube would never actually take (wrong species, or a pull target some
+  later-placed apparatus had walled off) was then frozen in mid-air forever — an invisible obstacle with
+  nothing on screen to explain it. A mouth that only takes what arrives at it needs no hold at all, so
+  that whole bug class is gone rather than patched: matter the tube refuses simply falls past.
+
   Editing a placed tube (dragging a knee or a whole segment with the select-apparatus tool) always keeps
   every segment octant-aligned, even though a dragged knee generally can't land on an octant ray from both
   its fixed neighbors at once — `resolveKneePosition` brute-forces the 8x8 direction-pair combinations and
   picks the valid intersection closest to the cursor. A drag that would still land off-axis is refused
   outright (`hasDegenerateSegment`), and `polylineToLumenPath` derives its step count up front rather than
-  walking until it happens to arrive, so a misaligned pair can't spin forever and take the worker with
-  it.
+  walking until it happens to arrive, so a misaligned pair can't spin forever and take the worker with it.
 - **`filter.ts`** — the filter apparatus: a one-cell-wide membrane line that only lets the species on its
   own allow-list move into its cells, blocking everything else exactly like glass. There's no per-tick
   step function — the gating happens inline in `movement.ts`'s `canEnterFiltered` — so the module is just

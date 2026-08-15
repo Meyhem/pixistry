@@ -15,7 +15,6 @@ export enum PhaseCode {
 export enum TubeMaskValue {
   None = 0,
   Lumen = 1,
-  Cone = 2,
 }
 
 /** What a drawn collection port on `sinkMask` does with what it eats. A Sink
@@ -65,8 +64,8 @@ export class SimGrid {
    * untouched by set/clear/swap, and read every tick by both movement.ts
    * (a lumen cell is never a valid destination for ordinary falling-sand
    * movement -- only stepTubes moves matter along it) and tube.ts's
-   * stepTubes (which walks the lumen and pulls matching cells through the
-   * cone). TubeMaskValue.None everywhere a tube isn't drawn. */
+   * stepTubes (which walks the channel and draws matter in at the mouth).
+   * TubeMaskValue.None everywhere a tube isn't drawn. */
   readonly tubeMask: Uint8Array;
   /** Filter apparatus overlay -- same "fixed background field, not matter"
    * convention as stirrerMask/tubeMask above: painted by the filter tool's

@@ -52,7 +52,6 @@ import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
 import {
-  coneHoldMap,
   moveTubeKnee,
   moveTubeSegment,
   normalizeTubePoints,
@@ -261,7 +260,7 @@ function mutateEntities(edit: () => void): void {
 
 function runOneTick(): void {
   stepFunnels(grid, species, funnels);
-  stepMovement(grid, species, rng, tick++, filterAllowMap(filters), coneHoldMap(grid, tubes));
+  stepMovement(grid, species, rng, tick++, filterAllowMap(filters));
   stepTubes(grid, tubes);
   if (tick % STIR_INTERVAL_TICKS === 0) {
     if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
@@ -551,7 +550,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // (see tube.ts's normalizeTubePoints).
       const points = normalizeTubePoints(msg.points);
       if (points.length < 2) break;
-      mutateEntities(() => tubes.push(placeTubeInstance(grid, { points, coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })));
+      mutateEntities(() => tubes.push(placeTubeInstance(grid, { points, filter: msg.filter ? new Set(msg.filter) : null })));
       break;
     }
     case 'moveTubeKnee':
@@ -561,9 +560,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       mutateEntities(() => withTube(msg.id, (instance) => moveTubeSegment(grid, instance, msg.segIndex, msg.dx, msg.dy)));
       break;
     case 'updateTube':
-      mutateEntities(() =>
-        withTube(msg.id, (instance) => updateTubeInstance(grid, instance, { coneSize: msg.coneSize, filter: msg.filter ? new Set(msg.filter) : null })),
-      );
+      mutateEntities(() => withTube(msg.id, (instance) => updateTubeInstance(instance, { filter: msg.filter ? new Set(msg.filter) : null })));
       break;
     case 'placeFlask':
       if (!isToolAllowed(activeRestrictions, 'flask')) break;

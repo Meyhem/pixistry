@@ -5,8 +5,6 @@ import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
 import { stepMovement } from './movement';
 import { mulberry32 } from './rng';
 import { buildPalette, SpeciesTable, type PaletteEntry } from './species';
-import { NO_FILTERS } from './filter';
-import type { ConeHold } from './tube';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID, WALL_PHASE } from './walls';
 
@@ -272,69 +270,22 @@ describe('stepMovement', () => {
     expect(grid.specId[grid.index(1, 2)]).toBe(iron.specId);
   });
 
-  it('never moves a cell its tube is actually holding in the suction cone -- only stepTubes may pull it out', () => {
-    const palette = buildPalette();
-    const species = new SpeciesTable();
-    const water = findEntry(palette, 'H2O');
-
-    // Empty space all around so ordinary gravity/lateral spread would
-    // otherwise happily move this liquid every which way.
-    const grid = new SimGrid(5, 5);
-    grid.set(2, 2, water.specId, water.phase);
-    grid.tubeMask[grid.index(2, 2)] = TubeMaskValue.Cone;
-    const hold: ConeHold = new Map([[grid.index(2, 2), null]]); // null = tube takes anything
-    const rng = mulberry32(1);
-
-    for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick, NO_FILTERS, hold);
-    expect(grid.specId[grid.index(2, 2)]).toBe(water.specId);
-  });
-
-  it('still falls out of a cone cell its tube would never pull -- a hold the tube will not honour is a cell frozen in mid-air', () => {
-    const palette = buildPalette();
-    const species = new SpeciesTable();
-    const water = findEntry(palette, 'H2O');
-    const salt = findEntry(palette, 'NaCl');
-
-    const grid = new SimGrid(5, 5);
-    grid.set(2, 2, salt.specId, salt.phase);
-    grid.tubeMask[grid.index(2, 2)] = TubeMaskValue.Cone;
-    // The owning tube's filter only takes water, so this grain of salt is
-    // not held -- ordinary gravity has to keep working on it.
-    const hold: ConeHold = new Map([[grid.index(2, 2), new Set([water.specId])]]);
-    const rng = mulberry32(1);
-
-    for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick, NO_FILTERS, hold);
-    expect(grid.isEmptyAt(grid.index(2, 2))).toBe(true);
-    expect(grid.specId[grid.index(2, 4)]).toBe(salt.specId); // fell to the floor
-  });
-
-  it('does not freeze a cone cell no tube claims -- a stale mask must not strand matter forever', () => {
+  it('lets matter fall freely past a tube mouth it is not taken through', () => {
+    // The suction cone is gone: nothing outside the channel is held. A grain
+    // standing in front of a mouth the tube won't take (wrong species, or the
+    // tube is backed up) used to be frozen there in mid-air forever, an
+    // invisible obstacle -- now it simply falls past.
     const palette = buildPalette();
     const species = new SpeciesTable();
     const water = findEntry(palette, 'H2O');
 
     const grid = new SimGrid(5, 5);
     grid.set(2, 2, water.specId, water.phase);
-    grid.tubeMask[grid.index(2, 2)] = TubeMaskValue.Cone;
     const rng = mulberry32(1);
 
     for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
     expect(grid.isEmptyAt(grid.index(2, 2))).toBe(true);
-  });
-
-  it('still lets ordinary movement fall/spread INTO a cone cell from outside it', () => {
-    const palette = buildPalette();
-    const species = new SpeciesTable();
-    const water = findEntry(palette, 'H2O');
-
-    const grid = new SimGrid(3, 5);
-    grid.set(1, 0, water.specId, water.phase);
-    grid.tubeMask[grid.index(1, 1)] = TubeMaskValue.Cone;
-    const rng = mulberry32(2);
-
-    stepMovement(grid, species, rng, 0);
-    expect(grid.specId[grid.index(1, 1)]).toBe(water.specId);
-    expect(grid.isEmptyAt(grid.index(1, 0))).toBe(true);
+    expect(grid.specId[grid.index(2, 4)]).toBe(water.specId);
   });
 
   it('blocks a solid from falling straight into a filtered cell unless its species is allowed', () => {

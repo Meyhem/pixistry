@@ -219,6 +219,13 @@ Split into two commits.
 
 ## Phase 5 — Conveyor tube rework (no cone, 3-wide, gradient transport)
 
+**Landed** (taken before phases 3–4, which it shrinks: `coneSize` is gone from the protocol, the settings
+schema and the panel, so there's that much less to carry through the generic-entity refactor). One thing
+the plan got wrong: the aperture sits **two** steps out from the end knee, not one. The band is a
+Chebyshev-1 dilation of the centre path, so it already caps one cell past the last centre cell -- an
+aperture one step out lands *inside* the channel, and intake/discharge become no-ops against the tube's
+own cells.
+
 **Geometry (`tube-shapes.ts`):**
 - `lumenBand(path)`: every cell within Chebyshev distance 1 of the center path (3-wide on straight
   *and* diagonal segments), deduped, ordered by path index.
@@ -306,6 +313,6 @@ monotonicity); extend the fuzz suite with tube ops.
 - [ ] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired
 - [ ] Phase 3b: one selection/drag/hit-test path; generic handles overlay
 - [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
-- [ ] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten
+- [x] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten
 - [ ] Phase 6a–6f: hover, keyboard, undo/redo, locked scenario entities, sink/vent entities,
       selected-entity overlays

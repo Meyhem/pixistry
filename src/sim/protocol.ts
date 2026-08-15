@@ -27,7 +27,6 @@ export interface FunnelSnapshot {
 export interface TubeSnapshot {
   id: number;
   points: Point[];
-  coneSize: number;
   /** null = accept every species. */
   filter: number[] | null;
 }
@@ -196,10 +195,10 @@ export type MainToWorkerMessage =
   | { type: 'resetFunnel'; id: number }
   | { type: 'setFunnelEnabled'; id: number; enabled: boolean }
   | { type: 'moveFunnel'; id: number; x: number; y: number }
-  | { type: 'placeTube'; points: Point[]; coneSize: number; filter: number[] | null }
+  | { type: 'placeTube'; points: Point[]; filter: number[] | null }
   | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
   | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
-  | { type: 'updateTube'; id: number; coneSize: number; filter: number[] | null }
+  | { type: 'updateTube'; id: number; filter: number[] | null }
   | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
   /** Re-stamps a placed flask with new settings (see flask.ts's
    * updateFlaskInstance) -- every field is sent together, same

@@ -74,7 +74,6 @@ export function tubeSnapshots(tubes: readonly TubeInstance[]): TubeSnapshot[] {
   return tubes.map((t) => ({
     id: t.id,
     points: t.points.map((p) => ({ x: p.x, y: p.y })),
-    coneSize: t.coneSize,
     filter: t.filter ? [...t.filter] : null,
   }));
 }

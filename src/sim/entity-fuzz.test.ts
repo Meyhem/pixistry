@@ -174,7 +174,7 @@ describe('entity fuzz', () => {
             { x: x + 6 + coord(8), y },
           ];
           if (rng() < 0.5) points.push({ x: (points[1] as { x: number }).x, y: y + 4 + coord(6) });
-          bench.tubes.push(placeTubeInstance(grid, { points, coneSize: 1 + coord(3), filter: null }));
+          bench.tubes.push(placeTubeInstance(grid, { points, filter: null }));
         },
       },
       {
@@ -326,7 +326,7 @@ describe('entity fuzz', () => {
     const bench = emptyBench();
     bench.glass.push(placeGlassInstance([{ x: 12, y: 8 }, { x: 12, y: 34 }, { x: 40, y: 34 }]));
     bench.flasks.push(placeFlaskInstance({ x: 30, y: 30, facing: 'up', sizeScale: 1, stirred: false, kind: 'beaker' }));
-    bench.tubes.push(placeTubeInstance(grid, { points: [{ x: 4, y: 20 }, { x: 24, y: 20 }], coneSize: 2, filter: null }));
+    bench.tubes.push(placeTubeInstance(grid, { points: [{ x: 4, y: 20 }, { x: 24, y: 20 }], filter: null }));
     bench.funnels.push(placeFunnelInstance({ x: 20, y: 12, facing: 'down', specId: SpeciesId.H2O, tempC: 21, ratePerMinute: 60, total: null }));
     compositeEntities(grid, species, bench);
 

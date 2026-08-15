@@ -26,14 +26,14 @@ import { getWall, GLASS_WALL_SPEC_ID, isWallSpecId, wallList } from '../sim/wall
 import { RADIATOR_COLOR, RADIATOR_LABEL } from '../sim/radiators';
 import { FUNNEL_COLOR, FUNNEL_LABEL } from '../sim/funnel';
 import { STIRRER_COLOR, STIRRER_LABEL } from '../sim/stirrer';
-import { DEFAULT_TUBE_CONE_SIZE, TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
+import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
 import { glassChainCells, GLASS_ROTATION_STEPS } from '../sim/glass';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelBounds, funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
 import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskBounds, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
-import { lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
+import { apertureCells, lumenBand, lumenOpenEnds, lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolChest, type ToolChestCallbacks } from './tool-chest';
 import {
   buildToolRail,
@@ -656,7 +656,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // time" convention as the funnel's config above, and same shape as
   // ApparatusSelection's TubeEditDraft for the same reason (see
   // funnelDraft/funnelSetter). null filter = accept every species.
-  const tubeDraft: TubeEditDraft = { coneSize: DEFAULT_TUBE_CONE_SIZE, filter: null };
+  const tubeDraft: TubeEditDraft = { filter: null };
 
   // Filter tool's pre-placement allow-list -- same "captured at placement
   // time" convention as the funnel's and tube's drafts above, and the same
@@ -995,7 +995,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     send({
       type: 'updateTube',
       id: selectedTubeId,
-      coneSize: tubeEditDraft.coneSize,
       filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null,
     });
   }
@@ -1341,7 +1340,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
     if (isEditMode && selectedTube && !apparatusSelection.tubeEditDraft) {
       apparatusSelection.tubeEditDraft = {
-        coneSize: selectedTube.coneSize,
         filter: selectedTube.filter ? new Set(selectedTube.filter) : null,
       };
     }
@@ -1475,21 +1473,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       };
     }
 
-    /** Same convention as funnelSetter, for the tube tool's coneSize/filter
-     * fields. */
-    function tubeSetter<K extends keyof TubeEditDraft>(key: K, opts: { render?: boolean } = {}): (value: TubeEditDraft[K]) => void {
-      return (value) => {
-        if (isTubeEditMode && apparatusSelection.tubeEditDraft) {
-          apparatusSelection.tubeEditDraft[key] = value;
-          sendTubeUpdate();
-        } else {
-          tubeDraft[key] = value;
-        }
-        if (opts.render) render();
-      };
-    }
-
-    /** Same convention as funnelSetter/tubeSetter: writes through whichever
+    /** Same convention as funnelSetter: writes through whichever
      * flask config is live -- a selected flask's edit draft (pushed straight
      * to the worker, which re-stamps the vessel) or the pre-placement tool
      * state. */
@@ -1545,7 +1529,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       },
       tubeFields,
       tubePalette: palette,
-      onSetTubeConeSize: tubeSetter('coneSize'),
       onOpenTubeFilterPicker: () => {
         ptTarget = isTubeEditMode ? 'tube-filter-edit-add' : 'tube-filter-add';
         ptOpen = true;
@@ -1737,9 +1720,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
    * tube is currently selected, so both read the same visual language. */
   function drawTubeGhost(ctx: CanvasRenderingContext2D, points: readonly Point[], cellPxX: number, cellPxY: number, isDraft: boolean): void {
     if (points.length === 0) return;
-    const lumen = polylineToLumenPath(points);
-    drawGhostCells(ctx, lumen, cellPxX, cellPxY, isDraft ? 'rgba(169, 214, 232, 0.45)' : 'rgba(169, 214, 232, 0.3)');
-    drawGhostCells(ctx, lumenWallCells(lumen), cellPxX, cellPxY, 'rgba(210, 210, 210, 0.55)');
+    // Mirrors buildTubeGeometry exactly (see sim/tube.ts): the 3-wide channel,
+    // the three open cells at each end, and the wall around everything else.
+    // The preview has to agree with the real thing cell for cell, or a tube
+    // lands somewhere other than where its ghost was drawn.
+    const centerPath = polylineToLumenPath(points);
+    const band = lumenBand(centerPath);
+    const ends = lumenOpenEnds(centerPath);
+    const apertures = ends ? [...apertureCells(ends.mouthCell, ends.mouthDir), ...apertureCells(ends.exitCell, ends.exitDir)] : [];
+    drawGhostCells(ctx, band, cellPxX, cellPxY, isDraft ? 'rgba(169, 214, 232, 0.45)' : 'rgba(169, 214, 232, 0.3)');
+    drawGhostCells(ctx, apertures, cellPxX, cellPxY, 'rgba(169, 214, 232, 0.22)');
+    drawGhostCells(ctx, lumenWallCells(band, apertures), cellPxX, cellPxY, 'rgba(210, 210, 210, 0.55)');
     drawHandleDots(ctx, points, cellPxX, cellPxY, isDraft ? DRAFT_HANDLE_COLOR : SELECTED_HANDLE_COLOR);
   }
 
@@ -1883,7 +1874,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   function finishPolyDraw(): void {
     if (polyDrawPoints.length >= 2) {
       if (tool?.kind === 'tube') {
-        send({ type: 'placeTube', points: polyDrawPoints, coneSize: tubeDraft.coneSize, filter: tubeDraft.filter ? [...tubeDraft.filter] : null });
+        send({ type: 'placeTube', points: polyDrawPoints, filter: tubeDraft.filter ? [...tubeDraft.filter] : null });
       } else {
         send({ type: 'placeGlassPolyline', points: polyDrawPoints });
       }

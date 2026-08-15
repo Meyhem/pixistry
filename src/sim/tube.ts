@@ -4,19 +4,33 @@
 // ticks, and the transport itself needs a stable ordered path to walk every
 // tick rather than re-deriving one from the grid each time.
 //
-// Unlike the funnel's glass outline, the tube's lumen is NOT matter: only the
-// wall ring (see tube-shapes.ts's lumenWallCells) is real glass. The lumen
-// and cone are a pure overlay (grid.tubeMask), and whatever real matter
-// happens to sit in a lumen cell IS the tube's cargo -- movement.ts already
-// knows to leave those cells alone (blocked as both a mover and a
-// destination) so only stepTubes below ever touches them. Both halves of that
-// footprint reach the grid through the compositor (entity-composite.ts);
-// nothing here stamps or unstamps anything.
+// Unlike the funnel's glass outline, the tube's channel is NOT matter: only
+// the wall ring (see tube-shapes.ts's lumenWallCells) is real glass. The
+// channel is a pure overlay (grid.tubeMask), and whatever real matter happens
+// to sit in one of its cells IS the tube's cargo -- movement.ts already knows
+// to leave those cells alone (blocked as both a mover and a destination) so
+// only stepTubes below ever touches them. Both halves of that footprint reach
+// the grid through the compositor (entity-composite.ts); nothing here stamps
+// or unstamps anything.
+//
+// The channel is 3 cells wide and the tube's only openings are the three
+// cells straight out from each end (see tube-shapes.ts's apertureCells).
+// This replaced a single-file channel plus a widening suction cone in front
+// of the mouth that reached out several cells and pulled matter in from a
+// distance. The cone had to suppress ordinary gravity for everything standing
+// in it, or matter would fall past before the tube's turn came -- and
+// anything the tube would never actually take (wrong species, or a pull
+// target that some later-placed apparatus had walled off) was then frozen in
+// mid-air forever, an invisible obstacle with nothing on screen to explain
+// it. A mouth that only takes what arrives at it needs no hold at all, so
+// that entire bug class is gone rather than patched.
 import { SimGrid, TubeMaskValue } from './grid';
 import { nextEntityId } from './entity-id';
 import {
-  coneCells,
+  apertureCells,
+  distanceToExit,
   isOctantAligned,
+  lumenBand,
   lumenOpenEnds,
   lumenWallCells,
   polylineToLumenPath,
@@ -31,28 +45,40 @@ import { isWallSpecId } from './walls';
 export const TUBE_LABEL = 'Conveyor Tube';
 export const TUBE_COLOR = '#a9d6e8'; // same glass tint as the funnel/plain glass wall
 
-export const DEFAULT_TUBE_CONE_SIZE = 3;
-
 /** Precomputed grid-index form of a tube's geometry -- rebuilt whenever the
- * knee points or cone size change (placeTubeInstance / moveTubeKnee /
- * moveTubeSegment / updateTubeInstance), never touched per-tick otherwise,
- * so stepTubes' hot path is just array walks with no geometry math. */
+ * knee points change (placeTubeInstance / moveTubeKnee / moveTubeSegment),
+ * never touched per-tick otherwise, so stepTubes' hot path is just array
+ * walks with no geometry math. */
 interface TubeGeometry {
   readonly wallCells: readonly Point[];
-  /** The lumen as cells (the compositor's footprint) and as grid indices
-   * (stepOneTube's hot path) -- the same path in both forms, since one is
-   * what declares the tube's shape and the other is what walks it. */
+  /** The 3-wide channel, as cells (the compositor's footprint) and as grid
+   * indices (stepOneTube's hot path) -- the same band in both forms, since
+   * one declares the tube's shape and the other is what transport walks.
+   * Both are ordered identically, so index i means the same cell in each. */
   readonly lumenCells: readonly Point[];
   readonly lumenIdx: readonly number[];
-  readonly exitOpenIdx: number | null;
-  /** Parallel arrays: coneSrcIdx[i] is a cone cell, conePullTargetIdx[i] is
-   * the single grid step toward the mouth it gets pulled to -- ordered
-   * mouth-outward (row 1 first) so a full cone column advances by exactly
-   * one step per tick, mirroring lumenIdx's own exit-first processing
-   * order in stepOneTube. Both arrays are pre-filtered to in-bounds pairs
-   * only. */
-  readonly coneSrcIdx: readonly number[];
-  readonly conePullTargetIdx: readonly number[];
+  /** 8-connected steps from each band cell to the way out, parallel to
+   * lumenIdx (see tube-shapes.ts's distanceToExit). */
+  readonly exitDistance: readonly number[];
+  /** Band cell indices, sorted by ascending exitDistance -- the order
+   * stepOneTube advances them in, precomputed so a tick is one pass. */
+  readonly advanceOrder: readonly number[];
+  /** Neighbours strictly closer to the exit, parallel to lumenIdx: cargo at
+   * band cell i may move to any of downhillIdx[i]. */
+  readonly downhillIdx: readonly (readonly number[])[];
+  /** The three cells matter is taken in through, and the three it leaves
+   * through -- the tube's only openings (see tube-shapes.ts's
+   * apertureCells). Pre-filtered to in-bounds cells. */
+  readonly mouthApertureIdx: readonly number[];
+  readonly exitApertureIdx: readonly number[];
+  /** Band cells adjacent to an exit aperture, paired with the aperture cells
+   * each can discharge into. */
+  readonly dischargeIdx: readonly number[];
+  readonly dischargeTargets: readonly (readonly number[])[];
+  /** Band cells adjacent to a mouth aperture, paired with the aperture cells
+   * each can draw from -- the whole of the suction model. */
+  readonly intakeIdx: readonly number[];
+  readonly intakeSources: readonly (readonly number[])[];
   readonly bounds: TubeBounds;
 }
 
@@ -61,7 +87,6 @@ export interface TubeInstance {
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   points: Point[];
-  coneSize: number;
   /** null = accept every species (the default "all" filter). */
   filter: Set<number> | null;
   geometry: TubeGeometry;
@@ -73,52 +98,92 @@ function idx(grid: SimGrid, p: Point): number | null {
   return grid.inBounds(p.x, p.y) ? grid.index(p.x, p.y) : null;
 }
 
-/** One grid step from `from` directly toward `to` (Chebyshev step, not a
- * full octant snap -- `to` is always exactly one row further "in" than
- * `from` by construction of coneCells, so a single sign-step always lands
- * exactly one cell closer). */
-function stepToward(from: Point, to: Point): Point {
-  return { x: from.x + Math.sign(to.x - from.x), y: from.y + Math.sign(to.y - from.y) };
+const EMPTY_GEOMETRY_BOUNDS = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+
+/** Chebyshev adjacency, which is what the band, the distance field and every
+ * transport step all use -- a diagonal neighbour is a neighbour. */
+function isAdjacent(a: Point, b: Point): boolean {
+  const dx = Math.abs(a.x - b.x);
+  const dy = Math.abs(a.y - b.y);
+  return (dx | dy) !== 0 && dx <= 1 && dy <= 1;
 }
 
-function buildTubeGeometry(grid: SimGrid, points: readonly Point[], coneSize: number): TubeGeometry {
-  const lumenCells = polylineToLumenPath(points);
-  const wallCells = lumenWallCells(lumenCells);
-  const openEnds = lumenOpenEnds(lumenCells);
-  const lumenIdx: number[] = [];
-  for (const cell of lumenCells) {
-    const i = idx(grid, cell);
-    if (i !== null) lumenIdx.push(i);
-  }
-  const exitOpenIdx = openEnds ? idx(grid, openEnds.exitOpenCell) : null;
+function buildTubeGeometry(grid: SimGrid, points: readonly Point[]): TubeGeometry {
+  const centerPath = polylineToLumenPath(points);
+  const band = lumenBand(centerPath);
+  const openEnds = lumenOpenEnds(centerPath);
+  const mouthAperture = openEnds ? apertureCells(openEnds.mouthCell, openEnds.mouthDir) : [];
+  const exitAperture = openEnds ? apertureCells(openEnds.exitCell, openEnds.exitDir) : [];
+  const wallCells = lumenWallCells(band, [...mouthAperture, ...exitAperture]);
 
-  const cone = openEnds ? coneCells(openEnds, coneSize) : [];
-  const coneSrcIdx: number[] = [];
-  const conePullTargetIdx: number[] = [];
-  if (openEnds) {
-    const mouthCell = openEnds.mouthCell;
-    // A cone cell whose one-step-toward-the-mouth target lands on the
-    // tube's own wall would be permanently stuck once the compositor
-    // flags it Cone (see movement.ts -- a Cone cell can only move via this
-    // pull, and a wall cell is never empty, so that pull would never fire).
-    // Excluded from coneSrcIdx entirely rather than marked Cone with nowhere
-    // to go, so ordinary gravity/spread still governs it and it can settle
-    // or drift somewhere the cone *can* reach.
-    const wallSet = new Set(wallCells.map((c) => `${c.x},${c.y}`));
-    for (const cell of cone) {
-      const srcI = idx(grid, cell);
-      if (srcI === null) continue;
-      const target = stepToward(cell, mouthCell);
-      if (wallSet.has(`${target.x},${target.y}`)) continue;
-      const targetI = idx(grid, target);
-      if (targetI === null) continue;
-      coneSrcIdx.push(srcI);
-      conePullTargetIdx.push(targetI);
+  // The band is kept whole (the compositor stamps every cell of it, in or out
+  // of bounds is its problem), but transport only ever walks the in-bounds
+  // part -- hence one filtered view with its own index space.
+  const lumenCells: Point[] = [];
+  const lumenIdx: number[] = [];
+  for (const cell of band) {
+    const i = idx(grid, cell);
+    if (i === null) continue;
+    lumenCells.push(cell);
+    lumenIdx.push(i);
+  }
+
+  const exitDistance = distanceToExit(lumenCells, exitAperture);
+  const advanceOrder = lumenCells.map((_, i) => i).filter((i) => Number.isFinite(exitDistance[i] as number));
+  advanceOrder.sort((a, b) => (exitDistance[a] as number) - (exitDistance[b] as number));
+
+  const downhillIdx: number[][] = lumenCells.map(() => []);
+  for (let i = 0; i < lumenCells.length; i++) {
+    const here = exitDistance[i] as number;
+    if (!Number.isFinite(here)) continue;
+    for (let j = 0; j < lumenCells.length; j++) {
+      if (i === j || (exitDistance[j] as number) >= here) continue;
+      if (isAdjacent(lumenCells[i] as Point, lumenCells[j] as Point)) (downhillIdx[i] as number[]).push(j);
     }
   }
 
-  const allCells = [...lumenCells, ...wallCells, ...cone];
-  return { wallCells, lumenCells, lumenIdx, exitOpenIdx, coneSrcIdx, conePullTargetIdx, bounds: tubeBounds(allCells) };
+  const apertureIndices = (cells: readonly Point[]): number[] => cells.flatMap((c) => { const i = idx(grid, c); return i === null ? [] : [i]; });
+  const mouthApertureIdx = apertureIndices(mouthAperture);
+  const exitApertureIdx = apertureIndices(exitAperture);
+
+  /** Band cells touching `aperture`, each paired with the aperture cells it
+   * touches -- the mouth's intake pairs and the exit's discharge pairs are
+   * the same adjacency computed from opposite ends. */
+  function pairWithAperture(aperture: readonly Point[]): { bandIdx: number[]; partners: number[][] } {
+    const bandIdx: number[] = [];
+    const partners: number[][] = [];
+    for (let i = 0; i < lumenCells.length; i++) {
+      const touching: number[] = [];
+      for (const cell of aperture) {
+        if (!isAdjacent(lumenCells[i] as Point, cell)) continue;
+        const j = idx(grid, cell);
+        if (j !== null) touching.push(j);
+      }
+      if (touching.length === 0) continue;
+      bandIdx.push(i);
+      partners.push(touching);
+    }
+    return { bandIdx, partners };
+  }
+  const discharge = pairWithAperture(exitAperture);
+  const intake = pairWithAperture(mouthAperture);
+
+  const allCells = [...band, ...wallCells, ...mouthAperture, ...exitAperture];
+  return {
+    wallCells,
+    lumenCells,
+    lumenIdx,
+    exitDistance,
+    advanceOrder,
+    downhillIdx,
+    mouthApertureIdx,
+    exitApertureIdx,
+    dischargeIdx: discharge.bandIdx,
+    dischargeTargets: discharge.partners,
+    intakeIdx: intake.bandIdx,
+    intakeSources: intake.partners,
+    bounds: allCells.length > 0 ? tubeBounds(allCells) : EMPTY_GEOMETRY_BOUNDS,
+  };
 }
 
 /** The lumen is a bored hole, never cargo: any wall matter sitting in a
@@ -138,7 +203,6 @@ function boreWallsFromLumen(grid: SimGrid, lumenIdx: readonly number[]): void {
 
 export interface TubePlacement {
   readonly points: readonly Point[];
-  readonly coneSize: number;
   readonly filter: ReadonlySet<number> | null;
 }
 
@@ -165,24 +229,20 @@ export function normalizeTubePoints(points: readonly Point[]): Point[] {
  * calling placeFunnelInstance. */
 export function placeTubeInstance(grid: SimGrid, placement: TubePlacement): TubeInstance {
   const points = normalizeTubePoints(placement.points);
-  const geometry = buildTubeGeometry(grid, points, placement.coneSize);
   return {
     id: nextTubeId++,
     entityId: nextEntityId(),
     points,
-    coneSize: placement.coneSize,
     filter: placement.filter ? new Set(placement.filter) : null,
-    geometry,
+    geometry: buildTubeGeometry(grid, points),
   };
 }
 
-/** Re-derives a tube's cached geometry after its points or cone size changed
- * -- shared by moveTubeKnee/moveTubeSegment (points change) and
- * updateTubeInstance's cone-size edits. */
-function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: Point[], newConeSize: number): void {
+/** Re-derives a tube's cached geometry after its points changed -- shared by
+ * moveTubeKnee and moveTubeSegment. */
+function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: Point[]): void {
   instance.points = newPoints;
-  instance.coneSize = newConeSize;
-  instance.geometry = buildTubeGeometry(grid, newPoints, newConeSize);
+  instance.geometry = buildTubeGeometry(grid, newPoints);
 }
 
 /** Whether any two consecutive knees land on the same cell, which would
@@ -190,8 +250,8 @@ function rebuildTubeGeometry(grid: SimGrid, instance: TubeInstance, newPoints: P
  * it outright.
  *
  * A collapsed tube is a dead tube: polylineToLumenPath yields a single cell,
- * so lumenOpenEnds returns null and the thing has no mouth, no exit and no
- * cone. It's still selectable and still takes settings, they just can't do
+ * so lumenOpenEnds returns null and the thing has no mouth and no exit. It's
+ * still selectable and still takes settings, they just can't do
  * anything, which reads as "the conveyor stopped working and won't respond
  * to anything" with nothing on screen to explain it. It was easy to hit by
  * accident: snapOctant rounds its step count and floors it at 0, so dragging
@@ -237,7 +297,7 @@ export function moveTubeKnee(grid: SimGrid, instance: TubeInstance, kneeIndex: n
   const newPoints = points.slice();
   newPoints[kneeIndex] = newPoint;
   if (hasDegenerateSegment(newPoints)) return;
-  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, instance, newPoints);
 }
 
 /** Drags segment (segIndex, segIndex+1) by (dx, dy): both its points
@@ -271,143 +331,94 @@ export function moveTubeSegment(grid: SimGrid, instance: TubeInstance, segIndex:
   newPoints[i] = newI;
   newPoints[j] = newJ;
   if (hasDegenerateSegment(newPoints)) return;
-  rebuildTubeGeometry(grid, instance, newPoints, instance.coneSize);
+  rebuildTubeGeometry(grid, instance, newPoints);
 }
 
 export interface TubeConfig {
-  readonly coneSize: number;
   readonly filter: ReadonlySet<number> | null;
 }
 
-/** Live-edits a placed tube's cone size / species filter (the select-
- * apparatus tool's edit panel) -- geometry (points) only ever changes via
- * moveTubeKnee/moveTubeSegment, never here, so a cone-size change is the
- * only case that needs a re-stamp. */
-export function updateTubeInstance(grid: SimGrid, instance: TubeInstance, config: TubeConfig): void {
+/** Live-edits a placed tube's species filter (the select-apparatus tool's
+ * edit panel). Geometry only ever changes via moveTubeKnee/moveTubeSegment,
+ * never here, so there's nothing to rebuild. */
+export function updateTubeInstance(instance: TubeInstance, config: TubeConfig): void {
   instance.filter = config.filter ? new Set(config.filter) : null;
-  if (config.coneSize !== instance.coneSize) {
-    rebuildTubeGeometry(grid, instance, instance.points, config.coneSize);
-  }
 }
 
-/** One tick's worth of transport + suction for a single tube:
+/** Whether the tube will carry `specId` at all. Walls are never cargo (see
+ * boreWallsFromLumen for what happens to one that lands in the channel), and
+ * a filtered tube takes only what's on its own list. */
+function accepts(instance: TubeInstance, specId: number): boolean {
+  if (isWallSpecId(specId)) return false;
+  return instance.filter === null || instance.filter.has(specId);
+}
+
+/** One tick's worth of transport for a single tube, in three passes:
  *
- * 1. Exit-first advance: walked from the exit backward so each lumen cell
- *    shifts forward by at most one step this tick (the same shift-register
- *    trick a conveyor belt needs -- processing front-to-back within one
- *    pass would let a cell cascade multiple steps in a single tick).
- *    Ejection at the exit only succeeds into an empty, non-wall,
- *    non-lumen cell; if it's blocked, the last lumen cell simply stays put
- *    (backpressure), which in turn blocks every cell behind it from
- *    advancing that tick too, entirely for free from the same backward
- *    scan.
- * 2. Suction: cone cells are pulled one step toward the mouth, nearest-to-
- *    mouth first (same ordering rationale as step 1, mirrored). The mouth's
- *    own pull target is the tube's first lumen cell -- when that's already
- *    occupied (the tube is backed up), intake simply stalls there, which is
- *    the same backpressure behavior extended out through the cone.
+ * 1. *Discharge.* Band cells touching an exit aperture push their contents
+ *    out into an empty aperture cell. A blocked exit means they stay, which
+ *    backs the whole channel up behind them for free -- pass 2 can only move
+ *    cargo into cells that are empty *now*.
+ * 2. *Advance.* Every occupied band cell steps to an 8-adjacent band cell
+ *    strictly closer to the exit (see tube-shapes.ts's distanceToExit).
+ *    Walked in ascending distance -- nearest the exit first -- so each cell
+ *    moves at most one step per tick: the shift-register property a conveyor
+ *    needs, since processing back-to-front would let one cell cascade the
+ *    whole length of the tube in a single tick. Following the distance field
+ *    rather than a stored path order is what lets a 3-wide channel turn a
+ *    corner: the three lanes fan around the inside of a bend at different
+ *    rates and re-converge, with no per-segment bookkeeping.
+ * 3. *Intake.* Anything sitting in a mouth aperture cell is drawn into an
+ *    empty band cell behind it. That is the entire suction model -- the tube
+ *    takes what arrives at its mouth and reaches for nothing. Matter it
+ *    won't accept simply falls past, because nothing is holding it there.
  */
 function stepOneTube(grid: SimGrid, instance: TubeInstance): void {
-  const { lumenIdx, exitOpenIdx, coneSrcIdx, conePullTargetIdx } = instance.geometry;
-  const n = lumenIdx.length;
-  if (n === 0) return;
-  // Re-checked every tick, not just at placement: a flask/funnel/glass line
-  // (or another tube's wall ring) stamped over this lumen later would
-  // otherwise plug the exit on its way out -- see boreWallsFromLumen.
+  const { lumenIdx, advanceOrder, downhillIdx, dischargeIdx, dischargeTargets, intakeIdx, intakeSources } = instance.geometry;
+  if (lumenIdx.length === 0) return;
+  // Re-checked every tick, not just at placement: a wall painted across the
+  // channel (or a scenario's own walls, which the compositor doesn't own)
+  // would otherwise plug it -- see boreWallsFromLumen.
   boreWallsFromLumen(grid, lumenIdx);
 
-  const lastIdx = lumenIdx[n - 1] as number;
-  if (!grid.isEmptyAt(lastIdx)) {
-    if (exitOpenIdx !== null && grid.isEmptyAt(exitOpenIdx) && (grid.tubeMask[exitOpenIdx] as TubeMaskValue) === TubeMaskValue.None) {
-      grid.swap(lastIdx, exitOpenIdx);
-    }
-  }
-  for (let i = n - 2; i >= 0; i--) {
-    const cur = lumenIdx[i] as number;
-    const next = lumenIdx[i + 1] as number;
-    if (!grid.isEmptyAt(cur) && grid.isEmptyAt(next)) {
-      grid.swap(cur, next);
+  for (let k = 0; k < dischargeIdx.length; k++) {
+    const from = lumenIdx[dischargeIdx[k] as number] as number;
+    if (grid.isEmptyAt(from)) continue;
+    for (const to of dischargeTargets[k] as readonly number[]) {
+      // Never discharge into another tube's channel: that would bypass its
+      // mouth and its filter entirely.
+      if (!grid.isEmptyAt(to) || (grid.tubeMask[to] as TubeMaskValue) !== TubeMaskValue.None) continue;
+      grid.swap(from, to);
+      break;
     }
   }
 
-  const mouthIdx = lumenIdx[0] as number;
-  for (let i = 0; i < coneSrcIdx.length; i++) {
-    const src = coneSrcIdx[i] as number;
-    if (grid.isEmptyAt(src)) continue;
-    const specId = grid.specId[src] as number;
-    if (isWallSpecId(specId)) continue;
-    if (instance.filter && !instance.filter.has(specId)) continue;
-    const target = conePullTargetIdx[i] as number;
-    if (target === mouthIdx) {
-      if (!grid.isEmptyAt(target)) continue; // tube backed up -- intake stalls
-    } else {
-      if (!grid.isEmptyAt(target)) continue;
-      if ((grid.tubeMask[target] as TubeMaskValue) === TubeMaskValue.Lumen) continue; // never siphon into another tube's lumen
+  for (const i of advanceOrder) {
+    const from = lumenIdx[i] as number;
+    if (grid.isEmptyAt(from)) continue;
+    for (const j of downhillIdx[i] as readonly number[]) {
+      const to = lumenIdx[j] as number;
+      if (!grid.isEmptyAt(to)) continue;
+      grid.swap(from, to);
+      break;
     }
-    grid.swap(src, target);
+  }
+
+  for (let k = 0; k < intakeIdx.length; k++) {
+    const to = lumenIdx[intakeIdx[k] as number] as number;
+    if (!grid.isEmptyAt(to)) continue; // channel backed up -- intake stalls
+    for (const from of intakeSources[k] as readonly number[]) {
+      if (grid.isEmptyAt(from)) continue;
+      if ((grid.tubeMask[from] as TubeMaskValue) !== TubeMaskValue.None) continue; // don't steal another tube's cargo
+      if (!accepts(instance, grid.specId[from] as number)) continue;
+      grid.swap(from, to);
+      break;
+    }
   }
 }
 
 export function stepTubes(grid: SimGrid, instances: readonly TubeInstance[]): void {
   for (const instance of instances) stepOneTube(grid, instance);
-}
-
-/** The cone cells that are actually holding something this tick, mapped to
- * what each one accepts (null = every species). movement.ts suppresses
- * ordinary gravity/spread for a cell sitting in a suction cone so the tube
- * gets to walk it inward before it falls back out -- but that hold has to be
- * conditional, because a held cell the tube will never actually pull is
- * frozen in mid-air forever: it can't fall, can't spread, and nothing else
- * moves it, so it just hangs there as an invisible obstacle. Two ways that
- * happened:
- *
- * - the cell's species isn't on the tube's own filter list, so stepOneTube
- *   skips it every tick (drop a grain of anything else into a filtered
- *   tube's cone and it stuck there permanently);
- * - the cell's one-step-toward-the-mouth target is a wall -- another
- *   apparatus stamped over the cone after placement -- so the pull can never
- *   fire. (Targets landing on the tube's *own* wall are already excluded at
- *   build time, see buildTubeGeometry; this covers walls that arrive later.)
- *
- * A cone cell whose target is merely occupied still holds: that's the tube
- * being backed up, and the queue waiting at its mouth is the intended
- * backpressure, not a stuck cell.
- */
-export type ConeHold = ReadonlyMap<number, ReadonlySet<number> | null>;
-
-export const NO_CONE_HOLD: ConeHold = new Map();
-
-export function coneHoldMap(grid: SimGrid, instances: readonly TubeInstance[]): ConeHold {
-  const map = new Map<number, Set<number> | null>();
-  for (const instance of instances) {
-    const { coneSrcIdx, conePullTargetIdx } = instance.geometry;
-    for (let i = 0; i < coneSrcIdx.length; i++) {
-      if (isWallSpecId(grid.specId[conePullTargetIdx[i] as number] as number)) continue;
-      const src = coneSrcIdx[i] as number;
-      if (instance.filter === null) {
-        map.set(src, null); // accepts everything -- outranks any filter already recorded here
-        continue;
-      }
-      if (!map.has(src)) {
-        map.set(src, new Set(instance.filter));
-        continue;
-      }
-      // Overlapping cones: the cell is held for anything *either* tube would
-      // take, since either one pulling it out is a real move.
-      const existing = map.get(src);
-      if (existing) for (const specId of instance.filter) existing.add(specId);
-    }
-  }
-  return map;
-}
-
-/** Whether `specId` sitting at cone cell `idx` is held by the tube that owns
- * it -- see ConeHold. False for any cell no cone claims, so a stale mask
- * (erased, or left behind by a tube that's gone) never freezes anything. */
-export function coneHolds(hold: ConeHold, idx: number, specId: number): boolean {
-  const filter = hold.get(idx);
-  if (filter === undefined) return false;
-  return filter === null || filter.has(specId);
 }
 
 /** A tube's glass footprint -- the wall ring, not the lumen (which is a bored
@@ -416,16 +427,7 @@ export function tubeGlassCells(instance: TubeInstance): readonly Point[] {
   return instance.geometry.wallCells;
 }
 
-/** A tube's lumen footprint -- the bored channel its cargo rides in. */
+/** A tube's channel footprint -- the 3-wide bore its cargo rides in. */
 export function tubeLumenCells(instance: TubeInstance): readonly Point[] {
   return instance.geometry.lumenCells;
-}
-
-/** The suction-cone cells, which the compositor flags in grid.tubeMask so
- * movement.ts can suppress ordinary gravity for matter the tube is about to
- * pull in (see coneHoldMap for the conditional half of that hold). Derived
- * from the same precomputed pairs stepOneTube walks, so a cone cell whose
- * pull could never fire isn't flagged at all. */
-export function tubeConeIndices(instance: TubeInstance): readonly number[] {
-  return instance.geometry.coneSrcIdx;
 }

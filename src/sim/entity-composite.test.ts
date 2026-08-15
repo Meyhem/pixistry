@@ -55,7 +55,7 @@ describe('idempotence', () => {
     const grid = new SimGrid(60, 40);
     const placed = bench({
       funnels: [placeFunnelInstance({ x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 21, ratePerMinute: 60, total: null })],
-      tubes: [placeTubeInstance(grid, { points: [{ x: 20, y: 20 }, { x: 30, y: 20 }], coneSize: 3, filter: null })],
+      tubes: [placeTubeInstance(grid, { points: [{ x: 20, y: 20 }, { x: 30, y: 20 }], filter: null })],
       flasks: [placeFlaskInstance({ x: 40, y: 30, facing: 'up', sizeScale: 1, stirred: false, kind: 'beaker' })],
       filters: [placeFilterInstance([], 5, 30, 15, 30, [SpeciesId.H2O]) as FilterInstance],
       radiators: [placeRadiatorInstance({ x0: 50, y0: 5, x1: 55, y1: 5, radius: 3, targetK: 500 })],
@@ -86,7 +86,7 @@ describe('apparatus cannot damage other apparatus', () => {
     // a derived one.
     const grid = new SimGrid(60, 40);
     const vessel = placeGlassInstance([{ x: 25, y: 10 }, { x: 25, y: 30 }]);
-    const tube = placeTubeInstance(grid, { points: [{ x: 18, y: 20 }, { x: 32, y: 20 }], coneSize: 2, filter: null });
+    const tube = placeTubeInstance(grid, { points: [{ x: 18, y: 20 }, { x: 32, y: 20 }], filter: null });
     const placed = bench({ glass: [vessel], tubes: [tube] });
     compositeEntities(grid, species, placed);
     expect(grid.isEmptyAt(grid.index(25, 20))).toBe(true); // plumbed through
@@ -100,7 +100,7 @@ describe('apparatus cannot damage other apparatus', () => {
 
   it('dragging a vessel across a tube and away leaves the tube conveying', () => {
     const grid = new SimGrid(60, 40);
-    const tube = placeTubeInstance(grid, { points: [{ x: 10, y: 20 }, { x: 40, y: 20 }], coneSize: 2, filter: null });
+    const tube = placeTubeInstance(grid, { points: [{ x: 10, y: 20 }, { x: 40, y: 20 }], filter: null });
     const flask = placeFlaskInstance({ x: 25, y: 24, facing: 'up', sizeScale: 1, stirred: false, kind: 'beaker' });
     const placed = bench({ tubes: [tube], flasks: [flask] });
     compositeEntities(grid, species, placed);

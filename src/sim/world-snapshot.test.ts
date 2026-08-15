@@ -29,7 +29,7 @@ describe('world snapshot/restore', () => {
     expect(sinkCounter.grandTotal).toBe(1);
 
     const funnels = [placeFunnelInstance({ x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 20, ratePerMinute: 60, total: 10 })];
-    const tubes = [placeTubeInstance(grid, { points: [{ x: 2, y: 2 }, { x: 6, y: 2 }], coneSize: 3, filter: null })];
+    const tubes = [placeTubeInstance(grid, { points: [{ x: 2, y: 2 }, { x: 6, y: 2 }], filter: null })];
     compositeEntities(grid, species, { ...NO_ENTITIES, funnels, tubes });
 
     const snapshot = captureWorldSnapshot(grid, funnels, tubes, [], [], [], [], sinkCounter, ventCounter, 42);
@@ -43,7 +43,7 @@ describe('world snapshot/restore', () => {
     const mutatedFunnels = [...funnels];
     mutatedFunnels[0]!.remaining = 0;
     const mutatedTubes = [...tubes];
-    mutatedTubes[0]!.coneSize = 9;
+    mutatedTubes[0]!.filter = new Set([SpeciesId.Fe]);
 
     const restored = restoreWorldSnapshot(grid, species, sinkCounter, ventCounter, snapshot);
 
@@ -55,7 +55,7 @@ describe('world snapshot/restore', () => {
     expect(sinkCounter.grandTotal).toBe(1);
     expect(restored.tick).toBe(42);
     expect(restored.funnels[0]!.remaining).toBe(10);
-    expect(restored.tubes[0]!.coneSize).toBe(3);
+    expect(restored.tubes[0]!.filter).toBeNull();
   });
 
   it('round-trips the sink history ring buffer, independent of the live one', () => {

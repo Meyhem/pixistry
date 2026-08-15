@@ -174,7 +174,6 @@ const STIRRER_GLOW_STRENGTH = 0.2;
 // it's otherwise invisible open space with no wall ring to imply its shape.
 const TUBE_LUMEN_TINT_RGB: [number, number, number] = [169, 214, 232];
 const TUBE_LUMEN_TINT_STRENGTH = 0.18;
-const TUBE_CONE_TINT_STRENGTH = 0.35;
 
 // Filter apparatus overlay tint: a flat, weak wash (same "halo not repaint"
 // restraint as the stirrer/tube tints above) in a distinct pale-green hue so
@@ -347,9 +346,9 @@ export function createRenderer(canvas: HTMLCanvasElement, width: number, height:
           if (hGlow > 0) interiorRgba = tintTowards(interiorRgba, HOT_MID_RGB, hGlow * GLOW_MAX_STRENGTH);
           if (cGlow > 0) interiorRgba = tintTowards(interiorRgba, COLD_MID_RGB, cGlow * GLOW_MAX_STRENGTH);
           if ((stirrerMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, STIRRER_GLOW_RGB, STIRRER_GLOW_STRENGTH);
-          const tube = tubeMask[i] as TubeMaskValue;
-          if (tube === TubeMaskValue.Lumen) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
-          else if (tube === TubeMaskValue.Cone) interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_CONE_TINT_STRENGTH);
+          if ((tubeMask[i] as TubeMaskValue) === TubeMaskValue.Lumen) {
+            interiorRgba = tintTowards(interiorRgba, TUBE_LUMEN_TINT_RGB, TUBE_LUMEN_TINT_STRENGTH);
+          }
           if ((filterMask[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, FILTER_TINT_RGB, FILTER_TINT_STRENGTH);
           if ((catalystStrength[i] as number) > 0) interiorRgba = tintTowards(interiorRgba, CATALYST_TINT_RGB, CATALYST_TINT_STRENGTH);
           const port = sinkMask[i] as SinkMaskValue;

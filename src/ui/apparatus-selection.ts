@@ -102,10 +102,9 @@ export interface FunnelEditDraft {
 }
 
 /** Same role as FunnelEditDraft, but a tube's own points only ever change
- * through a knee/segment drag, never through this draft, so it only covers
- * coneSize/filter. */
+ * through a knee/segment drag, never through this draft, so its allow-list
+ * is all that's left. */
 export interface TubeEditDraft {
-  coneSize: number;
   filter: Set<number> | null;
 }
 

@@ -84,7 +84,6 @@ export interface SinkTallyEntry {
 }
 
 export interface TubeFieldValues {
-  coneSize: number;
   /** null = accept every species (the default). */
   filter: ReadonlySet<number> | null;
 }
@@ -123,7 +122,6 @@ export interface SidePanelCallbacks {
   tubeFields: TubeFieldValues;
   /** Every paintable species, for the filter's chip-list picker. */
   tubePalette: readonly PaletteEntry[];
-  onSetTubeConeSize(value: number): void;
   onOpenTubeFilterPicker(): void;
   onRemoveTubeFilterSpecies(specId: number): void;
   /** The allow-list being edited: the selected line's when one is selected,
@@ -175,8 +173,6 @@ const MAX_TEMP_C = 1500;
 const TEMP_STEP_C = 5;
 const MIN_FUNNEL_RATE = 1;
 const MAX_FUNNEL_RATE = 600;
-const MIN_TUBE_CONE_SIZE = 0;
-const MAX_TUBE_CONE_SIZE = 10;
 
 function addSlider(
   container: HTMLElement,
@@ -340,8 +336,6 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   addDivider(container);
 
   const f = cb.tubeFields;
-  addSlider(container, 'Suction cone size', MIN_TUBE_CONE_SIZE, MAX_TUBE_CONE_SIZE, 1, f.coneSize, (v) => String(v), cb.onSetTubeConeSize);
-
   const filterWrap = el('div', 'setting');
   const filterLabel = el('span', 'setting-label');
   filterLabel.textContent = 'Species filter';
@@ -358,8 +352,8 @@ function addTubePanel(container: HTMLElement, meta: ToolMeta, cb: SidePanelCallb
   container.appendChild(
     hintBox(
       meta.tubePanel === 'config'
-        ? 'Click to place each knee, right-click to finish at the last knee placed (or cancel if only the mouth is placed). Matching pixels within the cone get pulled in at the mouth and ejected at the far end; a blocked exit stalls the whole tube.'
-        : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. These settings only affect this tube's future suction, not cargo already inside.",
+        ? 'Click to place each knee, right-click to finish at the last knee placed (or cancel if only the mouth is placed). The channel is three cells wide and swallows whatever arrives at its mouth -- put the mouth where material already falls or flows; it reaches for nothing. Cargo rides to the far end and is ejected there; a blocked exit backs the whole tube up.'
+        : "Drag a knee to move it, or drag a segment to slide it -- connected knees follow, their far ends stay put. The allow-list only affects what the mouth takes in future, not cargo already inside.",
       'HOW IT WORKS',
     ),
   );
