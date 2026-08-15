@@ -10,12 +10,16 @@ import {
   entityRotation,
   entityToWire,
   hitTestEntities,
+  moveEntityBy,
   placeEntityFromWire,
   type AnyEntity,
 } from './entity';
+import { compositeEntities } from './entity-composite';
 import { resetEntityIds } from './entity-id';
-import { SimGrid } from './grid';
+import { flaskFootprint } from './flask';
+import { PhaseCode, SimGrid } from './grid';
 import type { EntityWire, PlaceEntityWire } from './protocol';
+import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 
 const grid = new SimGrid(120, 80);
@@ -148,3 +152,71 @@ function area(b: { minX: number; maxX: number; minY: number; maxY: number }): nu
 function covers(b: { minX: number; maxX: number; minY: number; maxY: number }, x: number, y: number): boolean {
   return x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY;
 }
+
+describe('moving', () => {
+  /** What worker.ts's mutateEntities does: mutate the instance, then let the
+   * compositor re-derive every apparatus cell from the entity list. */
+  function moveAndComposite(grid: SimGrid, entities: AnyEntity[], entity: AnyEntity, dx: number, dy: number): void {
+    moveEntityBy(grid, entity, dx, dy);
+    compositeEntities(grid, new SpeciesTable(), entities);
+  }
+
+  it('carries a vessel\'s contents with it, a cell at a time, without clipping any away', () => {
+    // Dragging a beaker of water upward used to leave the water behind and
+    // then composite the glass straight on top of it, deleting a row of it
+    // per cell of travel -- the contents "moved" nowhere and quietly
+    // vanished instead.
+    const bench = new SimGrid(120, 80);
+    const species = new SpeciesTable();
+    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
+    if (!flask || flask.kind !== 'flask') throw new Error('expected a flask');
+    const entities = [flask];
+    compositeEntities(bench, species, entities);
+
+    const filled = flaskFootprint(flask).reservoirCells.filter((c) => bench.inBounds(c.x, c.y));
+    for (const cell of filled) bench.set(cell.x, cell.y, SpeciesId.H2O, PhaseCode.Liquid, 1000);
+    expect(filled.length).toBeGreaterThan(4);
+
+    // One cell per step, recompositing each time: a drag is a stream of
+    // single-cell moves, and the old bug only bit on the composite that
+    // followed each one.
+    for (let i = 0; i < 5; i++) moveAndComposite(bench, entities, flask, 0, -1);
+
+    let water = 0;
+    for (let i = 0; i < bench.specId.length; i++) if (bench.specId[i] === SpeciesId.H2O) water += 1;
+    expect(water).toBe(filled.length);
+    for (const cell of filled) {
+      expect(bench.specId[bench.index(cell.x, cell.y - 5)]).toBe(SpeciesId.H2O);
+      expect(bench.u[bench.index(cell.x, cell.y - 5)]).toBe(1000);
+    }
+  });
+
+  it('leaves matter outside the vessel where it is', () => {
+    const bench = new SimGrid(120, 80);
+    const species = new SpeciesTable();
+    const flask = placeEntityFromWire(bench, { kind: 'flask', x: 60, y: 50, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
+    if (!flask || flask.kind !== 'flask') throw new Error('expected a flask');
+    const entities = [flask];
+    compositeEntities(bench, species, entities);
+    // Well clear of the vessel, in the direction it's about to move.
+    bench.set(20, 20, SpeciesId.Fe, PhaseCode.Solid, 500);
+
+    moveAndComposite(bench, entities, flask, -30, -20);
+
+    expect(bench.specId[bench.index(20, 20)]).toBe(SpeciesId.Fe);
+  });
+
+  it('is a no-op for a kind that holds nothing', () => {
+    const bench = new SimGrid(120, 80);
+    const species = new SpeciesTable();
+    const radiator = placeEntityFromWire(bench, { kind: 'radiator', x0: 10, y0: 20, x1: 40, y1: 20, radiationRadius: 3, targetTempC: 100 });
+    if (!radiator) throw new Error('expected a radiator');
+    const entities = [radiator];
+    compositeEntities(bench, species, entities);
+    bench.set(20, 20, SpeciesId.Fe, PhaseCode.Solid, 500);
+
+    moveAndComposite(bench, entities, radiator, 0, 10);
+
+    expect(bench.specId[bench.index(20, 20)]).toBe(SpeciesId.Fe);
+  });
+});

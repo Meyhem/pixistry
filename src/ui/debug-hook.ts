@@ -32,6 +32,11 @@ export interface DebugHookState {
   tempK: Float32Array | null;
   radiatorRadius: Uint8Array | null;
   radiatorTargetK: Float32Array | null;
+  /** The frame's stirred-cell overlay (see sim/stirrer.ts's stirredMask) --
+   * the union the renderer tints, not the raw painted brush strokes. */
+  stirrerMask: Uint8Array | null;
+  /** What's on the bench, as the latest frame reported it. */
+  entities: readonly { entityId: number; kind: string }[];
   brushTempC: number;
   palette: readonly PaletteEntry[];
 }
@@ -87,8 +92,10 @@ export function installDebugHook(deps: DebugHookDeps): void {
         phase: PHASE_LABEL[phaseCode] ?? 'unknown',
         radiatorRadius: s.radiatorRadius?.[idx] ?? 0,
         radiatorTargetK: s.radiatorTargetK?.[idx] ?? 0,
+        stirred: (s.stirrerMask?.[idx] ?? 0) > 0,
       };
     },
+    entities: () => deps.getState().entities.map((e) => ({ entityId: e.entityId, kind: e.kind })),
     dumpGrid: () => {
       const s = deps.getState();
       if (!s.specId || !s.phase || !s.tempK) return null;

@@ -11,7 +11,8 @@
 // means: give its instance type a `kind` discriminant, add its wire/payload
 // shapes to protocol.ts's unions, and fill in one row here -- no new
 // messages, no new selection code, no compositor changes.
-import type { SimGrid, SinkMaskValue } from './grid';
+import type { PhaseCode, SimGrid, SinkMaskValue } from './grid';
+import { isWallSpecId } from './walls';
 import { FLASK_FACINGS, MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE, flaskShapeFor } from './flask-shapes';
 import { FUNNEL_FACINGS, funnelShapeFor } from './apparatus-shapes';
 import {
@@ -205,6 +206,15 @@ export interface EntityDef<K extends EntityKind> {
    * entity-selection.ts). */
   bodyDistance(wire: WireOfKind[K], p: Point): number | null;
   boundsOf(wire: WireOfKind[K]): EntityBounds | null;
+  /** The cells this entity holds matter in -- a vessel's open interior. What
+   * a *translation* takes with it (see moveEntityBy): drag a beaker of water
+   * across the bench and the water goes with it, rather than being left
+   * behind and then clipped away by the glass arriving on top of it. Omitted
+   * for kinds that hold nothing (a filter, a radiator) and for kinds with no
+   * interior anywhere in the sim to derive one from (a hand-drawn glass
+   * polygon is a chain of walls; nothing computes what it encloses, and its
+   * open mouth means a flood fill can't either). */
+  contentCells?(entity: EntityOfKind[K]): readonly Point[];
   /** Which absolute rotation step this entity currently sits at, for kinds
    * that rotate -- so the wheel can send `current + 1` rather than tracking
    * the cycle itself. Omitted exactly when `rotate` is. */
@@ -484,6 +494,7 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
   },
   flask: {
     footprintOf: (flask) => ({ wall: flaskFootprint(flask).wallCells }),
+    contentCells: (flask) => flaskFootprint(flask).reservoirCells,
     handlesOf: () => [],
     bodyCells: (wire) => offsetCells(flaskShapeFor(wire.facing, wire.sizeScale, wire.flaskKind).cells, wire.x, wire.y),
     bodyDistance: (wire, p) => boxDistance(boundsOfCells(offsetCells(flaskShapeFor(wire.facing, wire.sizeScale, wire.flaskKind).cells, wire.x, wire.y)), p),
@@ -731,9 +742,64 @@ export function hitTestEntities(entities: readonly EntityWire[], x: number, y: n
   return bestBody ? bestBody.hit : null;
 }
 
+/** One cell's worth of carried matter, lifted off the grid for the duration of
+ * a move (see moveEntityBy). */
+interface CarriedCell {
+  readonly x: number;
+  readonly y: number;
+  readonly specId: number;
+  readonly phase: PhaseCode;
+  readonly u: number;
+}
+
+/** Lifts whatever a vessel is holding off the grid, so the caller can put it
+ * back down somewhere else. Walls are left alone: a tube plumbed through the
+ * vessel, or another entity's glass crossing its interior, belongs to that
+ * entity and is re-derived by the compositor, not carried around by this one. */
+function liftContents(grid: SimGrid, entity: AnyEntity): CarriedCell[] {
+  const cells = defOf(entity.kind).contentCells?.(entity as never);
+  if (!cells) return [];
+  const carried: CarriedCell[] = [];
+  for (const { x, y } of cells) {
+    if (!grid.inBounds(x, y)) continue;
+    const i = grid.index(x, y);
+    if (grid.isEmptyAt(i) || isWallSpecId(grid.specId[i] as number)) continue;
+    carried.push({ x, y, specId: grid.specId[i] as number, phase: grid.phase[i] as PhaseCode, u: grid.u[i] as number });
+    grid.clearAt(i);
+  }
+  return carried;
+}
+
+/** Puts lifted contents back down, translated by the same offset the vessel
+ * moved. Skips anything that would land off-grid (the bench edge clips a
+ * vessel's contents the same way it clips everything else) and any wall that
+ * isn't this entity's own -- the mover's stale glass is about to be cleaned up
+ * by the recomposite, so writing over it is safe, but another entity's wall or
+ * the player's own painted glass must survive being dragged past. */
+function dropContents(grid: SimGrid, entity: AnyEntity, carried: readonly CarriedCell[], dx: number, dy: number): void {
+  for (const cell of carried) {
+    const x = cell.x + dx;
+    const y = cell.y + dy;
+    if (!grid.inBounds(x, y)) continue;
+    const i = grid.index(x, y);
+    if (isWallSpecId(grid.specId[i] as number) && grid.entityOwner[i] !== entity.entityId) continue;
+    grid.setAt(i, cell.specId, cell.phase, cell.u);
+  }
+}
+
+/** Slides an entity, and whatever it is holding, by (dx, dy).
+ *
+ * The contents move with it rather than staying put: a beaker dragged upward
+ * used to leave its water behind and then have the glass composited straight
+ * on top of it, so the water was silently deleted a row at a time. Reshapes
+ * and rotations still leave contents where they are (see updateFlaskInstance)
+ * -- there's no honest translation for those, and a big shape change moving
+ * contents somewhere arbitrary would be worse than leaving them. */
 export function moveEntityBy(grid: SimGrid, entity: AnyEntity, dx: number, dy: number): void {
   if (dx === 0 && dy === 0) return;
+  const carried = liftContents(grid, entity);
   defOf(entity.kind).move(grid, entity as never, dx, dy);
+  dropContents(grid, entity, carried, dx, dy);
 }
 
 export function dragEntityHandleTo(grid: SimGrid, entity: AnyEntity, handleId: number, x: number, y: number): void {

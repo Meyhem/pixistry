@@ -27,7 +27,7 @@ import {
   rotateEntityTo,
   type AnyEntity,
 } from './entity';
-import { SimGrid, SinkMaskValue, TubeMaskValue } from './grid';
+import { PhaseCode, SimGrid, SinkMaskValue, TubeMaskValue } from './grid';
 import type { PlaceEntityWire } from './protocol';
 import { mulberry32 } from './rng';
 import { SpeciesTable } from './species';
@@ -119,9 +119,20 @@ function checkInvariants(grid: SimGrid, bench: AnyEntity[], what: string): void 
     if ((grid.sinkMask[i] as SinkMaskValue) !== SinkMaskValue.None && !portCells.has(i)) fail('orphan port mask', i);
 
     // 6. Nothing left behind: glass on an unowned cell would be the player's
-    //    paint, and this fuzz never paints -- so any is an entity's leak.
+    //    paint, and this fuzz only ever pours ordinary matter, never glass --
+    //    so any is an entity's leak.
     if (grid.specId[i] === GLASS_WALL_SPEC_ID && owner === 0) fail('orphan glass with no owner', i);
   }
+}
+
+/** Non-wall matter on the bench: the vessel contents the fuzz pours, and the
+ * only thing an apparatus edit is allowed to move rather than re-derive. */
+function countMatter(grid: SimGrid): number {
+  let n = 0;
+  for (let i = 0; i < grid.specId.length; i++) {
+    if (!grid.isEmptyAt(i) && !isWallSpecId(grid.specId[i] as number)) n += 1;
+  }
+  return n;
 }
 
 /** Where an entity's glass is expected, so a "still whole" check has
@@ -268,6 +279,22 @@ describe('entity fuzz', () => {
         },
       },
       {
+        // Matter on the bench, so the ops above have something to shove
+        // around: moveEntityBy carries a vessel's contents with it now, which
+        // is the one code path outside the compositor that writes matter
+        // during an apparatus edit (see the matter-count invariant below).
+        name: 'pour matter',
+        run: () => {
+          for (let n = 0; n < 8; n++) {
+            const x = coord(WIDTH);
+            const y = coord(HEIGHT);
+            const i = grid.index(x, y);
+            if (isWallSpecId(grid.specId[i] as number)) continue;
+            grid.set(x, y, rng() < 0.5 ? SpeciesId.H2O : SpeciesId.Fe, PhaseCode.Liquid, 500);
+          }
+        },
+      },
+      {
         name: 'delete something',
         run: () => {
           const e = pick();
@@ -276,11 +303,21 @@ describe('entity fuzz', () => {
       },
     ];
 
+    let matterBefore = 0;
     for (let step = 0; step < OPS; step++) {
       const op = ops[Math.floor(rng() * ops.length)] as { name: string; run: () => void };
       op.run();
       compositeEntities(grid, species, bench);
       checkInvariants(grid, bench, `op ${step} (${op.name})`);
+      // No apparatus edit ever *creates* matter. One-sided on purpose: an
+      // edit may legitimately destroy some (glass stamped over a cell, a
+      // moved vessel's contents clipped off the bench edge), but a move that
+      // carries contents must put each cell down once and only once.
+      const matterNow = countMatter(grid);
+      if (op.name !== 'pour matter' && matterNow > matterBefore) {
+        throw new Error(`op ${step} (${op.name}): matter appeared from nowhere (${matterBefore} -> ${matterNow})`);
+      }
+      matterBefore = matterNow;
     }
 
     // The bench really did get exercised, rather than the fuzz spending 400

@@ -8,7 +8,9 @@ import type { GrabState } from './grabber';
 import { EMPTY, type SimGrid } from './grid';
 import { funnelShapeFor } from './apparatus-shapes';
 import { entityWires, type AnyEntity } from './entity';
+import type { FlaskInstance } from './flask';
 import type { FunnelInstance } from './funnel';
+import { stirredMask } from './stirrer';
 import { massOf, temperatureOf } from './heat';
 import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
@@ -117,7 +119,11 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
   const tempK = computeTempGrid(grid, species);
   const radiatorRadius = grid.radiatorRadius.slice();
   const radiatorTargetK = grid.radiatorTargetK.slice();
-  const stirrerMask = grid.stirrerMask.slice();
+  const flasks = state.entities.filter((e): e is FlaskInstance => e.kind === 'flask');
+  // Not grid.stirrerMask raw: a stirred flask's interior is unioned in by
+  // stirrer.ts rather than painted onto the grid, so shipping the bare array
+  // drew no overlay at all for one (see stirredMask).
+  const stirrerMask = stirredMask(grid, flasks);
   const tubeMask = grid.tubeMask.slice();
   const filterMask = computeMembraneMask(grid, state.entities);
   const catalystStrength = grid.catalystStrength.slice();

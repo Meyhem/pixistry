@@ -20,6 +20,16 @@ export interface DebugCell {
   phase: 'empty' | 'solid' | 'liquid' | 'gas' | 'unknown';
   radiatorRadius: number;
   radiatorTargetK: number;
+  /** Whether the frame marks this cell as being stirred -- the painted
+   * stirrer overlay *or* a stirred vessel's interior, which is exactly what
+   * the renderer tints (see sim/stirrer.ts's stirredMask). */
+  stirred: boolean;
+}
+
+/** One entry of the worker's entity list, as the frame reported it. */
+export interface DebugEntity {
+  entityId: number;
+  kind: string;
 }
 
 export interface DebugGrid {
@@ -111,6 +121,13 @@ export function size(page: Page): Promise<GridSize> {
 
 export function getCell(page: Page, x: number, y: number): Promise<DebugCell | null> {
   return page.evaluate(([cx, cy]) => (window as unknown as { __pixistry: { getCell(x: number, y: number): DebugCell | null } }).__pixistry.getCell(cx as number, cy as number), [x, y]);
+}
+
+/** What's actually on the bench. The glass count answers "is a vessel there";
+ * this answers "how many", which is the only way to see a pile of identical
+ * flasks stacked on one spot. */
+export function entities(page: Page): Promise<DebugEntity[]> {
+  return page.evaluate(() => (window as unknown as { __pixistry: { entities(): DebugEntity[] } }).__pixistry.entities());
 }
 
 export function dumpGrid(page: Page): Promise<DebugGrid | null> {
@@ -222,6 +239,19 @@ export async function clickCell(page: Page, x: number, y: number): Promise<void>
   const at = await cellPoint(page, x, y);
   await page.mouse.move(at.x, at.y);
   await page.mouse.down();
+  await page.mouse.up();
+  await settle(page);
+}
+
+/** A click that wobbles a few screen pixels while held, without ever leaving
+ * the cell it started on -- what a real hand does, and the gesture that used
+ * to stack a whole pile of identical flasks on one spot because every
+ * pointermove re-ran the placement. */
+export async function clickCellShaky(page: Page, x: number, y: number): Promise<void> {
+  const at = await cellPoint(page, x, y);
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  for (const d of [1, -1, 2, -2]) await page.mouse.move(at.x + d, at.y + d);
   await page.mouse.up();
   await settle(page);
 }

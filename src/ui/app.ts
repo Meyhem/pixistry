@@ -188,6 +188,16 @@ function isPolygonTool(t: Tool | null): boolean {
   return t?.kind === 'tube' || isGlassPolygonTool(t);
 }
 
+/** Tools that stamp one whole piece of apparatus per click. The pointerdown
+ * places it and a drag must not place another: the hand that clicks a beaker
+ * onto the bench nearly always drifts a pixel or two before letting go, and
+ * every one of those pointermoves used to stack a second, third, fourth
+ * identical flask on the same spot -- invisible (same footprint, same glass)
+ * until Delete took one away and the pile underneath showed up. */
+function isClickPlaceTool(t: Tool | null): boolean {
+  return t?.kind === 'flask' || t?.kind === 'funnel';
+}
+
 /** Maps the toolbar's own ToolKind (kept separate from scenario-data.ts's --
  * see that file's doc comment on why sim can't import ui's) onto the
  * sim-scoped one Restrictions.tools and isToolAllowed actually check
@@ -722,6 +732,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let lastTempK: Float32Array | null = null;
   let lastRadiatorRadius: Uint8Array | null = null;
   let lastRadiatorTargetK: Float32Array | null = null;
+  let lastStirrerMask: Uint8Array | null = null;
+  let lastEntities: readonly EntityWire[] = [];
   let lastSinkMask: Uint8Array | null = null;
   let lastSinkTotals: Uint32Array | null = null;
   let lastSinkGrandTotal = 0;
@@ -2106,10 +2118,10 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // knee/segment, dragging moves it -- see continueDrag's doc comment.
         const msg = selection.continueDrag(x, y);
         if (msg) send(msg);
-      } else if (tool?.kind !== 'funnel' && !isPolygonTool(tool) && !isLineDragTool(tool)) {
-        // Single-click action (place once) rather than a brush --
-        // applyTool already ran once on pointerdown, so a drag shouldn't
-        // re-place on every move.
+      } else if (!isClickPlaceTool(tool) && !isPolygonTool(tool) && !isLineDragTool(tool)) {
+        // Everything left is a brush, and a brush paints along the drag.
+        // The click-place tools bail out above: applyTool already ran once on
+        // pointerdown, so a drag must not re-place on every move.
         applyTool(x, y);
       }
     }
@@ -2379,6 +2391,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       canUndoEntities = msg.canUndoEntities;
       canRedoEntities = msg.canRedoEntities;
       selection.setEntities(msg.entities);
+      lastStirrerMask = msg.stirrerMask;
+      lastEntities = msg.entities;
       lastTick = msg.tick;
       renderer?.drawFrame({
         specId: msg.specId,
@@ -2626,6 +2640,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       tempK: lastTempK,
       radiatorRadius: lastRadiatorRadius,
       radiatorTargetK: lastRadiatorTargetK,
+      stirrerMask: lastStirrerMask,
+      entities: lastEntities,
       brushTempC,
       palette,
     }),

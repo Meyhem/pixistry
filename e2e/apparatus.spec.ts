@@ -12,17 +12,22 @@ import { expect, test } from '@playwright/test';
 import {
   boundsOf,
   clickCell,
+  clickCellShaky,
   countCells,
+  countLabel,
   dragCells,
+  entities,
   failOnPageErrors,
   GLASS_SPEC_ID,
   getCell,
   hoverCell,
   inspectorText,
   openSandbox,
+  paintDirect,
   rightClickCell,
   selectTool,
   size,
+  specIdOf,
 } from './bench';
 
 test.beforeEach(({ page }) => failOnPageErrors(page));
@@ -143,4 +148,67 @@ test('a Sink drag places a port, and Select deletes it', async ({ page }) => {
   await page.keyboard.press('Delete');
   await hoverCell(page, mid, y);
   await expect(inspectorText(page)).not.toContainText('Sink');
+});
+
+test('a single click places one flask, however much the hand wobbles', async ({ page }) => {
+  await openSandbox(page);
+  const { width, height } = await size(page);
+  const x = Math.floor(width / 2);
+  const y = Math.floor(height / 2);
+
+  await selectTool(page, 'Beaker');
+  await clickCellShaky(page, x, y);
+
+  // Every pointermove used to re-run the placement, stacking identical
+  // flasks on the same spot -- invisible in the glass count (same footprint),
+  // so the pile only showed up when Delete took one off and another was
+  // still there.
+  expect(await entities(page)).toHaveLength(1);
+
+  await selectTool(page, 'Select');
+  await clickCell(page, x, y);
+  await page.keyboard.press('Delete');
+  await expect.poll(() => countCells(page, GLASS_SPEC_ID)).toBe(0);
+});
+
+test('a moved vessel takes its contents with it', async ({ page }) => {
+  await openSandbox(page);
+  const { width, height } = await size(page);
+  const x = Math.floor(width / 2);
+  const y = Math.floor(height / 2);
+
+  await selectTool(page, 'Beaker');
+  await clickCell(page, x, y);
+  // Straight into the vessel's interior: the anchor cell is inside the bowl.
+  await paintDirect(page, x, y - 1, 'H2O', { radius: 1 });
+  const poured = await countLabel(page, 'H2O');
+  expect(poured).toBeGreaterThan(0);
+
+  await selectTool(page, 'Select');
+  await clickCell(page, x, y);
+  await dragCells(page, { x, y }, { x, y: y - 8 });
+
+  // Dragging upward used to leave the water behind and then composite the
+  // glass on top of it, deleting it a row at a time.
+  expect(await countLabel(page, 'H2O')).toBe(poured);
+  const water = await boundsOf(page, await specIdOf(page, 'H2O'));
+  expect(water?.maxY ?? 0).toBeLessThan(y - 1);
+});
+
+test('a stirred flask shows its stirrer overlay', async ({ page }) => {
+  await openSandbox(page);
+  const { width, height } = await size(page);
+  const x = Math.floor(width / 2);
+  const y = Math.floor(height / 2);
+
+  await selectTool(page, 'Beaker');
+  await page.locator('.funnel-toggle-btn', { hasText: 'Stirred' }).click();
+  await clickCell(page, x, y);
+
+  // A stirred flask never paints grid.stirrerMask (the compositor must not
+  // touch painted terrain), so the frame has to union its interior in -- or
+  // the vessel stirs away with nothing on screen to say so.
+  expect((await getCell(page, x, y - 1))?.stirred).toBe(true);
+  // Outside the vessel is not stirred.
+  expect((await getCell(page, 2, 2))?.stirred).toBe(false);
 });

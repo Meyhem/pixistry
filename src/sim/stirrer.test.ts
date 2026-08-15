@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { flaskFootprint, placeFlaskInstance } from './flask';
 import { PhaseCode, SimGrid } from './grid';
-import { stepStirrers } from './stirrer';
+import { stepStirrers, stirredMask } from './stirrer';
 import { mulberry32 } from './rng';
 import { buildPalette, type PaletteEntry } from './species';
 import { GLASS_WALL_SPEC_ID, WALL_PHASE } from './walls';
@@ -119,6 +119,36 @@ describe('stepStirrers', () => {
 
     expect(grid.specId).not.toEqual(before);
     expect(grid.stirrerMask.every((v) => v === 0)).toBe(true);
+  });
+
+  it("marks a stirred flask's interior in the mask the renderer tints", () => {
+    // The other half of the same story: the union used to happen privately
+    // inside stepStirrers, so a stirred flask agitated its contents with no
+    // overlay drawn anywhere -- the frame shipped grid.stirrerMask raw and
+    // that array is empty for a flask.
+    const grid = new SimGrid(60, 60);
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: true, flaskKind: 'beaker' });
+    const inside = flaskFootprint(flask).reservoirCells.filter((c) => grid.inBounds(c.x, c.y));
+
+    const mask = stirredMask(grid, [flask]);
+
+    expect(inside.length).toBeGreaterThan(4);
+    for (const cell of inside) expect(mask[grid.index(cell.x, cell.y)]).toBe(1);
+    // Purely derived: the grid's own painted overlay is untouched.
+    expect(grid.stirrerMask.every((v) => v === 0)).toBe(true);
+  });
+
+  it('keeps an unstirred flask out of the mask, and keeps painted strokes in it', () => {
+    const grid = new SimGrid(60, 60);
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
+    grid.stirrerMask[grid.index(5, 5)] = 1;
+
+    const mask = stirredMask(grid, [flask]);
+
+    expect(mask[grid.index(5, 5)]).toBe(1);
+    for (const cell of flaskFootprint(flask).reservoirCells) {
+      if (grid.inBounds(cell.x, cell.y)) expect(mask[grid.index(cell.x, cell.y)]).toBe(0);
+    }
   });
 
   it('leaves an unstirred flask alone', () => {
