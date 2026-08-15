@@ -30,10 +30,11 @@ import { TUBE_COLOR, TUBE_LABEL } from '../sim/tube';
 import { FLASK_COLOR } from '../sim/flask';
 import { FILTER_COLOR, FILTER_LABEL } from '../sim/filter';
 import { glassChainCells } from '../sim/glass';
-import { entityBodyCells, entityBounds, entityHandles, type EntityKind } from '../sim/entity';
+import { entityBodyCells, entityBounds, entityHandles, entityReadouts, type EntityKind } from '../sim/entity';
+import type { EntitySettingsWire, EntityWire, PlaceEntityWire } from '../sim/protocol';
 import { SINK_COLOR, SINK_LABEL, sinkLineCells, VENT_COLOR, VENT_LABEL } from '../sim/sink';
 import { funnelShapeFor, nextFunnelFacing } from '../sim/apparatus-shapes';
-import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
+import { DEFAULT_FLASK_KIND, DEFAULT_FLASK_SIZE_SCALE, flaskShapeFor, nextFlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import { apertureCells, lumenBand, lumenOpenEnds, lumenWallCells, polylineToLumenPath, snapOctant, type Point } from '../sim/tube-shapes';
 import { buildToolChest, type ToolChestCallbacks } from './tool-chest';
 import {
@@ -47,10 +48,11 @@ import {
   type ToolRailCallbacks,
 } from './tool-rail';
 import { buildBenchMenu, buildHud, type BenchMenuCallbacks, type HudCallbacks } from './hud';
-import { buildSidePanel, type FunnelFieldValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta, type TubeFieldValues } from './side-panel';
+import { buildSidePanel, type EntityPanelContext, type EntityValues, type SidePanelCallbacks, type SinkTallyEntry, type ToolMeta } from './side-panel';
 import { buildPeriodicTable, type PeriodicTableCallbacks } from './periodic-table';
 import {
   EntitySelection,
+  type EntityDraft,
   type EntityHit,
   type FilterEditDraft,
   type FlaskEditDraft,
@@ -104,6 +106,9 @@ const GHOST_COLOR: Record<EntityKind, string> = {
   glass: 'rgba(169, 214, 232, 0.5)',
 };
 const PINNED_STORAGE_KEY = 'pixistry.pinnedSpecies';
+// How far a duplicate lands from its original, in cells -- enough that the
+// copy is visibly its own object rather than exactly covering the source.
+const DUPLICATE_OFFSET = 2;
 
 type Tool =
   | { kind: 'paint'; specId: number }
@@ -212,16 +217,12 @@ const TOOL_META_DEFAULTS: ToolMeta = {
   meltLabel: '',
   boilLabel: '',
   phaseLabel: '',
-  radiatorPanel: 'none',
   showBrushTemp: false,
   showBrushWidth: true,
-  funnelPanel: 'none',
-  tubePanel: 'none',
-  filterPanel: 'none',
-  flaskPanel: 'none',
-  glassPanel: 'none',
   sinkPanel: 'none',
   canDelete: false,
+  entityPanel: null,
+  selectHint: false,
   eraseHint: false,
 };
 
@@ -610,8 +611,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let speed = 1;
   let brushWidth = DEFAULT_RADIUS;
   let brushTempC = DEFAULT_BRUSH_TEMP_C;
-  let radiationRadius = DEFAULT_RADIATION_RADIUS;
-  let targetTempC = DEFAULT_RADIATOR_TARGET_C;
   let pinnedLabels = loadPinnedLabels();
   let ptOpen = false;
   // The three modal surfaces that replaced the docked toolbar/side panel.
@@ -624,7 +623,11 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let settingsDockOpen = true;
   let benchMenuOpen = false;
   let ptSelectedSymbol: string | null = null;
-  let ptTarget: 'paint' | 'funnel-config' | 'funnel-edit' | 'tube-filter-add' | 'tube-filter-edit-add' | 'filter-add' | 'filter-edit-add' = 'paint';
+  // Which entity field asked the periodic table to open, or null when it was
+  // opened to pick a paint species. One reference where there used to be
+  // seven hard-coded target names, since every field now says which draft
+  // key it writes.
+  let ptTarget: { key: string; editing: boolean } | null = null;
   let isPointerDown = false;
   let isGrabbing = false;
   // The mixer tool's active brush stroke: while held, position updates go
@@ -656,13 +659,15 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
   // Flask apparatus config (pre-placement) -- same "captured at placement
   // time" convention as funnelDraft above. Facing rotates in
-  // 45-degree steps (8 facings), unlike the funnel's 4.
-  let flaskFacing: FlaskFacing = 'up';
-  let flaskSizeScale = DEFAULT_FLASK_SIZE_SCALE;
-  // Whether a placed flask comes with a stirrer over its interior. One
-  // setting shared by both glassware shapes (see side-panel.ts's flask
-  // panel), replacing the separate "Erlenmeyer (stirred)" chest entry.
-  let flaskStirred = false;
+  // 45-degree steps (8 facings), unlike the funnel's 4. `stirred` decides
+  // whether a placed flask comes with a stirrer over its interior -- one
+  // setting shared by both glassware shapes, replacing the separate
+  // "Erlenmeyer (stirred)" chest entry.
+  const flaskDraft: FlaskEditDraft = { facing: 'up', sizeScale: DEFAULT_FLASK_SIZE_SCALE, stirred: false, flaskKind: DEFAULT_FLASK_KIND };
+
+  // Radiator config (pre-placement) -- captured into the instance when a line
+  // is drawn, so moving these afterwards never changes a placed radiator.
+  const radiatorDraft: RadiatorEditDraft = { radiationRadius: DEFAULT_RADIATION_RADIUS, targetTempC: DEFAULT_RADIATOR_TARGET_C };
 
   // The Select tool's selection/edit-draft/drag state, one of each for every
   // apparatus kind -- see entity-selection.ts.
@@ -681,14 +686,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   // its own now (see filter.ts), so this only seeds the next one drawn.
   const filterDraft: FilterEditDraft = { species: new Set() };
 
-  /** Pushes the selected filter line's edited allow-list to the worker --
-   * the filter counterpart of sendTubeUpdate/sendFunnelUpdate. */
-  function sendFilterUpdate(): void {
-    const entityId = selection.selectedOf('filter')?.entityId;
-    const draft = selection.draftOf('filter');
-    if (entityId === undefined || !draft) return;
-    send({ type: 'updateEntitySettings', entityId, settings: { kind: 'filter', species: [...draft.species] } });
-  }
 
   // In-progress polygon draw (see isPolygonTool -- the conveyor tube and the
   // Glass tool share the interaction): points already committed by a click,
@@ -725,6 +722,139 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
   let hasSnapshot = false;
   let lastTick = 0;
 
+  /** The pre-placement draft a tool writes into -- the same per-kind shape a
+   * selected entity's draft has, which is what lets one schema-driven panel
+   * serve both. Glass has no settings, so it has no draft either. */
+  function placementDraft(kind: EntityKind): Record<string, unknown> {
+    switch (kind) {
+      case 'funnel':
+        return funnelDraft as unknown as Record<string, unknown>;
+      case 'tube':
+        return tubeDraft as unknown as Record<string, unknown>;
+      case 'flask':
+        return flaskDraft as unknown as Record<string, unknown>;
+      case 'filter':
+        return filterDraft as unknown as Record<string, unknown>;
+      case 'radiator':
+        return radiatorDraft as unknown as Record<string, unknown>;
+      case 'glass':
+        return {};
+    }
+  }
+
+  /** A draft turned into the settings payload for its kind. The two are the
+   * same shape by construction (the schema's keys *are* the draft's keys, and
+   * the draft's fields are the settings message's fields), so this is a
+   * rename of the funnel's total and a Set-to-array of the species lists, not
+   * a per-kind mapping. Null for glass, which has no settings to send. */
+  function entitySettingsFromDraft(draft: EntityDraft): EntitySettingsWire | null {
+    switch (draft.kind) {
+      case 'funnel':
+        return {
+          kind: 'funnel',
+          specId: draft.specId,
+          tempC: draft.tempC,
+          ratePerMinute: draft.ratePerMinute,
+          total: draft.totalMode === 'infinite' ? null : draft.totalAmount,
+          facing: draft.facing,
+        };
+      case 'tube':
+        return { kind: 'tube', filter: draft.filter ? [...draft.filter] : null };
+      case 'flask':
+        return { kind: 'flask', facing: draft.facing, sizeScale: draft.sizeScale, stirred: draft.stirred, flaskKind: draft.flaskKind };
+      case 'filter':
+        return { kind: 'filter', species: [...draft.species] };
+      case 'radiator':
+        return { kind: 'radiator', radiationRadius: draft.radiationRadius, targetTempC: draft.targetTempC };
+      case 'glass':
+        return null;
+    }
+  }
+
+  /** The 'placeEntity' payload that would reproduce a placed entity at an
+   * offset -- what Duplicate sends. Built from the entity's own frame
+   * snapshot, so a copy carries the settings it currently has rather than
+   * whatever the tool's pre-placement draft happens to hold. */
+  function duplicatePayload(wire: EntityWire, dx: number, dy: number): PlaceEntityWire {
+    switch (wire.kind) {
+      case 'funnel':
+        return {
+          kind: 'funnel',
+          x: wire.anchorX + dx,
+          y: wire.anchorY + dy,
+          facing: wire.facing,
+          specId: wire.specId,
+          tempC: wire.tempC,
+          ratePerMinute: wire.ratePerMinute,
+          total: wire.total,
+        };
+      case 'tube':
+        return { kind: 'tube', points: wire.points.map((p) => ({ x: p.x + dx, y: p.y + dy })), filter: wire.filter };
+      case 'flask':
+        return { kind: 'flask', x: wire.x + dx, y: wire.y + dy, facing: wire.facing, sizeScale: wire.sizeScale, stirred: wire.stirred, flaskKind: wire.flaskKind };
+      case 'filter':
+        return { kind: 'filter', x0: wire.x0 + dx, y0: wire.y0 + dy, x1: wire.x1 + dx, y1: wire.y1 + dy, species: wire.species };
+      case 'radiator':
+        return {
+          kind: 'radiator',
+          x0: wire.x0 + dx,
+          y0: wire.y0 + dy,
+          x1: wire.x1 + dx,
+          y1: wire.y1 + dy,
+          radiationRadius: wire.radiationRadius,
+          targetTempC: wire.targetTempC,
+        };
+      case 'glass':
+        // The copy takes the corners where they currently sit, rotation
+        // already applied (see glass.ts's glassPoints) -- so a duplicate of a
+        // turned polygon is the shape you can see, at rotation 0.
+        return { kind: 'glass', points: wire.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+    }
+  }
+
+  /** Places a copy of the selection a couple of cells down-right, so the
+   * original stays visible underneath rather than being exactly covered. The
+   * copy isn't auto-selected: its entityId only exists once the worker
+   * answers, a frame later. */
+  function duplicateSelectedApparatus(): void {
+    const wire = selection.selected();
+    if (!wire) return;
+    send({ type: 'placeEntity', entity: duplicatePayload(wire, DUPLICATE_OFFSET, DUPLICATE_OFFSET) });
+    render();
+  }
+
+  /** What a placed entity is called in the HUD chip. A flask prefers its
+   * live draft over the frame: the frame catches up a tick later, and the
+   * chip isn't rebuilt per frame, so a shape/stirred toggle would otherwise
+   * read stale until some unrelated render. */
+  function entityIdentity(wire: EntityWire): { label: string; color: string } {
+    switch (wire.kind) {
+      case 'funnel':
+        return { label: FUNNEL_LABEL, color: FUNNEL_COLOR };
+      case 'tube':
+        return { label: TUBE_LABEL, color: TUBE_COLOR };
+      case 'filter':
+        return { label: FILTER_LABEL, color: FILTER_COLOR };
+      case 'radiator':
+        return { label: RADIATOR_LABEL, color: RADIATOR_COLOR };
+      case 'glass':
+        return { label: `${getWall(GLASS_WALL_SPEC_ID).label} (polygon)`, color: getWall(GLASS_WALL_SPEC_ID).color };
+      case 'flask': {
+        const draft = selection.draftOf('flask');
+        return { label: flaskLabel(draft?.flaskKind ?? wire.flaskKind, draft?.stirred ?? wire.stirred), color: FLASK_COLOR };
+      }
+    }
+  }
+
+  /** Which apparatus kind a tool places, if any -- what decides whose
+   * pre-placement settings the dock shows. */
+  function toolEntityKind(t: Tool | null): EntityKind | null {
+    if (!t) return null;
+    if (t.kind === 'funnel' || t.kind === 'tube' || t.kind === 'flask' || t.kind === 'filter' || t.kind === 'radiator') return t.kind;
+    if (t.kind === 'wall' && isGlassPolygonTool(t)) return 'glass';
+    return null;
+  }
+
   function describeToolMeta(t: Tool | null): ToolMeta {
     if (!t) return { ...TOOL_META_DEFAULTS, label: 'No tool selected', color: '#3a3d3a' };
     if (t.kind === 'paint') {
@@ -754,7 +884,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           color: wall.color,
           category: 'APPARATUS',
           showBrushWidth: false,
-          glassPanel: 'config',
         };
       }
       return { ...TOOL_META_DEFAULTS, label: wall.label, color: wall.color, category: 'APPARATUS', showBrushTemp: true };
@@ -762,7 +891,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (t.kind === 'radiator') {
       // Drawn as a one-cell-wide line drag -- the radiation radius slider
       // already sets how far it reaches, so there's no brush width to show.
-      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', radiatorPanel: 'config', showBrushWidth: false };
+      return { ...TOOL_META_DEFAULTS, label: RADIATOR_LABEL, color: RADIATOR_COLOR, category: 'APPARATUS', showBrushWidth: false };
     }
     if (t.kind === 'funnel') {
       return {
@@ -771,7 +900,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         color: FUNNEL_COLOR,
         category: 'APPARATUS',
         showBrushWidth: false,
-        funnelPanel: 'config',
       };
     }
     if (t.kind === 'tube') {
@@ -781,7 +909,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         color: TUBE_COLOR,
         category: 'APPARATUS',
         showBrushWidth: false,
-        tubePanel: 'config',
       };
     }
     if (t.kind === 'stirrer') {
@@ -789,7 +916,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     }
     if (t.kind === 'filter') {
       // Always a one-cell-wide line drag -- no brush width to show.
-      return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', showBrushWidth: false, filterPanel: 'config' };
+      return { ...TOOL_META_DEFAULTS, label: FILTER_LABEL, color: FILTER_COLOR, category: 'APPARATUS', showBrushWidth: false };
     }
     if (t.kind === 'sink') {
       const isVent = t.port === SinkMaskValue.Vent;
@@ -804,65 +931,23 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (t.kind === 'flask') {
       return {
         ...TOOL_META_DEFAULTS,
-        label: flaskLabel(t.flask, flaskStirred),
+        label: flaskLabel(t.flask, flaskDraft.stirred),
         color: FUNNEL_COLOR,
         category: 'APPARATUS',
         showBrushWidth: false,
-        flaskPanel: 'config',
       };
     }
     if (t.kind === 'select-apparatus') {
       // The only branch that depends on live selection state rather than
       // just the tool kind, so it stays logic instead of a static table row.
-      const selectedFunnel = selection.selectedOf('funnel');
-      const selectedTube = selection.selectedOf('tube');
-      const selectedFlask = selection.selectedOf('flask');
-      const selectedFilter = selection.selectedOf('filter');
-      const selectedRadiator = selection.selectedOf('radiator');
-      const selectedGlass = selection.selectedOf('glass');
-      const nothingSelected = !selection.selected();
-      // Whichever apparatus is selected lends the HUD chip its own name and
-      // swatch, so the chip reads as "the thing you're holding" rather than
-      // as the tool. At most one is ever selected (see
-      // ApparatusSelection.clearSelections), so this chain resolves to
-      // exactly one entry.
-      const identity = selectedFunnel
-        ? { label: FUNNEL_LABEL, color: FUNNEL_COLOR }
-        : selectedTube
-          ? { label: TUBE_LABEL, color: TUBE_COLOR }
-          : selectedFilter
-            ? { label: FILTER_LABEL, color: FILTER_COLOR }
-            : selectedRadiator
-              ? { label: RADIATOR_LABEL, color: RADIATOR_COLOR }
-              : selectedGlass
-                ? { label: `${getWall(GLASS_WALL_SPEC_ID).label} (polygon)`, color: getWall(GLASS_WALL_SPEC_ID).color }
-                : selectedFlask
-                  ? {
-                      // Prefer the live edit draft over the worker's snapshot:
-                      // the snapshot only catches up a frame later, and the HUD
-                      // chip isn't rebuilt per frame, so a shape/stirred toggle
-                      // would otherwise keep reading stale until some unrelated
-                      // render.
-                      label: flaskLabel(
-                        selection.draftOf('flask')?.flaskKind ?? selectedFlask.flaskKind,
-                        selection.draftOf('flask')?.stirred ?? selectedFlask.stirred,
-                      ),
-                      color: FLASK_COLOR,
-                    }
-                  : { label: SELECT_APPARATUS_LABEL, color: SELECT_APPARATUS_COLOR };
-      return {
-        ...TOOL_META_DEFAULTS,
-        label: identity.label,
-        color: identity.color,
-        category: nothingSelected ? 'TOOL' : 'APPARATUS',
-        showBrushWidth: false,
-        funnelPanel: selectedFunnel ? 'edit' : nothingSelected ? 'edit-empty' : 'none',
-        tubePanel: selectedTube ? 'edit' : 'none',
-        filterPanel: selectedFilter ? 'edit' : 'none',
-        flaskPanel: selectedFlask ? 'edit' : 'none',
-        radiatorPanel: selectedRadiator ? 'edit' : 'none',
-        glassPanel: selectedGlass ? 'edit' : 'none',
-      };
+      // Whatever is selected lends the HUD chip its own name and swatch, so
+      // the chip reads as "the thing you're holding" rather than as the tool.
+      const selected = selection.selected();
+      if (!selected) {
+        return { ...TOOL_META_DEFAULTS, label: SELECT_APPARATUS_LABEL, color: SELECT_APPARATUS_COLOR, category: 'TOOL', showBrushWidth: false };
+      }
+      const identity = entityIdentity(selected);
+      return { ...TOOL_META_DEFAULTS, label: identity.label, color: identity.color, category: 'APPARATUS', showBrushWidth: false };
     }
     const info = SIMPLE_TOOL_META[t.kind];
     return { ...TOOL_META_DEFAULTS, label: info.label, color: info.color, category: 'TOOL', eraseHint: t.kind === 'erase' };
@@ -914,56 +999,8 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     if (selected) send({ type: 'moveEntity', entityId: selected.entityId, dx, dy });
   }
 
-  /** Pushes the edit draft's full config to the worker as one message -- see
-   * FunnelEditDraft's doc comment for why every field is sent together
-   * rather than patched individually. */
-  function sendFunnelUpdate(): void {
-    const funnel = selection.selectedOf('funnel');
-    const editDraft = selection.draftOf('funnel');
-    if (!funnel || !editDraft) return;
-    send({
-      type: 'updateEntitySettings',
-      entityId: funnel.entityId,
-      settings: {
-        kind: 'funnel',
-        specId: editDraft.specId,
-        tempC: editDraft.tempC,
-        ratePerMinute: editDraft.ratePerMinute,
-        total: editDraft.totalMode === 'infinite' ? null : editDraft.totalAmount,
-        facing: editDraft.facing,
-      },
-    });
-  }
 
-  /** Pushes the selected radiator's edited reach/target to the worker, which
-   * re-stamps its cells -- the radiator counterpart of sendFunnelUpdate.
-   * Unlike the pre-placement sliders (whose values are only ever read at
-   * placement time), these take effect the moment they move. */
-  function sendRadiatorUpdate(): void {
-    const entityId = selection.selectedOf('radiator')?.entityId;
-    const draft = selection.draftOf('radiator');
-    if (entityId === undefined || !draft) return;
-    send({ type: 'updateEntitySettings', entityId, settings: { kind: 'radiator', radiationRadius: draft.radiationRadius, targetTempC: draft.targetTempC } });
-  }
 
-  /** Pushes a selected flask's whole config to the worker, which re-stamps
-   * the vessel (see flask.ts's updateFlaskInstance). */
-  function sendFlaskUpdate(): void {
-    const flask = selection.selectedOf('flask');
-    const flaskEditDraft = selection.draftOf('flask');
-    if (!flask || !flaskEditDraft) return;
-    send({
-      type: 'updateEntitySettings',
-      entityId: flask.entityId,
-      settings: {
-        kind: 'flask',
-        facing: flaskEditDraft.facing,
-        sizeScale: flaskEditDraft.sizeScale,
-        stirred: flaskEditDraft.stirred,
-        flaskKind: flaskEditDraft.flaskKind,
-      },
-    });
-  }
 
   /** The scroll wheel's job while the Select tool holds something: turns
    * whatever is selected, if its kind turns at all -- a flask or a glass
@@ -984,16 +1021,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     render();
   }
 
-  function sendTubeUpdate(): void {
-    const tube = selection.selectedOf('tube');
-    const tubeEditDraft = selection.draftOf('tube');
-    if (!tube || !tubeEditDraft) return;
-    send({
-      type: 'updateEntitySettings',
-      entityId: tube.entityId,
-      settings: { kind: 'tube', filter: tubeEditDraft.filter ? [...tubeEditDraft.filter] : null },
-    });
-  }
 
   /** Non-zero entries of the Sink tool's global tally, sorted highest-first
    * -- built fresh from the latest frame's sinkTotals each render rather
@@ -1315,152 +1342,100 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
     const meta = describeToolMeta(tool);
     const showingVent = meta.sinkPanel === 'vent';
     const isEditMode = tool?.kind === 'select-apparatus';
-    // The select-apparatus tool's own selection can go stale (the selected
-    // apparatus got erased) -- drop it rather than keep pointing an edit
-    // panel at nothing.
+    // The Select tool's own selection can go stale (the selected apparatus
+    // was deleted) -- drop it rather than keep pointing an edit panel at
+    // nothing.
     if (isEditMode) selection.dropStaleSelection();
-    // Drafts are seeded once, by the selection itself (see
-    // entity-selection.ts's `select`) -- this used to be four "if selected
-    // and no draft yet" blocks here plus two more seeded at selection time,
-    // which is how a panel could come up showing the previous entity's
-    // values.
-    const selectedFunnel = isEditMode ? selection.selectedOf('funnel') : undefined;
-    const selectedTube = isEditMode ? selection.selectedOf('tube') : undefined;
-    const selectedFilter = isEditMode ? selection.selectedOf('filter') : undefined;
-    // Typed as the bare draft shapes (not the tagged union members) so the
-    // generic per-key setters below can write through them.
-    const funnelEditDraft: FunnelEditDraft | null = isEditMode ? selection.draftOf('funnel') : null;
-    const tubeEditDraft: TubeEditDraft | null = isEditMode ? selection.draftOf('tube') : null;
-    const flaskEditDraft: FlaskEditDraft | null = isEditMode ? selection.draftOf('flask') : null;
-    const filterEditDraft: FilterEditDraft | null = isEditMode ? selection.draftOf('filter') : null;
-    const radiatorEditDraft: RadiatorEditDraft | null = isEditMode ? selection.draftOf('radiator') : null;
-    // Apparatus only comes off the bench through Delete now, so the button
-    // shows for every kind the Select tool can have picked up.
-    meta.canDelete = isEditMode && selection.selected() !== undefined;
-    const isTubeEditMode = isEditMode && !!selectedTube;
-    // Editing a placed radiator edits its own draft (pushed straight to the
-    // worker, which re-stamps its cells); otherwise these two sliders
-    // configure what the *next* line drawn will radiate -- and the same for
-    // the flask/tube/filter fields below.
-    const radiatorFields: RadiatorEditDraft = radiatorEditDraft ?? { radiationRadius, targetTempC };
-    const flaskFields: FlaskEditDraft =
-      flaskEditDraft ?? { facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, flaskKind: tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND };
-    const tubeFields: TubeFieldValues = tubeEditDraft ?? tubeDraft;
-    // Editing a placed line edits its own draft; otherwise the Filter tool's
-    // panel configures what the *next* line drawn will allow.
-    const isFilterEditMode = isEditMode && !!selectedFilter;
-    const filterFields: FilterEditDraft = filterEditDraft ?? filterDraft;
+    const selected = isEditMode ? selection.selected() : undefined;
+    // Apparatus only comes off the bench through Delete, so the Delete and
+    // Duplicate buttons show for whatever the Select tool has picked up.
+    meta.canDelete = selected !== undefined;
+    meta.selectHint = isEditMode && !selected;
+    meta.entityPanel = selected
+      ? { kind: selected.kind, mode: 'edit' }
+      : toolEntityKind(tool)
+        ? { kind: toolEntityKind(tool) as EntityKind, mode: 'config' }
+        : null;
 
-    const funnelFields: FunnelFieldValues =
-      funnelEditDraft
-        ? {
-            specLabel: speciesLookup.labelOf(funnelEditDraft.specId) ?? `spec ${funnelEditDraft.specId}`,
-            specColor: speciesLookup.colorOf(funnelEditDraft.specId) ?? '#888',
-            tempC: funnelEditDraft.tempC,
-            ratePerMinute: funnelEditDraft.ratePerMinute,
-            totalMode: funnelEditDraft.totalMode,
-            totalAmount: funnelEditDraft.totalAmount,
-            remaining: selectedFunnel?.remaining ?? null,
-            enabled: selectedFunnel?.enabled ?? false,
-          }
-        : {
-            specLabel: speciesLookup.labelOf(funnelDraft.specId) ?? `spec ${funnelDraft.specId}`,
-            specColor: speciesLookup.colorOf(funnelDraft.specId) ?? '#888',
-            tempC: funnelDraft.tempC,
-            ratePerMinute: funnelDraft.ratePerMinute,
-            totalMode: funnelDraft.totalMode,
-            totalAmount: funnelDraft.totalAmount,
-            remaining: null,
-            enabled: false,
-          };
+    // The values behind that schema: the selected entity's own draft when
+    // one is selected, otherwise the tool's pre-placement draft. Both are
+    // the same per-kind shape, which is what lets one panel serve both --
+    // and the selected one is seeded in exactly one place (see
+    // entity-selection.ts's `select`).
+    const editing = isEditMode && !!selected;
+    // Two views of the same settings: `draftValues` is the object edits are
+    // written into, `entityValues` is what the panel reads -- the draft with
+    // the entity's live readouts (a funnel's dwindling budget, its
+    // Running/Stopped state) layered on top, so those tick along with the
+    // sim instead of freezing at select time.
+    const draftValues: EntityValues | undefined = selected
+      ? ((selection.draft as EntityValues | null) ?? undefined)
+      : meta.entityPanel
+        ? (placementDraft(meta.entityPanel.kind) as EntityValues)
+        : undefined;
+    const entityValues: EntityValues | undefined = draftValues && selected ? { ...draftValues, ...entityReadouts(selected) } : draftValues;
 
-    // The radiator tool's settings are only ever read at paint time (see
-    // applyTool's 'radiator' case) -- adjusting these sliders is local UI
-    // state until the next paint, and never retroactively touches radiators
-    // already placed on the grid (see grid.ts's radiatorRadius/
-    // radiatorTargetK doc comment). The funnel tool's config works the same
-    // way pre-placement; once placed, select-apparatus edits go live
-    // instead (see sendFunnelUpdate).
-    //
-    // Writes through whichever draft is live -- a placed funnel's
-    // selection.editDraft in edit mode, or the pre-placement
-    // funnelDraft otherwise -- and pushes the change to the worker
-    // immediately when editing a placed funnel. No render() by default: a
-    // rebuild mid-drag would replace the slider DOM node under the
-    // browser's own drag gesture, killing it (the slider's own oninput
-    // already updates its displayed value in place -- see side-panel.ts's
-    // addSlider). Pass { render: true } for a field whose panel layout
-    // itself depends on the value (see onSetFunnelTotalMode below).
-    function funnelSetter<K extends keyof FunnelEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FunnelEditDraft[K]) => void {
-      return (value) => {
-        if (funnelEditDraft) {
-          funnelEditDraft[key] = value;
-          sendFunnelUpdate();
+    /** Pushes the selected entity's whole settings block to the worker. The
+     * draft *is* the settings payload for every kind (same field names by
+     * construction -- the schema's keys are the draft's keys), so this is
+     * one message builder rather than five. */
+    function sendSelectedSettings(): void {
+      const wire = selection.selected();
+      const draft = selection.draft;
+      if (!wire || !draft || draft.kind !== wire.kind) return;
+      const settings = entitySettingsFromDraft(draft);
+      if (settings) send({ type: 'updateEntitySettings', entityId: wire.entityId, settings });
+    }
+
+    const entityContext: EntityPanelContext = {
+      palette,
+      speciesLabel: (specId) => speciesLookup.labelOf(specId) ?? `spec ${specId}`,
+      speciesColor: (specId) => speciesLookup.colorOf(specId) ?? '#888',
+      onOpenSpeciesPicker: (key) => {
+        ptTarget = { key, editing };
+        ptOpen = true;
+        render();
+      },
+      onRemoveSpecies: (key, specId) => {
+        const values = draftValues;
+        if (!values) return;
+        const current = values[key];
+        // A tube's null allow-list means "everything passes"; removing the
+        // last chip collapses back to it rather than leaving an empty Set,
+        // which would silently mean the opposite. A filter's list is never
+        // null -- empty really does mean "blocks everything" there -- so it
+        // keeps its Set (see the two kinds' emptyHint copy).
+        if (current instanceof Set) {
+          const next = new Set(current as Set<number>);
+          next.delete(specId);
+          values[key] = key === 'filter' && next.size === 0 ? null : next;
+        }
+        if (editing) sendSelectedSettings();
+        render();
+      },
+      // No render() by default: rebuilding mid-drag replaces the slider DOM
+      // node under the browser's own drag gesture and kills it (the slider
+      // updates its own displayed value in place -- see side-panel.ts's
+      // addSlider). The schema marks the discrete controls that do need one.
+      onChange: (key, value, opts) => {
+        const values = draftValues;
+        if (!values) return;
+        // 'enabled' is the one key that isn't a setting: a funnel's
+        // Running/Stopped is a one-shot verb on the instance (see
+        // protocol.ts's EntityAction), so it takes the action path while
+        // still reading as an ordinary segmented field in the schema.
+        if (key === 'enabled' && selected) {
+          send({ type: 'entityAction', entityId: selected.entityId, action: value ? 'enable' : 'disable' });
         } else {
-          funnelDraft[key] = value;
+          values[key] = value;
+          if (editing) sendSelectedSettings();
         }
         if (opts.render) render();
-      };
-    }
-
-    /** Adds specId to a species filter set -- null means "accept every
-     * species" (the default), so adding to that state starts a fresh
-     * single-member Set rather than materializing the full palette (unlike
-     * the old checkbox-list's deny-list semantics, a chip list reads as an
-     * allow-list). Shared by both branches (a placed tube's live filter, or
-     * the pre-placement one) of onOpenTubeFilterPicker's ptTarget dispatch
-     * below. */
-    function addFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> {
-      const next = new Set(filter ?? []);
-      next.add(specId);
-      return next;
-    }
-
-    /** Removes specId from a species filter set, collapsing back to null
-     * (accept every species) once the last chip is removed rather than
-     * leaving an empty-but-non-null Set, which would silently mean "blocks
-     * everything." */
-    function removeFilterSpecies(filter: ReadonlySet<number> | null, specId: number): Set<number> | null {
-      if (!filter) return null;
-      const next = new Set(filter);
-      next.delete(specId);
-      return next.size === 0 ? null : next;
-    }
-
-    /** Same convention as funnelSetter, for the radiator's two sliders --
-     * with the difference that a placed radiator's edits go live immediately
-     * (there's nothing to "apply"), while the pre-placement values are only
-     * ever read when a new line is drawn. */
-    function radiatorSetter(key: keyof RadiatorEditDraft): (value: number) => void {
-      return (value) => {
-        if (radiatorEditDraft) {
-          radiatorEditDraft[key] = value;
-          sendRadiatorUpdate();
-        } else if (key === 'radiationRadius') {
-          radiationRadius = value;
-        } else {
-          targetTempC = value;
-        }
-      };
-    }
-
-    /** Same convention as funnelSetter: writes through whichever
-     * flask config is live -- a selected flask's edit draft (pushed straight
-     * to the worker, which re-stamps the vessel) or the pre-placement tool
-     * state. */
-    function flaskSetter<K extends keyof FlaskEditDraft>(key: K, opts: { render?: boolean } = {}): (value: FlaskEditDraft[K]) => void {
-      return (value) => {
-        if (flaskEditDraft) {
-          flaskEditDraft[key] = value;
-          sendFlaskUpdate();
-        } else if (key === 'sizeScale') {
-          flaskSizeScale = value as number;
-        } else if (key === 'stirred') {
-          flaskStirred = value as boolean;
-        }
-        if (opts.render) render();
-      };
-    }
+      },
+      onAction: (action) => {
+        if (selected) send({ type: 'entityAction', entityId: selected.entityId, action });
+      },
+    };
 
     const sidePanelCallbacks: SidePanelCallbacks = {
       brushWidth,
@@ -1471,71 +1446,6 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       onSetBrushTemp: (value) => {
         brushTempC = value;
       },
-      radiationRadius: radiatorFields.radiationRadius,
-      onSetRadiationRadius: radiatorSetter('radiationRadius'),
-      targetTempC: radiatorFields.targetTempC,
-      onSetTargetTemp: radiatorSetter('targetTempC'),
-      funnelFields,
-      onOpenFunnelSpeciesPicker: () => {
-        ptTarget = isEditMode ? 'funnel-edit' : 'funnel-config';
-        ptOpen = true;
-        render();
-      },
-      onSetFunnelTemp: funnelSetter('tempC'),
-      onSetFunnelRate: funnelSetter('ratePerMinute'),
-      // Unlike the other three fields (sliders, which rebuild-on-input would
-      // fight the browser's native drag gesture -- see funnelSetter's doc
-      // comment), totalMode is a discrete button toggle: switching finite
-      // <-> infinite shows/hides the Amount field, so this one needs a
-      // render to update the panel's layout.
-      onSetFunnelTotalMode: funnelSetter('totalMode', { render: true }),
-      onSetFunnelTotalAmount: funnelSetter('totalAmount'),
-      onSetFunnelEnabled: (enabled) => {
-        if (selectedFunnel) {
-          send({ type: 'entityAction', entityId: selectedFunnel.entityId, action: enabled ? 'enable' : 'disable' });
-        }
-      },
-      onResetFunnel: () => {
-        if (selectedFunnel) send({ type: 'entityAction', entityId: selectedFunnel.entityId, action: 'reset' });
-      },
-      tubeFields,
-      tubePalette: palette,
-      onOpenTubeFilterPicker: () => {
-        ptTarget = isTubeEditMode ? 'tube-filter-edit-add' : 'tube-filter-add';
-        ptOpen = true;
-        render();
-      },
-      onRemoveTubeFilterSpecies: (specId) => {
-        if (tubeEditDraft) {
-          tubeEditDraft.filter = removeFilterSpecies(tubeEditDraft.filter, specId);
-          sendTubeUpdate();
-        } else {
-          tubeDraft.filter = removeFilterSpecies(tubeDraft.filter, specId);
-        }
-        render();
-      },
-      filterSpecies: filterFields.species,
-      filterPalette: palette,
-      onOpenFilterSpeciesPicker: () => {
-        ptTarget = isFilterEditMode ? 'filter-edit-add' : 'filter-add';
-        ptOpen = true;
-        render();
-      },
-      onRemoveFilterSpecies: (specId) => {
-        filterFields.species.delete(specId);
-        if (isFilterEditMode) sendFilterUpdate();
-        render();
-      },
-      flaskSizeScale: flaskFields.sizeScale,
-      // No render() while a slider is being dragged -- see funnelSetter.
-      onSetFlaskSize: flaskSetter('sizeScale'),
-      flaskStirred: flaskFields.stirred,
-      // Unlike the size slider, this is a discrete two-button toggle whose
-      // own active state has to be redrawn -- and the HUD's tool chip shows
-      // the stirred/plain label too, so this one does render().
-      onSetFlaskStirred: flaskSetter('stirred', { render: true }),
-      flaskShape: flaskFields.flaskKind,
-      onSetFlaskShape: flaskSetter('flaskKind', { render: true }),
       // A Vent's panel shows what it threw away, a Sink's what it collected
       // -- two tallies, one panel (see side-panel.ts's sinkPanel).
       sinkTally: sinkTallyEntries(showingVent ? lastVentTotals : lastSinkTotals),
@@ -1548,7 +1458,12 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         render();
       },
       onDeleteEntity: deleteSelectedApparatus,
+      onDuplicateEntity: duplicateSelectedApparatus,
     };
+    if (entityValues) {
+      sidePanelCallbacks.entityValues = entityValues;
+      sidePanelCallbacks.entityContext = entityContext;
+    }
     buildSidePanel(sidePanel, meta, sidePanelCallbacks);
     renderSettingsDock();
 
@@ -1562,25 +1477,27 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
           render();
         },
         onSelectSpecies: (specId) => {
-          if (ptTarget === 'funnel-config') {
-            funnelDraft.specId = specId;
-          } else if (ptTarget === 'funnel-edit' && funnelEditDraft) {
-            funnelEditDraft.specId = specId;
-            sendFunnelUpdate();
-          } else if (ptTarget === 'tube-filter-add') {
-            tubeDraft.filter = addFilterSpecies(tubeDraft.filter, specId);
-          } else if (ptTarget === 'tube-filter-edit-add' && tubeEditDraft) {
-            tubeEditDraft.filter = addFilterSpecies(tubeEditDraft.filter, specId);
-            sendTubeUpdate();
-          } else if (ptTarget === 'filter-add') {
-            filterDraft.species.add(specId);
-          } else if (ptTarget === 'filter-edit-add' && filterEditDraft) {
-            filterEditDraft.species.add(specId);
-            sendFilterUpdate();
-          } else {
+          // ptTarget is null when the picker was opened to choose a paint
+          // species; otherwise it names the entity field that asked for it,
+          // and the same key writes into whichever draft that panel is
+          // showing (see onOpenSpeciesPicker).
+          const target = ptTarget;
+          const values = draftValues;
+          if (!target || !values) {
             setTool({ kind: 'paint', specId });
+          } else if (values[target.key] instanceof Set || values[target.key] === null) {
+            // A chip list: add to it, starting a fresh Set if the field was
+            // null ("everything passes").
+            const next = new Set((values[target.key] as Set<number> | null) ?? []);
+            next.add(specId);
+            values[target.key] = next;
+            if (target.editing) sendSelectedSettings();
+          } else {
+            values[target.key] = specId;
+            if (target.editing) sendSelectedSettings();
           }
           ptOpen = false;
+          ptTarget = null;
           ptSelectedSymbol = null;
           render();
         },
@@ -1790,7 +1707,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
 
     if (showFlaskGhost) {
       previewCtx.fillStyle = 'rgba(169, 214, 232, 0.55)';
-      const shape = flaskShapeFor(flaskFacing, flaskSizeScale, tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND);
+      const shape = flaskShapeFor(flaskDraft.facing, flaskDraft.sizeScale, tool?.kind === 'flask' ? tool.flask : DEFAULT_FLASK_KIND);
       for (const cell of shape.cells) {
         const px = x + cell.dx;
         const py = y + cell.dy;
@@ -1934,7 +1851,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         // a repeated per-move paint like the other brush tools.
         break;
       case 'flask':
-        send({ type: 'placeEntity', entity: { kind: 'flask', x, y, facing: flaskFacing, sizeScale: flaskSizeScale, stirred: flaskStirred, flaskKind: tool.flask } });
+        send({ type: 'placeEntity', entity: { kind: 'flask', x, y, facing: flaskDraft.facing, sizeScale: flaskDraft.sizeScale, stirred: flaskDraft.stirred, flaskKind: tool.flask } });
         break;
       case 'grabber':
         break;
@@ -2072,7 +1989,7 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         updateApparatusOverlay(lastHoverX, lastHoverY);
       } else if (tool?.kind === 'flask') {
         event.preventDefault();
-        flaskFacing = nextFlaskFacing(flaskFacing, step);
+        flaskDraft.facing = nextFlaskFacing(flaskDraft.facing, step);
         updateApparatusOverlay(lastHoverX, lastHoverY);
       } else if (tool?.kind === 'select-apparatus') {
         // Every rotatable apparatus turns on the wheel once selected, exactly
@@ -2133,6 +2050,17 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
         selection.endDrag();
         selection.select(null);
         render();
+      }
+      return;
+    }
+
+    // Ctrl/Cmd+D duplicates the selection -- the one shortcut that wants a
+    // modifier, so it's checked before the bare-key guard below rejects
+    // them all.
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'd' || event.key === 'D')) {
+      if (!typing && !anyModalOpen() && tool?.kind === 'select-apparatus' && selection.selected()) {
+        event.preventDefault();
+        duplicateSelectedApparatus();
       }
       return;
     }
@@ -2221,7 +2149,15 @@ export function mountApp(root: HTMLElement, options: MountAppOptions = {}): () =
       } else if (tool?.kind === 'radiator') {
         send({
           type: 'placeEntity',
-          entity: { kind: 'radiator', x0: lineDrawStart.x, y0: lineDrawStart.y, x1: lastHoverX, y1: lastHoverY, radiationRadius, targetTempC },
+          entity: {
+            kind: 'radiator',
+            x0: lineDrawStart.x,
+            y0: lineDrawStart.y,
+            x1: lastHoverX,
+            y1: lastHoverY,
+            radiationRadius: radiatorDraft.radiationRadius,
+            targetTempC: radiatorDraft.targetTempC,
+          },
         });
       } else {
         const width = wallBrushRadius(tool, brushWidth);

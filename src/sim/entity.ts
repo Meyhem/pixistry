@@ -12,7 +12,7 @@
 // shapes to protocol.ts's unions, and fill in one row here -- no new
 // messages, no new selection code, no compositor changes.
 import type { SimGrid } from './grid';
-import { FLASK_FACINGS, flaskShapeFor } from './flask-shapes';
+import { FLASK_FACINGS, MAX_FLASK_SIZE_SCALE, MIN_FLASK_SIZE_SCALE, flaskShapeFor } from './flask-shapes';
 import { FUNNEL_FACINGS, funnelShapeFor } from './apparatus-shapes';
 import { sinkLineCells } from './sink';
 import { glassChainCells } from './glass';
@@ -99,6 +99,35 @@ export interface EntityHit {
   readonly handleId: number | null;
 }
 
+/** One control in an entity kind's settings pane. A kind declares its fields
+ * once, here, and side-panel.ts renders whatever it's handed -- the same
+ * schema drives both the pre-placement tool config and the selected-entity
+ * editor, which is why `mode` is a parameter of `settingsSchema` rather than
+ * two separate lists. `key` names a field on that kind's draft object (see
+ * ui/entity-selection.ts), so reading and writing a value needs no per-kind
+ * code either. */
+export type EntityField =
+  | { readonly field: 'slider'; readonly key: string; readonly label: string; readonly min: number; readonly max: number; readonly step: number; readonly format: 'plain' | 'celsius' | 'scale' }
+  | { readonly field: 'number'; readonly key: string; readonly label: string; readonly min: number; readonly step: number }
+  /** Two or more mutually exclusive buttons; `value` is written to `key`. */
+  | { readonly field: 'segmented'; readonly key: string; readonly label: string; readonly options: readonly { readonly value: string | boolean; readonly label: string }[] }
+  /** Opens the periodic-table picker; `key` holds a specId. */
+  | { readonly field: 'species-pick'; readonly key: string; readonly label: string }
+  /** A chip list of species; `key` holds a Set<number>, or null for the
+   * tube's "accept everything" default. */
+  | { readonly field: 'species-set'; readonly key: string; readonly label: string; readonly emptyHint: string }
+  /** Read-only display of a value the entity reports (a funnel's remaining
+   * budget), not something the draft edits. */
+  | { readonly field: 'readout'; readonly key: string; readonly label: string }
+  /** A one-shot verb (see EntityAction), not a setting. */
+  | { readonly field: 'action'; readonly action: EntityAction; readonly label: string };
+
+/** Whether the pane is configuring the *next* placement or editing a placed
+ * entity. A few fields only make sense in one of the two (a funnel's
+ * Running/Stopped switch and its remaining budget belong to an instance; a
+ * flask's shape is picked from the Tool Chest before placement). */
+export type EntityPanelMode = 'config' | 'edit';
+
 /** An entity's extent in grid cells, from its wire snapshot. */
 export interface EntityBounds {
   readonly minX: number;
@@ -164,6 +193,17 @@ export interface EntityDef<K extends EntityKind> {
   toWire(entity: EntityOfKind[K]): WireOfKind[K];
   applySettings?(entity: EntityOfKind[K], settings: SettingsOfKind[K]): void;
   action?(entity: EntityOfKind[K], action: EntityAction): void;
+  /** This kind's settings pane, as data. Omitted for a kind with nothing to
+   * configure (a glass polygon moves and rotates, and that's all). */
+  settingsSchema?(mode: EntityPanelMode): readonly EntityField[];
+  /** Schema values that come from the live instance rather than the edit
+   * draft -- a funnel's dwindling budget and its Running/Stopped state.
+   * Read fresh from the frame every render, so they tick along with the sim
+   * instead of freezing at whatever they were when the entity was
+   * selected. */
+  readoutsOf?(wire: WireOfKind[K]): Record<string, unknown>;
+  /** The pane's "HOW IT WORKS" copy for each mode. */
+  panelHint?(mode: EntityPanelMode): string;
 }
 
 /** How close a click has to be to a one-cell-wide line (a filter, a radiator,
@@ -171,6 +211,18 @@ export interface EntityDef<K extends EntityKind> {
  * cells of slack, since a 1px line is otherwise unclickable at any sane
  * zoom. */
 const LINE_HIT_RADIUS = 2;
+
+// Field ranges the panel's sliders/number inputs use. They live with the
+// kinds rather than in side-panel.ts now that the pane is schema-driven --
+// "how hot can a funnel dispense" is a property of the funnel, not of the
+// widget that happens to show it.
+const MIN_TEMP_C = -250;
+const MAX_TEMP_C = 1500;
+const TEMP_STEP_C = 5;
+const MIN_FUNNEL_RATE = 1;
+const MAX_FUNNEL_RATE = 600;
+const MIN_RADIATION_RADIUS = 1;
+const MAX_RADIATION_RADIUS = 15;
 
 function facingIndex(rotation: number, steps: number): number {
   return ((Math.round(rotation) % steps) + steps) % steps;
@@ -270,6 +322,44 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       remaining: funnel.remaining,
       enabled: funnel.enabled,
     }),
+    settingsSchema: (mode) => [
+      { field: 'species-pick', key: 'specId', label: 'Species' },
+      { field: 'slider', key: 'tempC', label: 'Spawn temperature', min: MIN_TEMP_C, max: MAX_TEMP_C, step: TEMP_STEP_C, format: 'celsius' },
+      { field: 'slider', key: 'ratePerMinute', label: 'Rate (px/min)', min: MIN_FUNNEL_RATE, max: MAX_FUNNEL_RATE, step: 1, format: 'plain' },
+      {
+        field: 'segmented',
+        key: 'totalMode',
+        label: 'Total amount',
+        options: [
+          { value: 'finite', label: 'Finite' },
+          { value: 'infinite', label: 'Infinite' },
+        ],
+      },
+      // Only when a finite total is selected -- the panel hides a field
+      // whose value can't apply (see side-panel.ts's showWhen handling of
+      // totalMode).
+      { field: 'number', key: 'totalAmount', label: 'Amount', min: 1, step: 1 },
+      ...(mode === 'edit'
+        ? ([
+            {
+              field: 'segmented',
+              key: 'enabled',
+              label: 'State',
+              options: [
+                { value: true, label: 'Running' },
+                { value: false, label: 'Stopped' },
+              ],
+            },
+            { field: 'readout', key: 'remaining', label: 'Remaining' },
+            { field: 'action', action: 'reset', label: 'Reset' },
+          ] as const)
+        : []),
+    ],
+    readoutsOf: (wire) => ({ remaining: wire.remaining, enabled: wire.enabled }),
+    panelHint: (mode) =>
+      mode === 'config'
+        ? 'Rotate with the scroll wheel while hovering the grid, then click to place. A placed funnel starts Stopped -- switch it to Running here once placed. Drips one pixel at a fixed interval; pauses automatically if its outlet is blocked, and resumes once it clears.'
+        : 'Drag the funnel to move it, or rotate it with the scroll wheel over the grid, same as before placement. Editing its settings only affects future drips -- Reset refills it back to its full total (or infinite) and un-pauses it, without changing Running/Stopped.',
     applySettings: (funnel, settings) =>
       updateFunnelInstance(funnel, {
         specId: settings.specId,
@@ -305,6 +395,13 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       points: tube.points.map((p) => ({ x: p.x, y: p.y })),
       filter: tube.filter ? [...tube.filter] : null,
     }),
+    settingsSchema: () => [
+      { field: 'species-set', key: 'filter', label: 'Species filter', emptyHint: 'No species added -- every species passes through.' },
+    ],
+    panelHint: (mode) =>
+      mode === 'config'
+        ? 'Click to place each knee, right-click to finish at the last knee placed (or cancel if only the mouth is placed). The channel is three cells wide and swallows whatever arrives at its mouth -- put the mouth where material already falls or flows; it reaches for nothing. Cargo rides to the far end and is ejected there; a blocked exit backs the whole tube up.'
+        : 'Drag a knee to reshape the tube, or drag it anywhere else to slide the whole thing. The allow-list only affects what the mouth takes in future, not cargo already inside.',
     applySettings: (tube, settings) => updateTubeInstance(tube, { filter: settings.filter ? new Set(settings.filter) : null }),
   },
   flask: {
@@ -338,6 +435,37 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       stirred: flask.stirred,
       flaskKind: flask.flaskKind,
     }),
+    settingsSchema: (mode) => [
+      // Pre-placement the shape is whatever you picked in the Tool Chest;
+      // once placed it becomes an ordinary setting like any other.
+      ...(mode === 'edit'
+        ? ([
+            {
+              field: 'segmented',
+              key: 'flaskKind',
+              label: 'Shape',
+              options: [
+                { value: 'erlenmeyer', label: 'Erlenmeyer' },
+                { value: 'beaker', label: 'Beaker' },
+              ],
+            },
+          ] as const)
+        : []),
+      { field: 'slider', key: 'sizeScale', label: 'Size', min: MIN_FLASK_SIZE_SCALE, max: MAX_FLASK_SIZE_SCALE, step: 0.1, format: 'scale' },
+      {
+        field: 'segmented',
+        key: 'stirred',
+        label: 'Stirring',
+        options: [
+          { value: false, label: 'Plain' },
+          { value: true, label: 'Stirred' },
+        ],
+      },
+    ],
+    panelHint: (mode) =>
+      mode === 'config'
+        ? 'Rotate with the scroll wheel while hovering the grid (45-degree steps), then click to place. A placed flask is a fixed glass vessel -- pour reagents in through its mouth with the paint tool, a funnel, or a conveyor. Stirred stamps a stirrer over the whole interior, agitating whatever settles inside.'
+        : 'Drag the vessel to move it, or rotate it with the scroll wheel over the grid (45-degree steps), same as before placement. Changing shape, size or facing re-draws the glass in place -- whatever it was holding stays where it is, so a big change can leave contents outside the new outline.',
     applySettings: (flask, settings) =>
       updateFlaskInstance(flask, {
         facing: settings.facing,
@@ -364,6 +492,13 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       y1: filter.y1,
       species: [...filter.species],
     }),
+    settingsSchema: () => [
+      { field: 'species-set', key: 'species', label: 'Allowed species', emptyHint: 'No species added -- every species is blocked.' },
+    ],
+    panelHint: (mode) =>
+      mode === 'config'
+        ? 'Drag from one end to the other to draw a single one-cell-wide line. Species in the allowed list pass through it in either direction; everything else is blocked, same as glass. Each line keeps the list it was drawn with -- pick it up with the Select tool to change it later.'
+        : "This line's own allow-list -- other filter lines keep theirs. Drag the line to slide it, or drag either end to re-aim it. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
     applySettings: (filter, settings) => updateFilterInstance(filter, settings.species),
   },
   radiator: {
@@ -393,6 +528,14 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       radiationRadius: radiator.radius,
       targetTempC: kelvinToCelsius(radiator.targetK),
     }),
+    settingsSchema: () => [
+      { field: 'slider', key: 'radiationRadius', label: 'Radiation radius', min: MIN_RADIATION_RADIUS, max: MAX_RADIATION_RADIUS, step: 1, format: 'plain' },
+      { field: 'slider', key: 'targetTempC', label: 'Target temperature', min: MIN_TEMP_C, max: MAX_TEMP_C, step: TEMP_STEP_C, format: 'celsius' },
+    ],
+    panelHint: (mode) =>
+      mode === 'config'
+        ? "Drag from one end to the other to draw a single one-cell-wide line. Every cell of it radiates toward the target temperature each tick, within the radiation radius -- heating cells below it, cooling cells above it. Pure radiation, no collision. These settings are captured when you draw, so changing them afterward won't affect radiators already placed -- pick one up with the Select tool to change it."
+        : "This radiator's own settings, applied the moment you move a slider. Drag the line to slide it, or drag either end to re-aim it. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
     applySettings: (radiator, settings) => updateRadiatorInstance(radiator, settings.radiationRadius, celsiusToKelvin(settings.targetTempC)),
   },
   glass: {
@@ -412,6 +555,13 @@ export const ENTITY_DEFS: { [K in EntityKind]: EntityDef<K> } = {
       points: glassPoints(glass),
       rotation: glass.rotation,
     }),
+    // No settingsSchema: a polygon has nothing to configure. It moves,
+    // rotates and reshapes by its corners, all of which are gestures rather
+    // than fields.
+    panelHint: (mode) =>
+      mode === 'config'
+        ? 'Click to place each corner, right-click to finish at the last corner placed (the segment still following the cursor is dropped), Escape to discard. Segments snap to the 8 compass directions and are drawn one cell wide, so vessel walls always join cleanly at a corner. Click back on the first corner to close the shape into a sealed vessel, or stop short to leave a mouth.'
+        : "Drag any wall to slide the whole shape, drag a corner to reshape it, or rotate it with the scroll wheel over the grid (45-degree steps about its own middle). Whatever it was holding stays where it is, so a big turn can leave contents outside the new outline. The eraser won't touch it -- use Delete (or the button above) to take it off the bench.",
   },
 };
 
@@ -527,4 +677,20 @@ export function applyEntitySettings(entity: AnyEntity, settings: EntitySettingsW
 
 export function applyEntityAction(entity: AnyEntity, action: EntityAction): void {
   defOf(entity.kind).action?.(entity as never, action);
+}
+
+/** One kind's settings pane, as data -- empty for a kind with nothing to
+ * configure (see the glass row). */
+export function entitySettingsSchema(kind: EntityKind, mode: EntityPanelMode): readonly EntityField[] {
+  return defOf(kind).settingsSchema?.(mode) ?? [];
+}
+
+export function entityPanelHint(kind: EntityKind, mode: EntityPanelMode): string | null {
+  return defOf(kind).panelHint?.(mode) ?? null;
+}
+
+/** The schema values a placed entity reports live (see EntityDef.readoutsOf)
+ * -- layered over the edit draft for display, never written back to it. */
+export function entityReadouts(wire: EntityWire): Record<string, unknown> {
+  return defOf(wire.kind).readoutsOf?.(wire as never) ?? {};
 }

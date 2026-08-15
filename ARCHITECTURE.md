@@ -77,7 +77,13 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   grid to resolve a real footprint against. Everything generic about apparatus (the worker's protocol
   handlers, the compositor, selection, hit-testing, the handle overlay) dispatches through it, so adding
   a kind is one registry row plus the payload unions in `protocol.ts` — no new messages, no new selection
-  code. `hitTestEntities` lives here too, since "what did this click land on" is the registry's own
+  code — including its settings pane, which each kind declares as a `settingsSchema` of typed fields
+  (slider, segmented, species picker, chip list, readout, action) that side-panel.ts renders without
+  knowing which kind it is drawing. The same schema serves pre-placement config and selected-entity
+  editing, since the two differ only by the `mode` the kind is asked for; `readoutsOf` supplies the
+  values that come from the live instance rather than the edit draft (a funnel's dwindling budget), so
+  those tick with the sim instead of freezing when the entity was selected.
+  `hitTestEntities` lives here too, since "what did this click land on" is the registry's own
   question: nearest handle within grabbing distance wins, else the **smallest-area body** containing the
   point. That area rule is what keeps a funnel standing inside a big beaker clickable, and it replaced a
   hand-ordered funnel → knee → segment → filter → radiator → glass → flask chain that had to be

@@ -354,7 +354,8 @@ monotonicity); extend the fuzz suite with tube ops.
       (`entityId` is the one id on the wire); glass corners draggable; fuzz suite drives the registry
 - [x] Phase 3b: one selection/drag/hit-test path; generic handles overlay; `hitTestEntities` +
       `bodyCells`/`boundsOf`/`rotationOf` on the registry; one `EntityHit`; one wheel handler
-- [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
+- [x] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted;
+      Ctrl+D duplicate; pre-placement state unified into per-kind drafts
 - [x] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten
 - [x] Phase 6a: hover highlight + cursor
 - [x] Phase 6b: keyboard arrows/R/Esc (Ctrl+D duplicate deferred to phase 4, where one generic

@@ -727,9 +727,15 @@ body {
    so it has to be findable without scrolling past a kind's settings. Muted
    until hovered rather than permanently red -- it's a normal part of editing,
    not a scary one. */
-.entity-delete-btn {
-  width: 100%;
+.entity-action-row {
+  display: flex;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.entity-delete-btn,
+.entity-copy-btn {
+  flex: 1;
   padding: 7px 10px;
   border-radius: 8px;
   border: 1px solid var(--panel-border);
@@ -745,6 +751,13 @@ body {
   color: #ff9c9c;
   border-color: #ff9c9c;
   background: rgba(255, 90, 90, 0.08);
+}
+
+/* Duplicate is an ordinary edit, so it brightens rather than warning. */
+.entity-copy-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.1);
 }
 
 /* The folded dock's way back: one tab where the dock itself sits. */
