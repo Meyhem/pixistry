@@ -2,25 +2,16 @@
 // species on *its own* allow-list move into its cells -- everything else is
 // blocked exactly like a wall (see movement.ts's canEnterFiltered). There's
 // no per-tick step function: the gating happens inline in movement.ts, so
-// this module is just the instance model, the mask stamping, and the
-// id -> allow-list lookup movement reads.
+// this module is just the instance model and the line rasterization.
 //
-// Every filter line used to share one global allow-list, and drawn lines
-// weren't tracked at all -- grid.filterMask was a plain 0/1 flag, so once a
-// line was on the grid there was nothing left to select, re-configure or
-// move. A line is a tracked instance now, the same way funnels/tubes/flasks
-// are, and filterMask carries the *owning instance's id* instead of a flag
-// (0 still means "no filter here", so movement's fast path is unchanged).
-// That's what makes two membranes on one bench able to pass different
-// species -- the whole point of a filter you can place more than one of.
-//
-// Ids are 1-based and capped at MAX_FILTER_ID because the mask is a
-// Uint8Array; freed ids are reused (see allocateFilterId), so a session that
-// draws and erases filters all day never runs out.
-//
-// Nothing here writes grid.filterMask: the membrane cells a line declares are
-// its footprint, and the compositor (entity-composite.ts) is what puts them
-// on the grid.
+// A membrane cell is marked on the grid purely by ownership: the compositor
+// (entity-composite.ts) claims the line's cells in grid.entityOwner, and
+// movement looks the owning entity's allow-list up in a per-tick
+// entityId -> allow-list map (see filterAllowMap). There used to be a
+// separate grid.filterMask carrying a per-kind instance id -- a Uint8Array,
+// which meant a 255-line cap, an id allocator, and id reuse that could hand a
+// freshly drawn line a stale selection's id. All of that fell away when the
+// owner mask (which every entity already has) became the lookup key.
 import { nextEntityId } from './entity-id';
 import { sinkLineCells } from './sink';
 import { pointSegmentDistance } from './tube-shapes';
@@ -28,15 +19,10 @@ import { pointSegmentDistance } from './tube-shapes';
 export const FILTER_LABEL = 'Filter';
 export const FILTER_COLOR = '#8ce096';
 
-/** Uint8Array mask, and 0 is "no filter" -- so 254 lines can coexist. */
-export const MAX_FILTER_ID = 255;
-
 export interface FilterInstance {
-  readonly id: number;
-  /** Placement order across every apparatus kind -- see entity-id.ts. Note
-   * this is not `id`: `id` is what grid.filterMask carries per cell (a
-   * Uint8Array, hence the 255 cap and the reuse), and is retired in favor of
-   * entityOwner in a later phase. */
+  readonly kind: 'filter';
+  /** Placement order across every apparatus kind -- see entity-id.ts. Also
+   * the id movement.ts's allow-list map is keyed by, via grid.entityOwner. */
   readonly entityId: number;
   x0: number;
   y0: number;
@@ -49,28 +35,19 @@ export interface FilterInstance {
   species: Set<number>;
 }
 
-/** What movement.ts consults per filtered cell: mask value (instance id) ->
- * that instance's allow-list. Built once per tick from the live instance
- * list (see worker.ts), so movement never has to search an array. */
+/** What movement.ts consults per owned cell: entityId -> that filter's
+ * allow-list. Built once per tick from the live instance list (see
+ * worker.ts), so movement never has to search an array. A cell whose owner
+ * isn't in the map isn't a membrane at all (it's some other apparatus's
+ * glass), and passes the check untouched. */
 export type FilterAllow = ReadonlyMap<number, ReadonlySet<number>>;
 
 export const NO_FILTERS: FilterAllow = new Map();
 
 export function filterAllowMap(filters: readonly FilterInstance[]): FilterAllow {
   const map = new Map<number, ReadonlySet<number>>();
-  for (const filter of filters) map.set(filter.id, filter.species);
+  for (const filter of filters) map.set(filter.entityId, filter.species);
   return map;
-}
-
-/** Lowest id not currently in use, or null when all 255 are taken (at which
- * point drawing another line is refused rather than silently stealing an
- * existing line's cells). */
-function allocateFilterId(filters: readonly FilterInstance[]): number | null {
-  const used = new Set(filters.map((f) => f.id));
-  for (let id = 1; id <= MAX_FILTER_ID; id++) {
-    if (!used.has(id)) return id;
-  }
-  return null;
 }
 
 /** The cells a filter line covers: the bare Bresenham core, one cell wide
@@ -80,12 +57,8 @@ export function filterLineCells(filter: FilterInstance): { x: number; y: number 
   return sinkLineCells(filter.x0, filter.y0, filter.x1, filter.y1, 0);
 }
 
-export function placeFilterInstance(filters: FilterInstance[], x0: number, y0: number, x1: number, y1: number, species: readonly number[]): FilterInstance | null {
-  const id = allocateFilterId(filters);
-  if (id === null) return null;
-  const filter: FilterInstance = { id, entityId: nextEntityId(), x0, y0, x1, y1, species: new Set(species) };
-  filters.push(filter);
-  return filter;
+export function placeFilterInstance(x0: number, y0: number, x1: number, y1: number, species: readonly number[]): FilterInstance {
+  return { kind: 'filter', entityId: nextEntityId(), x0, y0, x1, y1, species: new Set(species) };
 }
 
 /** Slides a whole line by (dx, dy), keeping its length and angle. */

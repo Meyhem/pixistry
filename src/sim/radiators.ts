@@ -40,7 +40,7 @@ export const RADIATOR_COLOR = 'linear-gradient(135deg, #ff9d5c 0%, #5cc8ff 100%)
 const MAX_RADIATION_REACH = 255;
 
 export interface RadiatorInstance {
-  readonly id: number;
+  readonly kind: 'radiator';
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   x0: number;
@@ -59,14 +59,6 @@ export interface RadiatorInstance {
    * campaign heaters have to be real tracked instances or the first
    * recomposite would wipe them off the bench (see scenario.ts). */
   width: number;
-}
-
-let nextRadiatorId = 1;
-
-/** Test-only: makes ids deterministic across test files (same reason as
- * flask.ts's resetFlaskIds). */
-export function resetRadiatorIds(): void {
-  nextRadiatorId = 1;
 }
 
 /** The emitting cells themselves -- the drawn line, thickened by the
@@ -100,7 +92,7 @@ export interface RadiatorPlacement {
 
 export function placeRadiatorInstance(placement: RadiatorPlacement): RadiatorInstance {
   return {
-    id: nextRadiatorId++,
+    kind: 'radiator',
     entityId: nextEntityId(),
     x0: placement.x0,
     y0: placement.y0,

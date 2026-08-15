@@ -1,12 +1,11 @@
 // The one place apparatus becomes grid state.
 //
-// Every placed apparatus (funnel, tube, flask, filter, radiator, glass
-// polygon) declares a Footprint -- which cells are its glass, its lumen, its
-// membrane, its radiating cells -- and this module
-// derives ALL of that grid state from the instance list in one pass: wipe the
-// derived arrays, then stamp every entity in placement order. An edit is
-// "mutate the instance, then recomposite"; there is no incremental unstamp
-// anywhere in src/sim anymore.
+// Every placed apparatus declares a Footprint (see entity.ts) -- which cells
+// are its glass, its lumen, its membrane, its radiating cells -- and this
+// module derives ALL of that grid state from the entity list in one pass:
+// wipe the derived arrays, then stamp every entity in placement order. An
+// edit is "mutate the instance, then recomposite"; there is no incremental
+// unstamp anywhere in src/sim anymore.
 //
 // That's a deliberate replacement for three coexisting schemes that each
 // tried to reconstruct overlap correctness locally -- a "put back whatever
@@ -25,62 +24,20 @@
 // is never cleared -- a vessel's contents survive the vessel being resized,
 // moved or deleted.
 import { PhaseCode, TubeMaskValue, type SimGrid } from './grid';
-import { filterLineCells, type FilterInstance } from './filter';
-import { flaskFootprint, type FlaskInstance } from './flask';
-import { funnelGlassCells, type FunnelInstance } from './funnel';
-import { glassCells, type GlassInstance } from './glass';
+import { footprintOfEntity, type AnyEntity, type Footprint } from './entity';
 import { glassWallEnergyAtAmbient } from './heat';
-import { radiatorStamp, type RadiatorInstance } from './radiators';
 import type { SpeciesTable } from './species';
-import { tubeGlassCells, tubeLumenCells, type TubeInstance } from './tube';
 import type { Point } from './tube-shapes';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 
-/** What one entity puts on the grid. Every field is optional; a kind fills in
- * only the roles it has (a filter is nothing but a membrane, a flask is just
- * walls, a tube is walls plus the channel bored through them). */
-export interface Footprint {
-  /** Real glass wall matter in specId. Claims the cell (grid.entityOwner). */
-  readonly wall?: readonly Point[];
-  /** A bored channel: clears any wall matter in the way and flags the cell
-   * as tube cargo space (TubeMaskValue.Lumen). */
-  readonly lumen?: readonly Point[];
-  /** Filter membrane cells; `maskValue` is the owning line's per-cell id, the
-   * one movement.ts looks an allow-list up by (see filter.ts). */
-  readonly membrane?: { readonly cells: readonly Point[]; readonly maskValue: number };
-  /** Cells that radiate, and how far/toward what (see radiators.ts). */
-  readonly radiator?: { readonly cells: readonly Point[]; readonly radius: number; readonly targetK: number };
-}
-
-/** Everything on the bench. The lists stay per-kind for now; phase 3 of the
- * overhaul plan collapses them into one `entities: AnyEntity[]`. */
-export interface PlacedEntities {
-  readonly funnels: readonly FunnelInstance[];
-  readonly tubes: readonly TubeInstance[];
-  readonly flasks: readonly FlaskInstance[];
-  readonly filters: readonly FilterInstance[];
-  readonly radiators: readonly RadiatorInstance[];
-  readonly glass: readonly GlassInstance[];
-}
-
-export const NO_ENTITIES: PlacedEntities = { funnels: [], tubes: [], flasks: [], filters: [], radiators: [], glass: [] };
+export const NO_ENTITIES: readonly AnyEntity[] = [];
 
 /** Every placed entity's footprint, in the order the compositor stamps them:
  * ascending entityId, i.e. the order they were placed on the bench. That's
  * what makes "who wins where two footprints overlap" a stable property of the
  * bench rather than of whichever apparatus was edited most recently. */
-export function entityFootprints(placed: PlacedEntities): { entityId: number; footprint: Footprint }[] {
-  const out: { entityId: number; footprint: Footprint }[] = [];
-  for (const f of placed.funnels) out.push({ entityId: f.entityId, footprint: { wall: funnelGlassCells(f) } });
-  for (const t of placed.tubes) {
-    out.push({ entityId: t.entityId, footprint: { wall: tubeGlassCells(t), lumen: tubeLumenCells(t) } });
-  }
-  for (const f of placed.flasks) out.push({ entityId: f.entityId, footprint: { wall: flaskFootprint(f).wallCells } });
-  for (const f of placed.filters) {
-    out.push({ entityId: f.entityId, footprint: { membrane: { cells: filterLineCells(f), maskValue: f.id } } });
-  }
-  for (const r of placed.radiators) out.push({ entityId: r.entityId, footprint: { radiator: radiatorStamp(r) } });
-  for (const g of placed.glass) out.push({ entityId: g.entityId, footprint: { wall: glassCells(g) } });
+export function entityFootprints(entities: readonly AnyEntity[]): { entityId: number; footprint: Footprint }[] {
+  const out = entities.map((entity) => ({ entityId: entity.entityId, footprint: footprintOfEntity(entity) }));
   out.sort((a, b) => a.entityId - b.entityId);
   return out;
 }
@@ -89,18 +46,17 @@ function indexOf(grid: SimGrid, p: Point): number | null {
   return grid.inBounds(p.x, p.y) ? grid.index(p.x, p.y) : null;
 }
 
-/** Re-derives every apparatus-owned cell on the grid from `placed`. Safe to
+/** Re-derives every apparatus-owned cell on the grid from `entities`. Safe to
  * call as often as you like: running it twice in a row leaves the grid
  * byte-identical (entity-composite.test.ts asserts that), which is what lets
  * every message handler simply mutate an instance and composite afterwards
  * without reasoning about what the edit disturbed. */
-export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: PlacedEntities): void {
+export function compositeEntities(grid: SimGrid, species: SpeciesTable, entities: readonly AnyEntity[]): void {
   // The masks are 100% apparatus-derived, so they're wiped wholesale rather
   // than per-owner -- cheaper than a scan, and it means a stale mask cell can
   // never outlive the entity that set it (the "invisible barrier belonging to
   // a tube that no longer exists" bug, made unrepresentable).
   grid.tubeMask.fill(0);
-  grid.filterMask.fill(0);
   grid.radiatorRadius.fill(0);
   grid.radiatorTargetK.fill(0);
 
@@ -118,7 +74,8 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
 
   const wallU = glassWallEnergyAtAmbient(species);
   const lumenCells: number[] = [];
-  for (const { entityId, footprint } of entityFootprints(placed)) {
+  const membraneCells: { entityId: number; cells: number[] }[] = [];
+  for (const { entityId, footprint } of entityFootprints(entities)) {
     for (const cell of footprint.wall ?? []) {
       const i = indexOf(grid, cell);
       if (i === null) continue;
@@ -137,10 +94,14 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
     }
     const membrane = footprint.membrane;
     if (membrane) {
-      for (const cell of membrane.cells) {
+      const cells: number[] = [];
+      for (const cell of membrane) {
         const i = indexOf(grid, cell);
-        if (i !== null) grid.filterMask[i] = membrane.maskValue;
+        if (i !== null) cells.push(i);
       }
+      // Deferred to the tail of the composite (after boring and stale-glass
+      // cleanup) -- see below for why a membrane can't claim mid-pass.
+      membraneCells.push({ entityId, cells });
     }
     const radiator = footprint.radiator;
     if (radiator) {
@@ -173,5 +134,27 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
   // removed tube's lumen) stays exactly where it is.
   for (const i of previouslyOwned) {
     if (grid.entityOwner[i] === 0 && grid.specId[i] === GLASS_WALL_SPEC_ID) grid.clearAt(i);
+  }
+
+  // A membrane's grid presence is nothing but ownership: movement.ts looks
+  // the owning filter's allow-list up by grid.entityOwner (there is no
+  // separate per-cell filter-id array anymore -- see filter.ts). Claimed
+  // last, and only at cells that aren't glass, for two reasons that are
+  // really one -- glass provenance is tracked through ownership, so a
+  // membrane holding the owner slot at a glass cell would corrupt it either
+  // way it broke: claim a *painted* glass cell and the next composite's
+  // stale-glass pass eats the player's wall; claim a *vessel's* glass cell
+  // and deleting that vessel leaves its glass orphaned there forever (the
+  // membrane's claim keeps shielding it from the cleanup above). Skipping
+  // glass costs nothing: a glass cell blocks movement outright, so an
+  // allow-list lookup there could never matter, and the moment the glass
+  // goes away a recomposite hands the bare cell to the membrane. Painted
+  // non-glass walls are skipped for the same shape of reason: an owned wall
+  // cell is eraser-proof (see worker.ts's 'erase'), and a membrane must not
+  // make the player's own painted wall undeletable.
+  for (const { entityId, cells } of membraneCells) {
+    for (const i of cells) {
+      if (!isWallSpecId(grid.specId[i] as number)) grid.entityOwner[i] = entityId;
+    }
   }
 }

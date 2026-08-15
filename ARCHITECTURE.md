@@ -63,18 +63,30 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   differ from a species' `phaseAtSTP` once a cell has been heated or cooled, and both movement and
   conduction read/write it directly rather than re-deriving it from the species table each time. There is
   no pressure/mole-count field: a gas cell is just a cell with `PhaseCode.Gas`, same as any other phase.
-  Alongside those three, a set of overlay arrays: `radiatorRadius`/`radiatorTargetK`, `tubeMask`,
-  `filterMask` and `entityOwner` are all *derived* from the apparatus instance lists (see
+  Alongside those three, a set of overlay arrays: `radiatorRadius`/`radiatorTargetK`, `tubeMask` and
+  `entityOwner` are all *derived* from the apparatus entity list (see
   `entity-composite.ts`), while `stirrerMask`, `sinkMask` and `catalystStrength` are painted terrain the
-  player owns and nothing derives.
-- **`entity-composite.ts`** / **`entity-id.ts`** — the one place apparatus becomes grid state. Every
-  placed apparatus declares a `Footprint` (which cells are its glass, its lumen, its membrane, a vessel's
-  interior, its radiating cells) and `compositeEntities` derives all of that in one pass: wipe the derived
-  arrays, then stamp every entity in placement order (ascending `entityId`, one monotonic never-reused
-  counter shared by all six kinds — a per-kind id can't order a tube against a flask). An edit is "mutate
+  player owns and nothing derives. There is no per-cell filter array: a membrane cell is simply a cell
+  whose `entityOwner` names a filter entity (see `filter.ts`).
+- **`entity.ts`** / **`entity-id.ts`** — the one entity vocabulary. Every apparatus kind (funnel, tube,
+  flask, filter, radiator, glass polygon) carries a `kind` discriminant, `AnyEntity` is their union, and
+  `ENTITY_DEFS` is a registry of one small `EntityDef` per kind — `footprintOf`, `handlesOf` (over the
+  wire snapshot, for the UI), `dragHandle`, `move`, optional `rotate`, `place`, `toWire`, optional
+  `applySettings`/`action`. Everything generic about apparatus (the worker's protocol handlers, the
+  compositor, the UI's handle overlay) dispatches through it, so adding a kind is one registry row plus
+  the payload unions in `protocol.ts` — no new messages, no new selection code. `entityId` is one
+  monotonic never-reused counter shared by every kind (a per-kind id can't order a tube against a flask),
+  and is also the id everything on the wire addresses.
+- **`entity-composite.ts`** — the one place apparatus becomes grid state. Every placed apparatus declares
+  a `Footprint` (which cells are its glass, its lumen, its membrane, its radiating cells) and
+  `compositeEntities` derives all of that in one pass: wipe the derived arrays, then stamp every entity in
+  placement order (ascending `entityId`). An edit is "mutate
   the instance, then recomposite"; there is no incremental unstamp anywhere in `src/sim`. `entityOwner`
-  records one owner per glass cell, which is what lets the final pass clear exactly the glass no live
-  entity claims while never touching the player's own paint.
+  records one owner per apparatus cell, which is what lets the final pass clear exactly the glass no live
+  entity claims while never touching the player's own paint. A membrane's grid presence is *nothing but*
+  ownership, claimed last and only at non-wall cells — a glass cell blocks outright anyway, and a
+  membrane holding the owner slot at a glass cell would either orphan a deleted vessel's glass or eat the
+  player's painted wall on the next composite.
 
   This replaced three coexisting schemes that each reconstructed overlap correctness locally — a "put back
   whatever went empty" repair pass wrapped around every edit, per-kind crossing rules inside
@@ -87,9 +99,10 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   otherwise plug the conveyor with its own glass), and boring deliberately doesn't claim the cell, so
   moving the tube away heals the hole. `entity-composite.test.ts` pins the invariants and
   `entity-fuzz.test.ts` is the standing net: random place/move/reshape/delete across all six kinds,
-  re-checking idempotence, owner/instance consistency and orphan-free overlays after every single op. It
-  found a live `moveTubeSegment` hang on its first run. Entity bugs get fixed *with* a new op or invariant
-  there, not just a targeted unit test.
+  driven through `entity.ts`'s generic dispatchers (the same surface the worker's protocol handlers
+  call), re-checking idempotence, owner/instance consistency and orphan-free overlays after every single
+  op. It found a live tube segment-drag hang on its first run. Entity bugs get fixed *with* a new op or
+  invariant there, not just a targeted unit test.
 - **`species.ts`** — `SpeciesTable`: a thin, eager wrapper directly over `species-data.ts`'s `SPECIES`
   array (no interning — specIds are just array indices), exposing `phaseOf`, `densityOf`, and `thermalOf`
   (a `ThermalProfile`: melt/boil points in K, specific heat and thermal conductivity per phase, latent
@@ -199,22 +212,26 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   nothing on screen to explain it. A mouth that only takes what arrives at it needs no hold at all, so
   that whole bug class is gone rather than patched: matter the tube refuses simply falls past.
 
-  Editing a placed tube (dragging a knee or a whole segment with the select-apparatus tool) always keeps
-  every segment octant-aligned, even though a dragged knee generally can't land on an octant ray from both
+  Editing a placed tube follows the shared entity vocabulary: its knees are its handles (dragged one at a
+  time via `dragEntityHandle`), and grabbing anywhere else on it slides the whole tube (`moveEntity`) —
+  there is no per-segment drag. A dragged knee always keeps every segment octant-aligned, even though it
+  generally can't land on an octant ray from both
   its fixed neighbors at once — `resolveKneePosition` brute-forces the 8x8 direction-pair combinations and
   picks the valid intersection closest to the cursor. A drag that would still land off-axis is refused
   outright (`hasDegenerateSegment`), and `polylineToLumenPath` derives its step count up front rather than
   walking until it happens to arrive, so a misaligned pair can't spin forever and take the worker with it.
 - **`filter.ts`** — the filter apparatus: a one-cell-wide membrane line that only lets the species on its
   own allow-list move into its cells, blocking everything else exactly like glass. There's no per-tick
-  step function — the gating happens inline in `movement.ts`'s `canEnterFiltered` — so the module is just
-  the instance model plus mask stamping. `grid.filterMask` holds the *owning line's instance id* (0 still
-  meaning "no filter", so movement's fast path is one array read), which is what lets two membranes on one
-  bench pass different species; `stepMovement` takes an id → allow-list map built fresh each tick from the
-  live instance list. Ids are 1-based, capped by the Uint8 mask, and reused once freed. This replaced a
-  design where every line shared one global allow-list and drawn lines weren't tracked at all
-  (`filterMask` was a 0/1 flag), which meant a placed filter could never be selected, reconfigured or
-  moved.
+  step function — the gating happens inline in `movement.ts`'s `canEnterFiltered` — and no per-cell
+  filter array either: a membrane cell is marked purely by `grid.entityOwner` naming the line's
+  `entityId` (0 still meaning "nothing here", so movement's fast path is one array read), and
+  `stepMovement` takes an entityId → allow-list map built fresh each tick from the live instance list.
+  That is what lets two membranes on one bench pass different species. The owner-based lookup replaced a
+  dedicated `grid.filterMask` carrying per-kind instance ids — a Uint8Array, which meant a 255-line cap,
+  an id allocator, and freed-id reuse that could hand a fresh line a stale selection's id; all of it fell
+  away when the owner mask every entity already has became the key. (The frame message still carries a
+  0/1 `filterMask` render hint, derived per frame from the owners, so the renderer can tint membranes
+  without knowing about entities.)
 - **`radiators.ts`** — the radiator apparatus: the two per-cell fields above are what the physics reads,
   and this module is the tracked instance list layered over them — a drawn line remembers its own
   endpoints, reach and target so the select tool can slide it, drag either end to re-aim it, or edit its
@@ -235,15 +252,19 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   messages carry only a `specId`; the worker derives the painted cell's initial `U`/phase from ambient
   temperature via `heat.ts`. A radiator is placed via a separate `paintRadiatorLine` message into
   `grid.radiatorRadius`/`radiatorTargetK` instead, since it's a non-physical overlay, not a wall specId.
-  Alongside the grid it holds one instance list per placeable apparatus (funnels, tubes, flasks, filters,
-  radiators, glass polygons) — the grid says what each cell *does*, never which drag put it there, so
-  those lists are what makes any of it selectable, movable and editable after the fact. Every handler that
+  Alongside the grid it holds ONE `entities: AnyEntity[]` list for every placeable apparatus kind — the
+  grid says what each cell *does*, never which drag put it there, so that list is what makes any of it
+  selectable, movable and editable after the fact. Apparatus speaks one generic protocol
+  (`placeEntity`/`moveEntity`/`dragEntityHandle`/`rotateEntity`/`updateEntitySettings`/`entityAction`/
+  `deleteEntity`, each addressing an `entityId`, with per-kind payloads as tagged unions), dispatched
+  through `entity.ts`'s registry rather than per-kind handlers, and frames carry the whole bench back as
+  one `entities: EntityWire[]` list. Every handler that
   touches an instance goes through `mutateEntities`, which runs the edit and then re-derives the grid from
-  those lists; nothing else writes apparatus state. Apparatus is indestructible: `erase` takes matter and
+  the list; nothing else writes apparatus state. Apparatus is indestructible: `erase` takes matter and
   painted terrain only (it skips any cell an entity owns), and the sole way something leaves the bench is
-  `deleteApparatus`, which the Select tool sends from its Delete key or its panel button. Scenario setup
-  places real tracked flasks/funnels/radiators for the same reason — an untracked one-shot stamp would
-  vanish on the first recomposite.
+  `deleteEntity`, which the Select tool sends from its Delete key or its panel button. Scenario setup
+  places real tracked flasks/funnels/radiators into the same list for the same reason — an untracked
+  one-shot stamp would vanish on the first recomposite.
   M4 adds: `step` (advance exactly one tick while paused, for single-stepping), `setSpeed` (0.25x-4x —
   implemented as a fractional tick accumulator so ticks stay whole and deterministic rather than scaling
   `TICK_MS`, which would make the swap-probability-per-tick physics run at different real rates instead of

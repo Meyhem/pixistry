@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
-import { glassCells, glassPoints, moveGlassInstance, placeGlassInstance, resetGlassIds, rotateGlassInstance, type GlassInstance } from './glass';
+import { describe, expect, it } from 'vitest';
+import { compositeEntities } from './entity-composite';
+import { glassCells, glassPoints, moveGlassInstance, placeGlassInstance, rotateGlassInstance, type GlassInstance } from './glass';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
@@ -21,7 +21,7 @@ const CORNER = [
  * grid. Every assertion here composites the whole bench first, exactly like
  * worker.ts's mutateEntities does after each message. */
 function sync(grid: SimGrid, instances: readonly GlassInstance[]): void {
-  compositeEntities(grid, species, { ...NO_ENTITIES, glass: instances });
+  compositeEntities(grid, species, instances);
 }
 
 function isGlassAt(grid: SimGrid, x: number, y: number): boolean {
@@ -29,16 +29,12 @@ function isGlassAt(grid: SimGrid, x: number, y: number): boolean {
 }
 
 describe('glass polygon instances', () => {
-  beforeEach(() => {
-    resetGlassIds();
-  });
-
   it('stamps every rasterized cell of the drawn chain as glass', () => {
     const grid = new SimGrid(40, 40);
     const instance = placeGlassInstance(CORNER);
     sync(grid, [instance]);
 
-    expect(instance.id).toBe(1);
+    expect(instance.entityId).toBeGreaterThan(0);
     expect(isGlassAt(grid, 10, 10)).toBe(true);
     expect(isGlassAt(grid, 13, 10)).toBe(true); // mid-segment
     expect(isGlassAt(grid, 16, 16)).toBe(true);

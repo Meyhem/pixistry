@@ -34,17 +34,21 @@ type TargetStatus =
   | { kind: 'empty' }
   | { kind: 'occupied'; specId: number; phase: PhaseCode };
 
-/** A cell covered by a filter line (grid.filterMask holds that line's
- * instance id -- see filter.ts) is only a valid destination for species on
- * *that line's* allow-list; for every other species it's blocked exactly
- * like a wall, regardless of whether the cell is itself empty or occupied.
- * A cell with no filter drawn (mask is 0) is always unaffected, which is the
- * overwhelmingly common case and stays a single array read. An id with no
- * matching instance blocks everything, same as an empty allow-list. */
+/** A cell owned by a filter entity (grid.entityOwner holds the owning
+ * entityId, and `filterAllow` maps filter entityIds to their allow-lists --
+ * see filter.ts) is only a valid destination for species on *that line's*
+ * allow-list; for every other species it's blocked exactly like a wall,
+ * regardless of whether the cell is itself empty or occupied. An unowned
+ * cell (owner 0) is always unaffected, which is the overwhelmingly common
+ * case and stays a single array read; a cell owned by some *other* apparatus
+ * (its glass or its walls) isn't a membrane and also passes untouched --
+ * whatever blocks there blocks by being wall matter, not by filtering. */
 function canEnterFiltered(grid: SimGrid, filterAllow: FilterAllow, targetIdx: number, fromSpecId: number): boolean {
-  const filterId = grid.filterMask[targetIdx] as number;
-  if (filterId === 0) return true;
-  return filterAllow.get(filterId)?.has(fromSpecId) ?? false;
+  const owner = grid.entityOwner[targetIdx] as number;
+  if (owner === 0) return true;
+  const allow = filterAllow.get(owner);
+  if (!allow) return true;
+  return allow.has(fromSpecId);
 }
 
 /** The shared head of canDisplace/canRiseThroughLiquid below: a tube's

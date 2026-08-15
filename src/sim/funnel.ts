@@ -20,7 +20,7 @@ export const FUNNEL_LABEL = 'Addition Funnel';
 export const FUNNEL_COLOR = '#a9d6e8'; // same glass tint the funnel is built from
 
 export interface FunnelInstance {
-  readonly id: number;
+  readonly kind: 'funnel';
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   anchorX: number;
@@ -62,8 +62,6 @@ export function rateFromIntervalTicks(intervalTicks: number): number {
   return TICKS_PER_MINUTE / Math.max(1, intervalTicks);
 }
 
-let nextFunnelId = 1;
-
 export interface FunnelPlacement {
   readonly x: number;
   readonly y: number;
@@ -79,7 +77,7 @@ export interface FunnelPlacement {
  * the bench (see entity-composite.ts), not from here. */
 export function placeFunnelInstance(placement: FunnelPlacement): FunnelInstance {
   return {
-    id: nextFunnelId++,
+    kind: 'funnel',
     entityId: nextEntityId(),
     anchorX: placement.x,
     anchorY: placement.y,

@@ -59,24 +59,14 @@ export class SimGrid {
    * whatever liquid/gas cells sit inside it. */
   readonly stirrerMask: Uint8Array;
   /** Conveyor-tube overlay -- same "fixed background field, not matter"
-   * convention as radiatorRadius/stirrerMask above: painted once by
-   * placeTubeInstance/moveTubeKnee/moveTubeSegment (see tube.ts), left
+   * convention as radiatorRadius/stirrerMask above: derived from the placed
+   * tube instances by the compositor (see entity-composite.ts), left
    * untouched by set/clear/swap, and read every tick by both movement.ts
    * (a lumen cell is never a valid destination for ordinary falling-sand
    * movement -- only stepTubes moves matter along it) and tube.ts's
    * stepTubes (which walks the channel and draws matter in at the mouth).
    * TubeMaskValue.None everywhere a tube isn't drawn. */
   readonly tubeMask: Uint8Array;
-  /** Filter apparatus overlay -- same "fixed background field, not matter"
-   * convention as stirrerMask/tubeMask above: painted by the filter tool's
-   * one-cell-wide line drag (see worker.ts's 'paintFilterLine' handler) into a per-cell flag
-   * (nonzero = a filter membrane occupies this cell), left untouched by
-   * set/clear/swap, and read every tick by movement.ts to gate entry: a
-   * filtered cell is a valid destination only for species in the current
-   * global filter allow-list (see worker.ts's filterAllowSpecies), exactly
-   * like a wall otherwise. Unlike tubeMask there's no "kind" distinction --
-   * every filtered cell behaves the same regardless of what's drawn there. */
-  readonly filterMask: Uint8Array;
   /** Sink/Vent apparatus overlay -- same "fixed background field, not matter"
    * convention as the masks above: painted once by a drawn sink or vent line
    * (see worker.ts's 'paintSinkLine' handler), left untouched by
@@ -105,13 +95,16 @@ export class SimGrid {
   /** Which placed apparatus owns each cell -- 0 = nobody, otherwise the
    * owning instance's `entityId` (see entity-id.ts). This is the bookkeeping
    * that makes apparatus overlap safe: every cell an entity's footprint
-   * covers (its glass, its lumen, its membrane) is
+   * covers (its glass, its membrane) is
    * marked with that entity's id, so entity-composite.ts can clear *exactly*
    * the apparatus-derived state on the grid and re-derive all of it from the
-   * instance list, without touching a single cell the player painted.
+   * instance list, without touching a single cell the player painted. It's
+   * also how a filter membrane exists on the grid at all: movement.ts looks
+   * a cell's owner up in a per-tick entityId -> allow-list map (see
+   * filter.ts's FilterAllow) -- there is no separate filter mask array.
    *
    * The rule that makes it work: the compositor is the only code that writes
-   * this array, apparatus glass, tubeMask, filterMask or the
+   * this array, apparatus glass, tubeMask or the
    * radiator fields. Nothing incrementally unstamps anything anymore -- the
    * three separate schemes that used to reconstruct overlap correctness
    * (a "put back what went empty" repair pass, per-kind crossing rules, and
@@ -130,7 +123,6 @@ export class SimGrid {
     this.radiatorTargetK = new Float32Array(size);
     this.stirrerMask = new Uint8Array(size);
     this.tubeMask = new Uint8Array(size);
-    this.filterMask = new Uint8Array(size);
     this.sinkMask = new Uint8Array(size);
     this.catalystStrength = new Uint8Array(size);
     this.entityOwner = new Uint32Array(size);
@@ -183,7 +175,6 @@ export class SimGrid {
     this.radiatorTargetK.fill(0);
     this.stirrerMask.fill(0);
     this.tubeMask.fill(0);
-    this.filterMask.fill(0);
     this.sinkMask.fill(0);
     this.catalystStrength.fill(0);
     this.entityOwner.fill(0);

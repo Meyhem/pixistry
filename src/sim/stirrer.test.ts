@@ -104,7 +104,7 @@ describe('stepStirrers', () => {
     const hydrogen = findEntry(palette, 'H2');
 
     const grid = new SimGrid(60, 60);
-    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: true, kind: 'beaker' });
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: true, flaskKind: 'beaker' });
     const inside = flaskFootprint(flask).reservoirCells.filter((c) => grid.inBounds(c.x, c.y));
     expect(inside.length).toBeGreaterThan(4);
     inside.forEach((cell, i) => {
@@ -126,7 +126,7 @@ describe('stepStirrers', () => {
     const water = findEntry(palette, 'H2O');
 
     const grid = new SimGrid(60, 60);
-    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: false, kind: 'beaker' });
+    const flask = placeFlaskInstance({ x: 30, y: 40, facing: 'up', sizeScale: 2, stirred: false, flaskKind: 'beaker' });
     for (const cell of flaskFootprint(flask).reservoirCells) {
       if (grid.inBounds(cell.x, cell.y)) grid.set(cell.x, cell.y, water.specId, PhaseCode.Liquid);
     }

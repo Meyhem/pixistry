@@ -1,23 +1,30 @@
-// The select-apparatus tool's selection/drag state for every apparatus type
-// (funnel, tube, flask, filter, radiator, glass polygon) -- app.ts used to carry two parallel copies of the
-// same idea (selectedFunnelId/editDraft/lastFunnels/findFunnel/selectFunnel
-// vs selectedTubeId/tubeEditDraft/lastTubes/findTube/selectTube), plus two
-// copies of the "nearest match across every placed instance" hit-test loop
-// (hitTestTubeKnee/hitTestTubeSegment). This class owns both apparatus
-// types' selection/drag state and a single hitTest() returning a tagged
+// The select-apparatus tool's selection/drag state for every apparatus kind
+// (funnel, tube, flask, filter, radiator, glass polygon) -- app.ts used to
+// carry parallel per-kind copies of the same idea, plus per-kind copies of
+// the "nearest match across every placed instance" hit-test loop. This class
+// owns the selection/drag state and a single hitTest() returning a tagged
 // union telling the caller which kind of apparatus (if any) a click landed
-// on, so app.ts's pointerdown handler is one dispatch instead of three
-// sequential hit-tests with near-identical bodies.
+// on, so app.ts's pointerdown handler is one dispatch.
+//
+// Dragging speaks protocol v2's two verbs and nothing else: grab a *handle*
+// (a tube knee, a line end, a glass corner) and every pointermove sends an
+// absolute 'dragEntityHandle'; grab anything else and the whole entity
+// slides via relative 'moveEntity' deltas. One consequence worth naming: a
+// tube's segments are body now, so dragging one moves the whole tube --
+// reshaping is what its knee handles are for. (The old per-segment drag was
+// the one interaction with no protocol-v2 counterpart, and it mostly got
+// used accidentally when a knee grab missed.)
 import { funnelBounds, funnelShapeFor, type FunnelFacing } from '../sim/apparatus-shapes';
 import { flaskBounds, flaskShapeFor, type FlaskFacing, type FlaskKind } from '../sim/flask-shapes';
 import type {
-  FilterSnapshot,
-  FlaskSnapshot,
-  FunnelSnapshot,
-  GlassSnapshot,
+  EntityWire,
+  FilterWire,
+  FlaskWire,
+  FunnelWire,
+  GlassWire,
   MainToWorkerMessage,
-  RadiatorSnapshot,
-  TubeSnapshot,
+  RadiatorWire,
+  TubeWire,
 } from '../sim/protocol';
 import { nearestKneeIndex, nearestSegmentIndex, pointSegmentDistance, type Point } from '../sim/tube-shapes';
 
@@ -32,27 +39,36 @@ const TUBE_SEGMENT_HIT_RADIUS = 2;
 const FILTER_HIT_RADIUS = 2;
 // ...and its two ends get their own, slightly tighter, so grabbing an end
 // reshapes the line while grabbing anywhere else slides it whole. Same
-// knees-before-segments precedence a tube already has.
+// knees-before-segments precedence a tube already has. Glass corners use
+// this too -- a corner is a line end that happens to have two segments.
 const LINE_END_HIT_RADIUS = 2;
 // A glass polygon is a chain of one-cell-wide walls, hit-tested against its
 // segments so clicking anywhere along a wall picks the vessel up.
 const GLASS_HIT_RADIUS = 2;
 
 export type ApparatusHit =
-  | { kind: 'funnel'; id: number; anchorX: number; anchorY: number }
-  | { kind: 'tube-knee'; tubeId: number; kneeIndex: number }
-  | { kind: 'tube-segment'; tubeId: number; segIndex: number }
-  | { kind: 'flask'; id: number; anchorX: number; anchorY: number }
-  | { kind: 'filter'; id: number }
-  | { kind: 'filter-end'; id: number; endIndex: 0 | 1 }
-  | { kind: 'radiator'; id: number }
-  | { kind: 'radiator-end'; id: number; endIndex: 0 | 1 }
-  | { kind: 'glass'; id: number }
+  | { kind: 'funnel'; entityId: number }
+  | { kind: 'tube-knee'; entityId: number; kneeIndex: number }
+  | { kind: 'tube-segment'; entityId: number; segIndex: number }
+  | { kind: 'flask'; entityId: number }
+  | { kind: 'filter'; entityId: number }
+  | { kind: 'filter-end'; entityId: number; endIndex: 0 | 1 }
+  | { kind: 'radiator'; entityId: number }
+  | { kind: 'radiator-end'; entityId: number; endIndex: 0 | 1 }
+  | { kind: 'glass'; entityId: number }
+  | { kind: 'glass-corner'; entityId: number; cornerIndex: number }
   | { kind: 'none' };
 
+/** Which hits land on a draggable handle (an absolute 'dragEntityHandle'
+ * reshape) rather than a body (a relative 'moveEntity' slide) -- shared by
+ * beginSelection's drag arming and app.ts's hover cursor. */
+export function isHandleHit(hit: ApparatusHit): boolean {
+  return hit.kind === 'tube-knee' || hit.kind === 'filter-end' || hit.kind === 'radiator-end' || hit.kind === 'glass-corner';
+}
+
 /** A two-point line's ends, in the order their coordinates appear in the
- * snapshot -- shared by the filter and radiator hit tests, which are the same
- * test over two different snapshot shapes. */
+ * wire snapshot -- shared by the filter and radiator hit tests, which are the
+ * same test over two different snapshot shapes. */
 function lineEnds(line: { x0: number; y0: number; x1: number; y1: number }): [Point, Point] {
   return [
     { x: line.x0, y: line.y0 },
@@ -60,21 +76,21 @@ function lineEnds(line: { x0: number; y0: number; x1: number; y1: number }): [Po
   ];
 }
 
-function nearestLineEnd<T extends { id: number; x0: number; y0: number; x1: number; y1: number }>(
+function nearestLineEnd<T extends { entityId: number; x0: number; y0: number; x1: number; y1: number }>(
   lines: readonly T[],
   x: number,
   y: number,
-): { id: number; endIndex: 0 | 1 } | null {
+): { entityId: number; endIndex: 0 | 1 } | null {
   const candidates = lines.flatMap((line) =>
     lineEnds(line).flatMap((end, index) => {
       const dist = Math.hypot(end.x - x, end.y - y);
-      return dist <= LINE_END_HIT_RADIUS ? [{ value: { id: line.id, endIndex: index as 0 | 1 }, dist }] : [];
+      return dist <= LINE_END_HIT_RADIUS ? [{ value: { entityId: line.entityId, endIndex: index as 0 | 1 }, dist }] : [];
     }),
   );
   return bestByDistance(candidates);
 }
 
-function nearestLine<T extends { id: number; x0: number; y0: number; x1: number; y1: number }>(lines: readonly T[], x: number, y: number): T | null {
+function nearestLine<T extends { entityId: number; x0: number; y0: number; x1: number; y1: number }>(lines: readonly T[], x: number, y: number): T | null {
   const candidates = lines.flatMap((line) => {
     const [a, b] = lineEnds(line);
     const dist = pointSegmentDistance({ x, y }, a, b);
@@ -85,11 +101,10 @@ function nearestLine<T extends { id: number; x0: number; y0: number; x1: number;
 
 /** Local draft for the select-apparatus tool's funnel edit panel -- mirrors
  * a selected funnel's live config so every field edit (temp/rate/species/
- * total) sends a complete 'updateFunnel' message built from this draft
- * rather than from the worker's last snapshot, which only refreshes once
- * per frame and would otherwise let a second quick edit clobber the first.
- * Re-seeded from the snapshot whenever the selection changes (see
- * selectFunnel). */
+ * total) sends a complete settings message built from this draft rather
+ * than from the worker's last snapshot, which only refreshes once per frame
+ * and would otherwise let a second quick edit clobber the first. Re-seeded
+ * from the snapshot whenever the selection changes. */
 export interface FunnelEditDraft {
   specId: number;
   tempC: number;
@@ -102,15 +117,12 @@ export interface FunnelEditDraft {
 }
 
 /** Same role as FunnelEditDraft, but a tube's own points only ever change
- * through a knee/segment drag, never through this draft, so its allow-list
+ * through a knee/body drag, never through this draft, so its allow-list
  * is all that's left. */
 export interface TubeEditDraft {
   filter: Set<number> | null;
 }
 
-/** Same role again for a placed flask: every field edit re-sends the whole
- * config as one 'updateFlask', which re-stamps the vessel (see flask.ts's
- * updateFlaskInstance). */
 /** Same role again for a placed filter line: its allow-list is the only
  * thing editable (the line's own geometry only changes by dragging it), so
  * this is a single Set -- and unlike a tube's, never null: an empty filter
@@ -128,11 +140,14 @@ export interface RadiatorEditDraft {
   targetTempC: number;
 }
 
+/** Same role again for a placed flask: every field edit re-sends the whole
+ * config as one settings message, which re-stamps the vessel (see flask.ts's
+ * updateFlaskInstance). */
 export interface FlaskEditDraft {
   facing: FlaskFacing;
   sizeScale: number;
   stirred: boolean;
-  kind: FlaskKind;
+  flaskKind: FlaskKind;
 }
 
 function bestByDistance<T>(candidates: readonly { value: T; dist: number }[]): T | null {
@@ -144,12 +159,12 @@ function bestByDistance<T>(candidates: readonly { value: T; dist: number }[]): T
 }
 
 export class ApparatusSelection {
-  private funnels: readonly FunnelSnapshot[] = [];
-  private tubes: readonly TubeSnapshot[] = [];
-  private flasks: readonly FlaskSnapshot[] = [];
-  private filters: readonly FilterSnapshot[] = [];
-  private radiators: readonly RadiatorSnapshot[] = [];
-  private glass: readonly GlassSnapshot[] = [];
+  private funnels: readonly FunnelWire[] = [];
+  private tubes: readonly TubeWire[] = [];
+  private flasks: readonly FlaskWire[] = [];
+  private filters: readonly FilterWire[] = [];
+  private radiators: readonly RadiatorWire[] = [];
+  private glass: readonly GlassWire[] = [];
 
   selectedFunnelId: number | null = null;
   editDraft: FunnelEditDraft | null = null;
@@ -170,111 +185,71 @@ export class ApparatusSelection {
   selectedGlassId: number | null = null;
   glassRotationDraft: number | null = null;
 
-  // Drag-to-move/reshape state, mutually exclusive across the three kinds --
-  // set by beginSelection, read by continueDrag, cleared by endDrag.
-  // dragOffsetX/Y is the click point's offset from the funnel's anchor at
-  // grab time, so the funnel moves relative to where it was grabbed rather
-  // than snapping its anchor to the cursor. Segment dragging tracks the
-  // last processed cursor cell so each continueDrag call can send just the
-  // incremental delta since the previous one (moveTubeSegment applies a
-  // relative translation) -- knee dragging needs no such tracking since
-  // moveTubeKnee already takes an absolute target and re-resolves fully
-  // from the tube's current neighbor points every call.
-  private draggingFunnelId: number | null = null;
-  private dragOffsetX = 0;
-  private dragOffsetY = 0;
-  private draggingTubeKnee: number | null = null;
-  private draggingTubeSegment: number | null = null;
-  private tubeSegmentDragLastX = 0;
-  private tubeSegmentDragLastY = 0;
-  private draggingFlaskId: number | null = null;
-  private flaskDragOffsetX = 0;
-  private flaskDragOffsetY = 0;
-  // A filter line slides as a whole (moveFilter takes a relative
-  // translation), so it tracks the last processed cursor cell and sends the
-  // incremental delta, exactly like a tube segment does.
-  private draggingFilterId: number | null = null;
-  private filterDragLastX = 0;
-  private filterDragLastY = 0;
-  // A grabbed line *end* reshapes instead of sliding, so it sends an absolute
-  // target like a tube knee does rather than an incremental delta.
-  private draggingFilterEnd: 0 | 1 | null = null;
-  private draggingRadiatorId: number | null = null;
-  private draggingRadiatorEnd: 0 | 1 | null = null;
-  private radiatorDragLastX = 0;
-  private radiatorDragLastY = 0;
-  private draggingGlassId: number | null = null;
-  private glassDragLastX = 0;
-  private glassDragLastY = 0;
+  // Drag state, one pair for the whole bench: every body drag is the same
+  // relative 'moveEntity' (tracked against the last processed cursor cell so
+  // each continueDrag sends just the incremental delta), and every handle
+  // drag is the same absolute 'dragEntityHandle' (no tracking needed -- the
+  // worker re-resolves fully from the instance's current shape every call).
+  // Set by beginSelection, read by continueDrag, cleared by endDrag.
+  private draggingBodyId: number | null = null;
+  private bodyDragLastX = 0;
+  private bodyDragLastY = 0;
+  private draggingHandle: { entityId: number; handleId: number } | null = null;
 
   /** Refreshed once per incoming worker frame -- see app.ts's
-   * worker.onmessage 'frame' handler. */
-  setFunnels(funnels: readonly FunnelSnapshot[]): void {
-    this.funnels = funnels;
-  }
-
-  setTubes(tubes: readonly TubeSnapshot[]): void {
-    this.tubes = tubes;
-  }
-
-  setFlasks(flasks: readonly FlaskSnapshot[]): void {
-    this.flasks = flasks;
-  }
-
-  setFilters(filters: readonly FilterSnapshot[]): void {
-    this.filters = filters;
-  }
-
-  setRadiators(radiators: readonly RadiatorSnapshot[]): void {
-    this.radiators = radiators;
-  }
-
-  setGlass(glass: readonly GlassSnapshot[]): void {
-    this.glass = glass;
+   * worker.onmessage 'frame' handler. One list in, split per kind here,
+   * since the hit tests below are shape-specific. */
+  setEntities(entities: readonly EntityWire[]): void {
+    this.funnels = entities.filter((e): e is FunnelWire => e.kind === 'funnel');
+    this.tubes = entities.filter((e): e is TubeWire => e.kind === 'tube');
+    this.flasks = entities.filter((e): e is FlaskWire => e.kind === 'flask');
+    this.filters = entities.filter((e): e is FilterWire => e.kind === 'filter');
+    this.radiators = entities.filter((e): e is RadiatorWire => e.kind === 'radiator');
+    this.glass = entities.filter((e): e is GlassWire => e.kind === 'glass');
   }
 
   /** Every placed instance of each kind, for the select tool's handle
    * overlay -- it draws a grab dot on every knee/end/corner on the bench, not
    * just the selected one's, so what can be dragged is visible before you
    * click anything. */
-  allTubes(): readonly TubeSnapshot[] {
+  allTubes(): readonly TubeWire[] {
     return this.tubes;
   }
 
-  allFilters(): readonly FilterSnapshot[] {
+  allFilters(): readonly FilterWire[] {
     return this.filters;
   }
 
-  allRadiators(): readonly RadiatorSnapshot[] {
+  allRadiators(): readonly RadiatorWire[] {
     return this.radiators;
   }
 
-  allGlass(): readonly GlassSnapshot[] {
+  allGlass(): readonly GlassWire[] {
     return this.glass;
   }
 
-  findFunnel(id: number | null): FunnelSnapshot | undefined {
-    return id === null ? undefined : this.funnels.find((f) => f.id === id);
+  findFunnel(entityId: number | null): FunnelWire | undefined {
+    return entityId === null ? undefined : this.funnels.find((f) => f.entityId === entityId);
   }
 
-  findTube(id: number | null): TubeSnapshot | undefined {
-    return id === null ? undefined : this.tubes.find((t) => t.id === id);
+  findTube(entityId: number | null): TubeWire | undefined {
+    return entityId === null ? undefined : this.tubes.find((t) => t.entityId === entityId);
   }
 
-  findFlask(id: number | null): FlaskSnapshot | undefined {
-    return id === null ? undefined : this.flasks.find((f) => f.id === id);
+  findFlask(entityId: number | null): FlaskWire | undefined {
+    return entityId === null ? undefined : this.flasks.find((f) => f.entityId === entityId);
   }
 
-  findFilter(id: number | null): FilterSnapshot | undefined {
-    return id === null ? undefined : this.filters.find((f) => f.id === id);
+  findFilter(entityId: number | null): FilterWire | undefined {
+    return entityId === null ? undefined : this.filters.find((f) => f.entityId === entityId);
   }
 
-  findRadiator(id: number | null): RadiatorSnapshot | undefined {
-    return id === null ? undefined : this.radiators.find((r) => r.id === id);
+  findRadiator(entityId: number | null): RadiatorWire | undefined {
+    return entityId === null ? undefined : this.radiators.find((r) => r.entityId === entityId);
   }
 
-  findGlass(id: number | null): GlassSnapshot | undefined {
-    return id === null ? undefined : this.glass.find((g) => g.id === id);
+  findGlass(entityId: number | null): GlassWire | undefined {
+    return entityId === null ? undefined : this.glass.find((g) => g.entityId === entityId);
   }
 
   /** At most one apparatus is ever selected, so selecting any one kind
@@ -295,56 +270,56 @@ export class ApparatusSelection {
     this.glassRotationDraft = null;
   }
 
-  selectFunnel(id: number | null): void {
+  selectFunnel(entityId: number | null): void {
     this.clearSelections();
-    this.selectedFunnelId = id;
+    this.selectedFunnelId = entityId;
   }
 
-  selectTube(id: number | null): void {
+  selectTube(entityId: number | null): void {
     this.clearSelections();
-    this.selectedTubeId = id;
+    this.selectedTubeId = entityId;
   }
 
-  selectFlask(id: number | null): void {
+  selectFlask(entityId: number | null): void {
     this.clearSelections();
-    this.selectedFlaskId = id;
+    this.selectedFlaskId = entityId;
   }
 
-  selectFilter(id: number | null): void {
+  selectFilter(entityId: number | null): void {
     this.clearSelections();
-    this.selectedFilterId = id;
-    const snapshot = this.findFilter(id);
+    this.selectedFilterId = entityId;
+    const snapshot = this.findFilter(entityId);
     this.filterEditDraft = snapshot ? { species: new Set(snapshot.species) } : null;
   }
 
-  selectRadiator(id: number | null): void {
+  selectRadiator(entityId: number | null): void {
     this.clearSelections();
-    this.selectedRadiatorId = id;
-    const snapshot = this.findRadiator(id);
+    this.selectedRadiatorId = entityId;
+    const snapshot = this.findRadiator(entityId);
     this.radiatorEditDraft = snapshot ? { radiationRadius: snapshot.radiationRadius, targetTempC: snapshot.targetTempC } : null;
   }
 
-  selectGlass(id: number | null): void {
+  selectGlass(entityId: number | null): void {
     this.clearSelections();
-    this.selectedGlassId = id;
-    this.glassRotationDraft = this.findGlass(id)?.rotation ?? null;
+    this.selectedGlassId = entityId;
+    this.glassRotationDraft = this.findGlass(entityId)?.rotation ?? null;
   }
 
-  /** What's selected, as the worker's own kind+id pair -- what a Delete
-   * (key or panel button) needs to name (see protocol.ts's
-   * 'deleteApparatus'). Null when nothing is selected. */
-  selectedRef(): { kind: 'funnel' | 'tube' | 'flask' | 'filter' | 'radiator' | 'glass'; id: number } | null {
-    if (this.selectedFunnelId !== null) return { kind: 'funnel', id: this.selectedFunnelId };
-    if (this.selectedTubeId !== null) return { kind: 'tube', id: this.selectedTubeId };
-    if (this.selectedFlaskId !== null) return { kind: 'flask', id: this.selectedFlaskId };
-    if (this.selectedFilterId !== null) return { kind: 'filter', id: this.selectedFilterId };
-    if (this.selectedRadiatorId !== null) return { kind: 'radiator', id: this.selectedRadiatorId };
-    if (this.selectedGlassId !== null) return { kind: 'glass', id: this.selectedGlassId };
+  /** What's selected, as kind + entityId -- the entityId is what a Delete or
+   * a keyboard nudge names on the wire, and the kind is what the panel logic
+   * branches on. Null when nothing is selected. */
+  selectedRef(): { kind: 'funnel' | 'tube' | 'flask' | 'filter' | 'radiator' | 'glass'; entityId: number } | null {
+    if (this.selectedFunnelId !== null) return { kind: 'funnel', entityId: this.selectedFunnelId };
+    if (this.selectedTubeId !== null) return { kind: 'tube', entityId: this.selectedTubeId };
+    if (this.selectedFlaskId !== null) return { kind: 'flask', entityId: this.selectedFlaskId };
+    if (this.selectedFilterId !== null) return { kind: 'filter', entityId: this.selectedFilterId };
+    if (this.selectedRadiatorId !== null) return { kind: 'radiator', entityId: this.selectedRadiatorId };
+    if (this.selectedGlassId !== null) return { kind: 'glass', entityId: this.selectedGlassId };
     return null;
   }
 
-  /** Drops a selection whose apparatus no longer exists (it was erased, or a
-   * Reset/Restore replaced the whole instance list) -- called once per
+  /** Drops a selection whose apparatus no longer exists (it was deleted, or
+   * a Reset/Restore replaced the whole entity list) -- called once per
    * render so an edit panel never points at nothing. */
   dropStaleSelection(): void {
     if (this.selectedFunnelId !== null && !this.findFunnel(this.selectedFunnelId)) this.selectFunnel(null);
@@ -359,7 +334,7 @@ export class ApparatusSelection {
    * good enough for "click anywhere near the funnel selects it" without
    * pixel-perfect glass hit-testing. Returns the first match; overlapping
    * funnels are an edge case not worth resolving more precisely. */
-  private hitTestFunnel(x: number, y: number): FunnelSnapshot | null {
+  private hitTestFunnel(x: number, y: number): FunnelWire | null {
     for (const f of this.funnels) {
       const bounds = funnelBounds(funnelShapeFor(f.facing));
       if (x >= f.anchorX + bounds.minDx && x <= f.anchorX + bounds.maxDx && y >= f.anchorY + bounds.minDy && y <= f.anchorY + bounds.maxDy) {
@@ -373,9 +348,9 @@ export class ApparatusSelection {
    * outline. Checked last (see hitTest) because a flask's box is big enough
    * to swallow a funnel or a tube knee standing inside it, and the small
    * apparatus is what a click in there almost always means. */
-  private hitTestFlask(x: number, y: number): FlaskSnapshot | null {
+  private hitTestFlask(x: number, y: number): FlaskWire | null {
     for (const f of this.flasks) {
-      const bounds = flaskBounds(flaskShapeFor(f.facing, f.sizeScale, f.kind));
+      const bounds = flaskBounds(flaskShapeFor(f.facing, f.sizeScale, f.flaskKind));
       if (x >= f.x + bounds.minDx && x <= f.x + bounds.maxDx && y >= f.y + bounds.minDy && y <= f.y + bounds.maxDy) {
         return f;
       }
@@ -383,27 +358,41 @@ export class ApparatusSelection {
     return null;
   }
 
-  private hitTestTubeKnee(x: number, y: number): { tubeId: number; kneeIndex: number } | null {
+  private hitTestTubeKnee(x: number, y: number): { entityId: number; kneeIndex: number } | null {
     const candidates = this.tubes.flatMap((t) => {
       const kneeIndex = nearestKneeIndex(t.points, { x, y }, TUBE_KNEE_HIT_RADIUS);
       if (kneeIndex === null) return [];
       const p = t.points[kneeIndex] as Point;
-      return [{ value: { tubeId: t.id, kneeIndex }, dist: Math.hypot(p.x - x, p.y - y) }];
+      return [{ value: { entityId: t.entityId, kneeIndex }, dist: Math.hypot(p.x - x, p.y - y) }];
     });
     return bestByDistance(candidates);
   }
 
-  private hitTestTubeSegment(x: number, y: number): { tubeId: number; segIndex: number } | null {
+  private hitTestTubeSegment(x: number, y: number): { entityId: number; segIndex: number } | null {
     const candidates = this.tubes.flatMap((t) => {
       const segIndex = nearestSegmentIndex(t.points, { x, y }, TUBE_SEGMENT_HIT_RADIUS);
       if (segIndex === null) return [];
       const dist = pointSegmentDistance({ x, y }, t.points[segIndex] as Point, t.points[segIndex + 1] as Point);
-      return [{ value: { tubeId: t.id, segIndex }, dist }];
+      return [{ value: { entityId: t.entityId, segIndex }, dist }];
     });
     return bestByDistance(candidates);
   }
 
-  private hitTestGlass(x: number, y: number): GlassSnapshot | null {
+  /** Nearest glass polygon corner within grabbing distance -- corners are
+   * individually draggable handles (each one reshapes the chain through
+   * 'dragEntityHandle', the same way a tube knee does), where the chain's
+   * segments are body and slide the whole vessel. */
+  private hitTestGlassCorner(x: number, y: number): { entityId: number; cornerIndex: number } | null {
+    const candidates = this.glass.flatMap((g) =>
+      g.points.flatMap((p, cornerIndex) => {
+        const dist = Math.hypot(p.x - x, p.y - y);
+        return dist <= LINE_END_HIT_RADIUS ? [{ value: { entityId: g.entityId, cornerIndex }, dist }] : [];
+      }),
+    );
+    return bestByDistance(candidates);
+  }
+
+  private hitTestGlass(x: number, y: number): GlassWire | null {
     const candidates = this.glass.flatMap((g) => {
       const dists = g.points.slice(0, -1).map((p, i) => pointSegmentDistance({ x, y }, p, g.points[i + 1] as Point));
       const dist = Math.min(...(dists.length > 0 ? dists : [Infinity]));
@@ -412,9 +401,9 @@ export class ApparatusSelection {
     return bestByDistance(candidates);
   }
 
-  /** Grab handles first (a tube knee, or either end of a filter/radiator
-   * line), then whole objects: funnel box, tube segment, filter line,
-   * radiator line, glass polygon, and last the (much larger) flask box.
+  /** Grab handles first (a tube knee, either end of a filter/radiator line,
+   * or a glass corner), then whole objects: funnel box, tube segment, filter
+   * line, radiator line, glass polygon, and last the (much larger) flask box.
    *
    * Handles before bodies for the same reason a tube's knee is tested before
    * its segments -- a handle is the more specific thing to have aimed at, and
@@ -425,142 +414,104 @@ export class ApparatusSelection {
    * plumbed through them. */
   hitTest(x: number, y: number): ApparatusHit {
     const filterEnd = nearestLineEnd(this.filters, x, y);
-    if (filterEnd) return { kind: 'filter-end', id: filterEnd.id, endIndex: filterEnd.endIndex };
+    if (filterEnd) return { kind: 'filter-end', entityId: filterEnd.entityId, endIndex: filterEnd.endIndex };
     const radiatorEnd = nearestLineEnd(this.radiators, x, y);
-    if (radiatorEnd) return { kind: 'radiator-end', id: radiatorEnd.id, endIndex: radiatorEnd.endIndex };
-    const funnel = this.hitTestFunnel(x, y);
-    if (funnel) return { kind: 'funnel', id: funnel.id, anchorX: funnel.anchorX, anchorY: funnel.anchorY };
+    if (radiatorEnd) return { kind: 'radiator-end', entityId: radiatorEnd.entityId, endIndex: radiatorEnd.endIndex };
     const knee = this.hitTestTubeKnee(x, y);
-    if (knee) return { kind: 'tube-knee', tubeId: knee.tubeId, kneeIndex: knee.kneeIndex };
+    if (knee) return { kind: 'tube-knee', entityId: knee.entityId, kneeIndex: knee.kneeIndex };
+    const corner = this.hitTestGlassCorner(x, y);
+    if (corner) return { kind: 'glass-corner', entityId: corner.entityId, cornerIndex: corner.cornerIndex };
+    const funnel = this.hitTestFunnel(x, y);
+    if (funnel) return { kind: 'funnel', entityId: funnel.entityId };
     const segment = this.hitTestTubeSegment(x, y);
-    if (segment) return { kind: 'tube-segment', tubeId: segment.tubeId, segIndex: segment.segIndex };
+    if (segment) return { kind: 'tube-segment', entityId: segment.entityId, segIndex: segment.segIndex };
     const filter = nearestLine(this.filters, x, y);
-    if (filter) return { kind: 'filter', id: filter.id };
+    if (filter) return { kind: 'filter', entityId: filter.entityId };
     const radiator = nearestLine(this.radiators, x, y);
-    if (radiator) return { kind: 'radiator', id: radiator.id };
+    if (radiator) return { kind: 'radiator', entityId: radiator.entityId };
     const glass = this.hitTestGlass(x, y);
-    if (glass) return { kind: 'glass', id: glass.id };
+    if (glass) return { kind: 'glass', entityId: glass.entityId };
     const flask = this.hitTestFlask(x, y);
-    if (flask) return { kind: 'flask', id: flask.id, anchorX: flask.x, anchorY: flask.y };
+    if (flask) return { kind: 'flask', entityId: flask.entityId };
     return { kind: 'none' };
   }
 
   /** The select-apparatus tool's pointerdown: hit-tests, updates selection
-   * accordingly, and arms drag state for a matched funnel/knee/segment
-   * (clears it for 'none', along with both selections). */
+   * accordingly, and arms drag state -- a handle hit arms an absolute
+   * handle drag, anything else arms a whole-entity body drag (clears both
+   * for 'none', along with every selection). */
   beginSelection(x: number, y: number): ApparatusHit {
     this.endDrag();
 
     const hit = this.hitTest(x, y);
-    if (hit.kind === 'funnel') {
-      this.selectFunnel(hit.id);
-      this.draggingFunnelId = hit.id;
-      this.dragOffsetX = x - hit.anchorX;
-      this.dragOffsetY = y - hit.anchorY;
-    } else if (hit.kind === 'tube-knee') {
-      this.selectTube(hit.tubeId);
-      this.draggingTubeKnee = hit.kneeIndex;
-    } else if (hit.kind === 'tube-segment') {
-      this.selectTube(hit.tubeId);
-      this.draggingTubeSegment = hit.segIndex;
-      this.tubeSegmentDragLastX = x;
-      this.tubeSegmentDragLastY = y;
-    } else if (hit.kind === 'filter') {
-      this.selectFilter(hit.id);
-      this.draggingFilterId = hit.id;
-      this.filterDragLastX = x;
-      this.filterDragLastY = y;
-    } else if (hit.kind === 'filter-end') {
-      this.selectFilter(hit.id);
-      this.draggingFilterEnd = hit.endIndex;
-    } else if (hit.kind === 'radiator') {
-      this.selectRadiator(hit.id);
-      this.draggingRadiatorId = hit.id;
-      this.radiatorDragLastX = x;
-      this.radiatorDragLastY = y;
-    } else if (hit.kind === 'radiator-end') {
-      this.selectRadiator(hit.id);
-      this.draggingRadiatorEnd = hit.endIndex;
-    } else if (hit.kind === 'glass') {
-      this.selectGlass(hit.id);
-      this.draggingGlassId = hit.id;
-      this.glassDragLastX = x;
-      this.glassDragLastY = y;
-    } else if (hit.kind === 'flask') {
-      this.selectFlask(hit.id);
-      this.draggingFlaskId = hit.id;
-      this.flaskDragOffsetX = x - hit.anchorX;
-      this.flaskDragOffsetY = y - hit.anchorY;
-    } else {
-      this.selectFunnel(null);
+    switch (hit.kind) {
+      case 'funnel':
+        this.selectFunnel(hit.entityId);
+        break;
+      case 'tube-knee':
+        this.selectTube(hit.entityId);
+        this.draggingHandle = { entityId: hit.entityId, handleId: hit.kneeIndex };
+        break;
+      case 'tube-segment':
+        this.selectTube(hit.entityId);
+        break;
+      case 'flask':
+        this.selectFlask(hit.entityId);
+        break;
+      case 'filter':
+        this.selectFilter(hit.entityId);
+        break;
+      case 'filter-end':
+        this.selectFilter(hit.entityId);
+        this.draggingHandle = { entityId: hit.entityId, handleId: hit.endIndex };
+        break;
+      case 'radiator':
+        this.selectRadiator(hit.entityId);
+        break;
+      case 'radiator-end':
+        this.selectRadiator(hit.entityId);
+        this.draggingHandle = { entityId: hit.entityId, handleId: hit.endIndex };
+        break;
+      case 'glass':
+        this.selectGlass(hit.entityId);
+        break;
+      case 'glass-corner':
+        this.selectGlass(hit.entityId);
+        this.draggingHandle = { entityId: hit.entityId, handleId: hit.cornerIndex };
+        break;
+      case 'none':
+        this.selectFunnel(null); // clears every kind's selection
+        return hit;
+    }
+    if (!this.draggingHandle) {
+      this.draggingBodyId = hit.entityId;
+      this.bodyDragLastX = x;
+      this.bodyDragLastY = y;
     }
     return hit;
   }
 
   /** The select-apparatus tool's pointermove while a drag is active --
    * returns the worker message to send, or null if nothing is being
-   * dragged (or a segment drag's delta this move was zero, so there's
+   * dragged (or a body drag's delta this move was zero, so there's
    * nothing to send). */
   continueDrag(x: number, y: number): MainToWorkerMessage | null {
-    if (this.draggingFunnelId !== null) {
-      return { type: 'moveFunnel', id: this.draggingFunnelId, x: x - this.dragOffsetX, y: y - this.dragOffsetY };
+    if (this.draggingHandle) {
+      return { type: 'dragEntityHandle', entityId: this.draggingHandle.entityId, handleId: this.draggingHandle.handleId, x, y };
     }
-    if (this.draggingTubeKnee !== null && this.selectedTubeId !== null) {
-      return { type: 'moveTubeKnee', id: this.selectedTubeId, kneeIndex: this.draggingTubeKnee, x, y };
-    }
-    if (this.draggingTubeSegment !== null && this.selectedTubeId !== null) {
-      const dx = x - this.tubeSegmentDragLastX;
-      const dy = y - this.tubeSegmentDragLastY;
+    if (this.draggingBodyId !== null) {
+      const dx = x - this.bodyDragLastX;
+      const dy = y - this.bodyDragLastY;
       if (dx === 0 && dy === 0) return null;
-      this.tubeSegmentDragLastX = x;
-      this.tubeSegmentDragLastY = y;
-      return { type: 'moveTubeSegment', id: this.selectedTubeId, segIndex: this.draggingTubeSegment, dx, dy };
-    }
-    if (this.draggingFlaskId !== null) {
-      return { type: 'moveFlask', id: this.draggingFlaskId, x: x - this.flaskDragOffsetX, y: y - this.flaskDragOffsetY };
-    }
-    if (this.draggingFilterId !== null) {
-      const dx = x - this.filterDragLastX;
-      const dy = y - this.filterDragLastY;
-      if (dx === 0 && dy === 0) return null;
-      this.filterDragLastX = x;
-      this.filterDragLastY = y;
-      return { type: 'moveFilter', id: this.draggingFilterId, dx, dy };
-    }
-    if (this.draggingFilterEnd !== null && this.selectedFilterId !== null) {
-      return { type: 'moveFilterEndpoint', id: this.selectedFilterId, endIndex: this.draggingFilterEnd, x, y };
-    }
-    if (this.draggingRadiatorId !== null) {
-      const dx = x - this.radiatorDragLastX;
-      const dy = y - this.radiatorDragLastY;
-      if (dx === 0 && dy === 0) return null;
-      this.radiatorDragLastX = x;
-      this.radiatorDragLastY = y;
-      return { type: 'moveRadiator', id: this.draggingRadiatorId, dx, dy };
-    }
-    if (this.draggingRadiatorEnd !== null && this.selectedRadiatorId !== null) {
-      return { type: 'moveRadiatorEndpoint', id: this.selectedRadiatorId, endIndex: this.draggingRadiatorEnd, x, y };
-    }
-    if (this.draggingGlassId !== null) {
-      const dx = x - this.glassDragLastX;
-      const dy = y - this.glassDragLastY;
-      if (dx === 0 && dy === 0) return null;
-      this.glassDragLastX = x;
-      this.glassDragLastY = y;
-      return { type: 'moveGlass', id: this.draggingGlassId, dx, dy };
+      this.bodyDragLastX = x;
+      this.bodyDragLastY = y;
+      return { type: 'moveEntity', entityId: this.draggingBodyId, dx, dy };
     }
     return null;
   }
 
   endDrag(): void {
-    this.draggingFunnelId = null;
-    this.draggingTubeKnee = null;
-    this.draggingTubeSegment = null;
-    this.draggingFlaskId = null;
-    this.draggingFilterId = null;
-    this.draggingFilterEnd = null;
-    this.draggingRadiatorId = null;
-    this.draggingRadiatorEnd = null;
-    this.draggingGlassId = null;
+    this.draggingBodyId = null;
+    this.draggingHandle = null;
   }
 }

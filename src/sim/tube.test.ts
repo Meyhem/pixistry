@@ -4,15 +4,15 @@ import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
 import {
+  moveTubeInstance,
   moveTubeKnee,
-  moveTubeSegment,
   normalizeTubePoints,
   placeTubeInstance,
   stepTubes,
   updateTubeInstance,
   type TubeInstance,
 } from './tube';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { compositeEntities } from './entity-composite';
 import { placeGlassInstance } from './glass';
 import type { Point } from './tube-shapes';
 
@@ -24,7 +24,7 @@ const species = new SpeciesTable();
  * composites the whole bench first, exactly like worker.ts's mutateEntities
  * does after each message. */
 function sync(grid: SimGrid, instances: readonly TubeInstance[]): void {
-  compositeEntities(grid, species, { ...NO_ENTITIES, tubes: instances });
+  compositeEntities(grid, species, instances);
 }
 
 function place(grid: SimGrid, points: Point[], overrides: { filter?: Set<number> | null } = {}): TubeInstance {
@@ -287,7 +287,7 @@ describe('stepTubes: intake', () => {
     // second tube's mouth draws from that same column (its own band starts at
     // x=33), so what one ejects the other swallows.
     const second = placeTubeInstance(grid, { points: [{ x: 34, y: 20 }, { x: 44, y: 20 }], filter: null });
-    compositeEntities(grid, species, { ...NO_ENTITIES, tubes: [first, second] });
+    compositeEntities(grid, species, [first, second]);
     for (const i of bandAtDistance(first, 0)) grid.setAt(i, SpeciesId.H2O, PhaseCode.Liquid, 0);
     const carried = bandAtDistance(first, 0).length;
 
@@ -302,7 +302,7 @@ describe('stepTubes: intake', () => {
   });
 });
 
-describe('moveTubeKnee / moveTubeSegment', () => {
+describe('moveTubeKnee / moveTubeInstance', () => {
   it('re-stamps walls at the new geometry and clears the old footprint', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, STRAIGHT);
@@ -356,7 +356,7 @@ describe('moveTubeKnee / moveTubeSegment', () => {
     }
   });
 
-  it('moveTubeSegment translates a middle segment while keeping outer connections valid', () => {
+  it('moveTubeInstance slides every knee together, preserving the shape exactly', () => {
     const grid = new SimGrid(200, 200);
     const instance = place(grid, [
       { x: 50, y: 50 },
@@ -364,14 +364,9 @@ describe('moveTubeKnee / moveTubeSegment', () => {
       { x: 70, y: 50 },
       { x: 70, y: 60 },
     ]);
-    moveTubeSegment(grid, instance, 1, 0, 10);
-    for (let i = 1; i < instance.points.length; i++) {
-      const a = instance.points[i - 1] as Point;
-      const b = instance.points[i] as Point;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      expect(dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy)).toBe(true);
-    }
+    const before = instance.points.map((p) => ({ ...p }));
+    moveTubeInstance(grid, instance, 3, -7);
+    expect(instance.points).toEqual(before.map((p) => ({ x: p.x + 3, y: p.y - 7 })));
   });
 });
 
@@ -424,7 +419,7 @@ describe('a tube crossing other glass', () => {
       { x: 23, y: 26 },
     ]);
     const tube = placeTubeInstance(grid, { points: STRAIGHT, filter: null });
-    const bench = { ...NO_ENTITIES, tubes: [tube], glass: [beaker] };
+    const bench = [tube, beaker];
     compositeEntities(grid, species, bench);
 
     const bored = grid.index(23, 20);
@@ -464,7 +459,7 @@ describe('degenerate geometry', () => {
     expect(instance.points[0]).toEqual({ x: 25, y: 20 });
   });
 
-  it('never lets a segment drag leave the tube collapsed, however far it is shoved', () => {
+  it('never lets an interior knee drag leave the tube collapsed, however far it is shoved', () => {
     const grid = new SimGrid(100, 100);
     const instance = place(grid, [
       { x: 20, y: 20 },
@@ -472,17 +467,17 @@ describe('degenerate geometry', () => {
       { x: 32, y: 20 },
     ]);
 
-    // Shove the middle segment hard in every direction, well past its fixed
-    // outer neighbours -- resolveKneePosition keeps each knee at least a step
-    // clear, and the guard catches anything it doesn't.
-    for (const [dx, dy] of [
-      [-12, 0],
-      [12, 0],
-      [0, -12],
-      [0, 12],
-      [-20, -20],
+    // Shove the middle knee hard in every direction, including exactly onto
+    // its neighbours -- resolveKneePosition keeps each knee at least a step
+    // clear, and the degenerate-segment guard catches anything it doesn't.
+    for (const raw of [
+      { x: 20, y: 20 },
+      { x: 32, y: 20 },
+      { x: 26, y: 40 },
+      { x: 0, y: 0 },
+      { x: 90, y: 90 },
     ]) {
-      moveTubeSegment(grid, instance, 1, dx as number, dy as number);
+      moveTubeKnee(grid, instance, 1, raw);
       for (let i = 1; i < instance.points.length; i++) {
         expect(instance.points[i]).not.toEqual(instance.points[i - 1]);
       }

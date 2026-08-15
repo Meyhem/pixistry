@@ -4,7 +4,7 @@ import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
 import { GLASS_WALL_SPEC_ID } from './walls';
 import { funnelShapeFor, funnelSpawnOffset } from './apparatus-shapes';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { compositeEntities } from './entity-composite';
 import {
   intervalTicksForRate,
   moveFunnelInstance,
@@ -24,7 +24,7 @@ const species = new SpeciesTable();
  * test below that asserts against the grid composites first, exactly like
  * worker.ts's mutateEntities does after each message. */
 function sync(grid: SimGrid, instances: readonly FunnelInstance[]): void {
-  compositeEntities(grid, species, { ...NO_ENTITIES, funnels: instances });
+  compositeEntities(grid, species, instances);
 }
 
 // A freshly placed funnel starts disabled (see FunnelInstance.enabled's doc

@@ -8,9 +8,10 @@ import { AMBIENT_TEMPERATURE_K, celsiusToKelvin, energyForTemperature, massOf } 
 import { SinkMaskValue, type SimGrid } from './grid';
 import { forEachCellInRadius } from './geometry';
 import { DEFAULT_FLASK_KIND } from './flask-shapes';
-import { placeFlaskInstance, type FlaskInstance } from './flask';
-import { placeFunnelInstance, setFunnelEnabledInstance, type FunnelInstance } from './funnel';
-import { placeRadiatorInstance, type RadiatorInstance } from './radiators';
+import type { AnyEntity } from './entity';
+import { placeFlaskInstance } from './flask';
+import { placeFunnelInstance, setFunnelEnabledInstance } from './funnel';
+import { placeRadiatorInstance } from './radiators';
 import { sinkLineCells } from './sink';
 import type { SpeciesTable } from './species';
 import type { Restrictions, Scenario, SetupCommand, ToolKind } from './scenario-data';
@@ -75,9 +76,9 @@ function applyWallLine(grid: SimGrid, species: SpeciesTable, cmd: Extract<SetupC
  * state: the first recomposite clears every cell no live entity claims, so an
  * untracked scenario bench would simply vanish the first time the player
  * placed anything. */
-function applyFlask(flasks: FlaskInstance[], cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
-  flasks.push(
-    placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, kind: cmd.glassware ?? DEFAULT_FLASK_KIND }),
+function applyFlask(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'flask' }>): void {
+  entities.push(
+    placeFlaskInstance({ x: cmd.x, y: cmd.y, facing: cmd.facing, sizeScale: cmd.sizeScale, stirred: cmd.stirred, flaskKind: cmd.glassware ?? DEFAULT_FLASK_KIND }),
   );
 }
 
@@ -88,7 +89,7 @@ function applyFlask(flasks: FlaskInstance[], cmd: Extract<SetupCommand, { kind: 
  * the bench loads, with no player action to enable it. Defaults to ambient
  * temperature -- SetupCommand's 'funnel' kind has no tempC of its own,
  * matching .grill/campaign-mode.md's §3 SetupCommand type. */
-function applyFunnel(funnels: FunnelInstance[], cmd: Extract<SetupCommand, { kind: 'funnel' }>): void {
+function applyFunnel(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'funnel' }>): void {
   const instance = placeFunnelInstance({
     x: cmd.x,
     y: cmd.y,
@@ -99,7 +100,7 @@ function applyFunnel(funnels: FunnelInstance[], cmd: Extract<SetupCommand, { kin
     total: cmd.total,
   });
   if (cmd.enabled) setFunnelEnabledInstance(instance, true);
-  funnels.push(instance);
+  entities.push(instance);
 }
 
 /** A tracked radiator instance, same as the interactive Radiator tool's
@@ -110,8 +111,8 @@ function applyFunnel(funnels: FunnelInstance[], cmd: Extract<SetupCommand, { kin
  * parameter, not the tool's separate brush/radiation radii; a zero-length
  * line of that width is exactly the disc this used to paint by hand (see
  * radiators.ts's `width`). */
-function applyRadiator(radiators: RadiatorInstance[], cmd: Extract<SetupCommand, { kind: 'radiator' }>): void {
-  radiators.push(
+function applyRadiator(entities: AnyEntity[], cmd: Extract<SetupCommand, { kind: 'radiator' }>): void {
+  entities.push(
     placeRadiatorInstance({
       x0: cmd.x,
       y0: cmd.y,
@@ -146,25 +147,17 @@ function applyCatalyst(grid: SimGrid, cmd: Extract<SetupCommand, { kind: 'cataly
   });
 }
 
-/** The worker's own live instance arrays, mutated in place (pushed onto) the
- * same way worker.ts's own 'placeFunnel' handler does. There's no 'tube'
- * SetupCommand yet, so no tubes array (the design doc's own sketch signature
- * includes one; added only once a scenario actually needs to pre-place a
- * tube, same "don't pre-build untested primitives" rule this file's own
- * history follows). */
-export interface ScenarioEntities {
-  readonly funnels: FunnelInstance[];
-  readonly flasks: FlaskInstance[];
-  readonly radiators: RadiatorInstance[];
-}
-
 /** Stamps every one of a scenario's setup commands onto a freshly-cleared
- * grid, in order, and places its apparatus into `entities`. Callers are
- * responsible for clearing prior state first and for compositing afterwards
- * (see worker.ts's 'loadScenario' handler) -- this only adds, it never
- * clears, and the apparatus it places reaches the grid the same way the
- * player's own does. */
-export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, entities: ScenarioEntities, scenario: Scenario): void {
+ * grid, in order, and pushes its apparatus onto the worker's own live
+ * `entities` list, exactly the way the interactive 'placeEntity' handler
+ * does. Callers are responsible for clearing prior state first and for
+ * compositing afterwards (see worker.ts's 'loadScenario' handler) -- this
+ * only adds, it never clears, and the apparatus it places reaches the grid
+ * the same way the player's own does. There's no 'tube' SetupCommand yet
+ * (added only once a scenario actually needs to pre-place a tube, same
+ * "don't pre-build untested primitives" rule this file's own history
+ * follows). */
+export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, entities: AnyEntity[], scenario: Scenario): void {
   for (const cmd of scenario.setup) {
     switch (cmd.kind) {
       case 'rect':
@@ -177,13 +170,13 @@ export function applyScenarioSetup(grid: SimGrid, species: SpeciesTable, entitie
         applyWallLine(grid, species, cmd);
         break;
       case 'flask':
-        applyFlask(entities.flasks, cmd);
+        applyFlask(entities, cmd);
         break;
       case 'funnel':
-        applyFunnel(entities.funnels, cmd);
+        applyFunnel(entities, cmd);
         break;
       case 'radiator':
-        applyRadiator(entities.radiators, cmd);
+        applyRadiator(entities, cmd);
         break;
       case 'sink':
         applySink(grid, cmd);

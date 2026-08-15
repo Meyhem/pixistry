@@ -189,6 +189,32 @@ Split into two commits.
   `MAX_FILTER_ID`, `allocateFilterId`, the 255-line cap, and the id-reuse stale-selection hazard.
 - `world-snapshot.ts`: one `entities` list.
 
+**3a landed.** Things the implementation settled that the plan didn't specify:
+- **A membrane claims only non-wall cells, in a final pass after boring and stale-glass cleanup.** Glass
+  provenance is tracked through ownership, so a membrane holding the owner slot at a glass cell corrupts
+  it whichever way it breaks: claim a *painted* glass cell and the next composite's cleanup eats the
+  player's wall; claim a *vessel's* glass cell and deleting the vessel leaves its glass orphaned behind
+  the membrane's claim. Skipping glass costs nothing (a wall cell blocks outright, so an allow-list
+  lookup there can never matter) and the moment the glass goes, a recomposite hands the bare cell to the
+  membrane. It also keeps membranes from making a painted wall eraser-proof (owned wall cells are
+  protected from the eraser). `filter.test.ts` and a fuzz invariant pin this.
+- **Per-segment tube dragging is gone**, not just re-routed: protocol v2 has no segment message by
+  design (a tube's segments are body, and body drags slide the whole entity — reshaping is what knee
+  handles are for), so `moveTubeSegment` and its "free end keeps the segment vector" subtlety were
+  deleted outright rather than kept as dead code.
+- **Glass corners became draggable end to end** (registry `dragHandle` + the old hit-test), not just as
+  a latent def capability -- the corner drag inverse-transforms the cursor into base-point space so
+  rotation stays lossless.
+- The frame still carries a 0/1 `filterMask` as a pure render hint (derived per frame from
+  `entityOwner`), so the renderer keeps tinting membranes without learning anything about entities.
+- The fuzz suite now drives every op through the generic dispatchers (`placeEntityFromWire`,
+  `moveEntityBy`, `dragEntityHandleTo`, `rotateEntityTo`, `applyEntitySettings`) -- the same surface the
+  worker's handlers call -- and picks drag handles via `entityHandles(entityToWire(e))` exactly the way
+  the UI would.
+- The UI kept its per-kind selection fields (that's 3b) but its twelve drag-state fields collapsed to
+  two on their own: under protocol v2 every body drag is the same relative `moveEntity` and every handle
+  drag the same absolute `dragEntityHandle`.
+
 **3b — UI.**
 - `EntitySelection` replaces `ApparatusSelection`: `selectedId: number | null`, one `draft`, one
   `dragState` (`{mode:'body', lastX, lastY}` | `{mode:'handle', handleId}`). Draft is seeded in
@@ -310,7 +336,8 @@ monotonicity); extend the fuzz suite with tube ops.
 - [x] Phase 1: compositor + `entityOwner`; eraser matter-only; Delete key/button; snapshot slimming;
       repair/crossing/prune machinery deleted; composite + fuzz tests green
 - [x] Phase 2: diagonal corner rule; `vesselMask` deleted; diagonal-vessel containment test
-- [ ] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired
+- [x] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired; per-kind ids retired
+      (`entityId` is the one id on the wire); glass corners draggable; fuzz suite drives the registry
 - [ ] Phase 3b: one selection/drag/hit-test path; generic handles overlay
 - [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
 - [x] Phase 5: 3-wide lumen; cone removed; gradient transport; tube tests rewritten

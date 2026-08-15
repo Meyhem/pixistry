@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { describe, expect, it } from 'vitest';
+import { compositeEntities } from './entity-composite';
 import { SimGrid } from './grid';
 import { SpeciesTable } from './species';
 import {
@@ -7,7 +7,6 @@ import {
   moveRadiatorInstance,
   placeRadiatorInstance,
   RADIATOR_WATTS,
-  resetRadiatorIds,
   updateRadiatorInstance,
   type RadiatorInstance,
 } from './radiators';
@@ -19,7 +18,7 @@ const species = new SpeciesTable();
  * compositor writes the per-cell fields the physics reads. Every assertion
  * against the grid composites the whole bench first. */
 function sync(grid: SimGrid, radiators: readonly RadiatorInstance[]): void {
-  compositeEntities(grid, species, { ...NO_ENTITIES, radiators });
+  compositeEntities(grid, species, radiators);
 }
 
 function place(grid: SimGrid, x0: number, y0: number, x1: number, y1: number, radius = 3, targetK = 400): RadiatorInstance {
@@ -29,10 +28,6 @@ function place(grid: SimGrid, x0: number, y0: number, x1: number, y1: number, ra
 }
 
 describe('radiators', () => {
-  beforeEach(() => {
-    resetRadiatorIds();
-  });
-
   it('exposes a positive radiation magnitude shared by every placed radiator', () => {
     expect(RADIATOR_WATTS).toBeGreaterThan(0);
   });

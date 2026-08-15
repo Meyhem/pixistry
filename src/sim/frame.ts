@@ -7,18 +7,13 @@
 import type { GrabState } from './grabber';
 import { EMPTY, type SimGrid } from './grid';
 import { funnelShapeFor } from './apparatus-shapes';
-import type { FilterInstance } from './filter';
-import type { FlaskInstance } from './flask';
+import { entityWires, type AnyEntity } from './entity';
 import type { FunnelInstance } from './funnel';
-import { glassPoints, type GlassInstance } from './glass';
-import type { RadiatorInstance } from './radiators';
-import { kelvinToCelsius, massOf, temperatureOf } from './heat';
-import { rateFromIntervalTicks } from './funnel';
+import { massOf, temperatureOf } from './heat';
 import type { GoalProgress } from './objectives';
 import type { SinkCounter } from './sink';
 import type { SpeciesTable } from './species';
-import type { TubeInstance } from './tube';
-import type { FilterSnapshot, FlaskSnapshot, FunnelSnapshot, GlassSnapshot, RadiatorSnapshot, TubeSnapshot, WorkerToMainMessage } from './protocol';
+import type { WorkerToMainMessage } from './protocol';
 
 export function computeTempGrid(grid: SimGrid, species: SpeciesTable): Float32Array {
   const temps = new Float32Array(grid.width * grid.height);
@@ -55,63 +50,22 @@ export function computeFunnelFill(grid: SimGrid, funnels: readonly FunnelInstanc
   return fill;
 }
 
-export function funnelSnapshots(funnels: readonly FunnelInstance[]): FunnelSnapshot[] {
-  return funnels.map((f) => ({
-    id: f.id,
-    anchorX: f.anchorX,
-    anchorY: f.anchorY,
-    facing: f.facing,
-    specId: f.specId,
-    tempC: kelvinToCelsius(f.tempK),
-    ratePerMinute: rateFromIntervalTicks(f.intervalTicks),
-    total: f.total,
-    remaining: f.remaining,
-    enabled: f.enabled,
-  }));
-}
-
-export function tubeSnapshots(tubes: readonly TubeInstance[]): TubeSnapshot[] {
-  return tubes.map((t) => ({
-    id: t.id,
-    points: t.points.map((p) => ({ x: p.x, y: p.y })),
-    filter: t.filter ? [...t.filter] : null,
-  }));
-}
-
-export function filterSnapshots(filters: readonly FilterInstance[]): FilterSnapshot[] {
-  return filters.map((f) => ({ id: f.id, x0: f.x0, y0: f.y0, x1: f.x1, y1: f.y1, species: [...f.species] }));
-}
-
-export function radiatorSnapshots(radiators: readonly RadiatorInstance[]): RadiatorSnapshot[] {
-  return radiators.map((r) => ({
-    id: r.id,
-    x0: r.x0,
-    y0: r.y0,
-    x1: r.x1,
-    y1: r.y1,
-    radiationRadius: r.radius,
-    targetTempC: kelvinToCelsius(r.targetK),
-  }));
-}
-
-/** Sends each polygon's corners already rotated/translated (see glass.ts's
- * glassPoints) rather than its as-drawn chain plus a transform -- the UI only
- * ever needs where the corners are now, and resolving that here keeps one
- * copy of the rotation math. */
-export function glassSnapshots(glass: readonly GlassInstance[]): GlassSnapshot[] {
-  return glass.map((g) => ({ id: g.id, points: glassPoints(g), rotation: g.rotation }));
-}
-
-export function flaskSnapshots(flasks: readonly FlaskInstance[]): FlaskSnapshot[] {
-  return flasks.map((f) => ({
-    id: f.id,
-    x: f.x,
-    y: f.y,
-    facing: f.facing,
-    sizeScale: f.sizeScale,
-    stirred: f.stirred,
-    kind: f.kind,
-  }));
+/** The renderer's membrane tint, derived per frame: 1 where a filter entity
+ * owns the cell, 0 elsewhere. There is no per-cell filter grid array in the
+ * sim anymore (movement looks allow-lists up straight off grid.entityOwner
+ * -- see filter.ts's FilterAllow), so this exists purely so the renderer can
+ * keep tinting membranes without knowing anything about entities. */
+export function computeMembraneMask(grid: SimGrid, entities: readonly AnyEntity[]): Uint8Array {
+  const mask = new Uint8Array(grid.width * grid.height);
+  const filterIds = new Set<number>();
+  for (const entity of entities) {
+    if (entity.kind === 'filter') filterIds.add(entity.entityId);
+  }
+  if (filterIds.size === 0) return mask;
+  for (let idx = 0; idx < mask.length; idx++) {
+    if (filterIds.has(grid.entityOwner[idx] as number)) mask[idx] = 1;
+  }
+  return mask;
 }
 
 /** Overlays held grabber cells (see grabber.ts) into an already-built frame's
@@ -141,12 +95,7 @@ export function overlayGrabbedCells(
 }
 
 export interface FrameState {
-  readonly funnels: readonly FunnelInstance[];
-  readonly tubes: readonly TubeInstance[];
-  readonly flasks: readonly FlaskInstance[];
-  readonly filters: readonly FilterInstance[];
-  readonly radiators: readonly RadiatorInstance[];
-  readonly glass: readonly GlassInstance[];
+  readonly entities: readonly AnyEntity[];
   readonly grabState: GrabState | null;
   readonly sinkCounter: SinkCounter;
   readonly ventCounter: SinkCounter;
@@ -168,9 +117,10 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
   const radiatorTargetK = grid.radiatorTargetK.slice();
   const stirrerMask = grid.stirrerMask.slice();
   const tubeMask = grid.tubeMask.slice();
-  const filterMask = grid.filterMask.slice();
+  const filterMask = computeMembraneMask(grid, state.entities);
   const catalystStrength = grid.catalystStrength.slice();
-  const funnelFillSpecId = computeFunnelFill(grid, state.funnels);
+  const funnels = state.entities.filter((e): e is FunnelInstance => e.kind === 'funnel');
+  const funnelFillSpecId = computeFunnelFill(grid, funnels);
   const sinkMask = grid.sinkMask.slice();
   overlayGrabbedCells(grid, species, state.grabState, specId, phase, tempK);
   return {
@@ -185,12 +135,7 @@ export function buildFrame(grid: SimGrid, species: SpeciesTable, state: FrameSta
     filterMask,
     catalystStrength,
     funnelFillSpecId,
-    funnels: funnelSnapshots(state.funnels),
-    tubes: tubeSnapshots(state.tubes),
-    flasks: flaskSnapshots(state.flasks),
-    filters: filterSnapshots(state.filters),
-    radiators: radiatorSnapshots(state.radiators),
-    glass: glassSnapshots(state.glass),
+    entities: entityWires(state.entities),
     sinkMask,
     sinkTotals: state.sinkCounter.totals.slice(),
     sinkGrandTotal: state.sinkCounter.grandTotal,

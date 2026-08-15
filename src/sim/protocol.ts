@@ -3,6 +3,16 @@
 // Split out of worker.ts so app.ts (the main-thread side) imports its wire
 // types from a plain data module instead of reaching into the worker's own
 // entry point -- worker.ts re-exports nothing.
+//
+// Apparatus speaks ONE generic vocabulary: place/move/dragHandle/rotate/
+// updateSettings/action/delete, each addressing an entity by its global
+// `entityId` (see entity-id.ts), with per-kind payloads carried as tagged
+// unions (PlaceEntityWire / EntitySettingsWire) rather than per-kind message
+// types. This replaced ~20 hand-written per-kind messages whose semantics
+// each drifted a little (absolute vs relative moves, endpoint vs knee vs
+// segment reshaping); the worker-side dispatch lives in entity.ts's
+// ENTITY_DEFS, so adding an apparatus kind extends the payload unions and the
+// registry without touching the message set at all.
 import type { FunnelFacing } from './apparatus-shapes';
 import type { FlaskFacing, FlaskKind } from './flask-shapes';
 import type { SinkMaskValue } from './grid';
@@ -11,8 +21,13 @@ import type { Scenario } from './scenario-data';
 import type { PaletteEntry } from './species';
 import type { Point } from './tube-shapes';
 
-export interface FunnelSnapshot {
-  id: number;
+/** One placed apparatus as the worker reports it every frame -- lean plain
+ * data (points + settings), never derived geometry caches. `kind` mirrors the
+ * instance discriminant; `entityId` is the one id the whole protocol
+ * addresses entities by. */
+export interface FunnelWire {
+  kind: 'funnel';
+  entityId: number;
   anchorX: number;
   anchorY: number;
   facing: FunnelFacing;
@@ -24,15 +39,28 @@ export interface FunnelSnapshot {
   enabled: boolean;
 }
 
-export interface TubeSnapshot {
-  id: number;
+export interface TubeWire {
+  kind: 'tube';
+  entityId: number;
   points: Point[];
   /** null = accept every species. */
   filter: number[] | null;
 }
 
-export interface FilterSnapshot {
-  id: number;
+export interface FlaskWire {
+  kind: 'flask';
+  entityId: number;
+  x: number;
+  y: number;
+  facing: FlaskFacing;
+  sizeScale: number;
+  stirred: boolean;
+  flaskKind: FlaskKind;
+}
+
+export interface FilterWire {
+  kind: 'filter';
+  entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -41,8 +69,9 @@ export interface FilterSnapshot {
   species: number[];
 }
 
-export interface RadiatorSnapshot {
-  id: number;
+export interface RadiatorWire {
+  kind: 'radiator';
+  entityId: number;
   x0: number;
   y0: number;
   x1: number;
@@ -54,8 +83,9 @@ export interface RadiatorSnapshot {
   targetTempC: number;
 }
 
-export interface GlassSnapshot {
-  id: number;
+export interface GlassWire {
+  kind: 'glass';
+  entityId: number;
   /** The polygon's corners where they currently sit -- already rotated and
    * translated (see glass.ts's glassPoints), so the UI hit-tests and draws
    * handles against these without redoing the math. */
@@ -65,15 +95,39 @@ export interface GlassSnapshot {
   rotation: number;
 }
 
-export interface FlaskSnapshot {
-  id: number;
-  x: number;
-  y: number;
-  facing: FlaskFacing;
-  sizeScale: number;
-  stirred: boolean;
-  kind: FlaskKind;
-}
+export type EntityWire = FunnelWire | TubeWire | FlaskWire | FilterWire | RadiatorWire | GlassWire;
+
+export type EntityKind = EntityWire['kind'];
+
+/** The 'placeEntity' message's per-kind payload: everything a fresh instance
+ * needs, minus the entityId (the worker assigns that). Settings fields are a
+ * snapshot captured at placement time -- moving the tool's sliders afterward
+ * never changes an entity already on the bench. */
+export type PlaceEntityWire =
+  | { kind: 'funnel'; x: number; y: number; facing: FunnelFacing; specId: number; tempC: number; ratePerMinute: number; total: number | null }
+  | { kind: 'tube'; points: Point[]; filter: number[] | null }
+  | { kind: 'flask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
+  | { kind: 'filter'; x0: number; y0: number; x1: number; y1: number; species: number[] }
+  | { kind: 'radiator'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
+  | { kind: 'glass'; points: Point[] };
+
+/** The 'updateEntitySettings' payload: one kind's whole settings block, sent
+ * complete rather than as a patch (same "settings are a snapshot" convention
+ * the per-kind update messages had) so a second quick edit can't clobber the
+ * first through frame latency. Geometry never travels here -- that's what
+ * moveEntity/dragEntityHandle/rotateEntity are for -- and glass has no
+ * settings at all (its rotation goes through rotateEntity). */
+export type EntitySettingsWire =
+  | { kind: 'funnel'; specId: number; tempC: number; ratePerMinute: number; total: number | null; facing: FunnelFacing }
+  | { kind: 'tube'; filter: number[] | null }
+  | { kind: 'flask'; facing: FlaskFacing; sizeScale: number; stirred: boolean; flaskKind: FlaskKind }
+  | { kind: 'filter'; species: number[] }
+  | { kind: 'radiator'; radiationRadius: number; targetTempC: number };
+
+/** The 'entityAction' verbs -- one-shot operations that aren't settings
+ * (nothing to round-trip through a draft): refill a funnel's budget, or
+ * switch its dripping on/off. */
+export type EntityAction = 'reset' | 'enable' | 'disable';
 
 export type WorkerToMainMessage =
   | { type: 'ready'; width: number; height: number; palette: PaletteEntry[] }
@@ -86,15 +140,17 @@ export type WorkerToMainMessage =
       radiatorTargetK: Float32Array;
       stirrerMask: Uint8Array;
       tubeMask: Uint8Array;
+      /** Purely a render hint now (the membrane tint): 1 where a filter
+       * entity owns the cell, 0 elsewhere -- derived per frame from
+       * grid.entityOwner, since the old per-cell filter-id grid array is
+       * gone (movement looks allow-lists up by owner instead; see
+       * filter.ts's FilterAllow). */
       filterMask: Uint8Array;
       catalystStrength: Uint8Array;
       funnelFillSpecId: Uint16Array;
-      funnels: FunnelSnapshot[];
-      tubes: TubeSnapshot[];
-      flasks: FlaskSnapshot[];
-      filters: FilterSnapshot[];
-      radiators: RadiatorSnapshot[];
-      glass: GlassSnapshot[];
+      /** Every placed apparatus, all kinds in one list (ascending entityId =
+       * placement order = compositor z-order). */
+      entities: EntityWire[];
       sinkMask: Uint8Array;
       /** Indexed by specId (see species-data.ts's SPECIES array) -- how many
        * pixels of each species every sink line on the grid has ever
@@ -136,41 +192,11 @@ export type WorkerToMainMessage =
 
 export type MainToWorkerMessage =
   | { type: 'paint'; x: number; y: number; radius: number; specId: number; tempC: number }
-  /** Draws a one-cell-wide radiator line, which becomes a tracked instance
-   * carrying the reach/target it was drawn with (see radiators.ts) -- same
-   * "settings are a snapshot captured at placement time" convention as the
-   * filter line's allow-list. */
-  | { type: 'paintRadiatorLine'; x0: number; y0: number; x1: number; y1: number; radiationRadius: number; targetTempC: number }
-  /** Replaces one placed radiator's reach/target (the select tool's radiator
-   * edit panel), re-stamping its cells in place. */
-  | { type: 'updateRadiator'; id: number; radiationRadius: number; targetTempC: number }
-  /** Slides a placed radiator line by (dx, dy), keeping its length and
-   * angle. */
-  | { type: 'moveRadiator'; id: number; dx: number; dy: number }
-  /** Drags one end of a placed radiator line to (x, y), leaving the other
-   * where it is. */
-  | { type: 'moveRadiatorEndpoint'; id: number; endIndex: 0 | 1; x: number; y: number }
   | { type: 'paintStirrer'; x: number; y: number; radius: number }
   /** Paints a catalyst pad (see grid.ts's catalystStrength). `strength` is
    * the whole-number reaction-rate multiplier; 0 is a no-op rather than an
    * eraser (use 'erase' to remove a pad). */
   | { type: 'paintCatalyst'; x: number; y: number; radius: number; strength: number }
-  /** Draws a one-cell-wide filter line from (x0,y0) to (x1,y1) -- a filter
-   * is a precise membrane, not a brush splash, so it's a single straight
-   * drag with no width of its own (see .filterMask in grid.ts). The line
-   * becomes a tracked instance (see filter.ts) carrying `species` as its own
-   * allow-list, captured at placement time like a funnel's payload. */
-  | { type: 'paintFilterLine'; x0: number; y0: number; x1: number; y1: number; species: number[] }
-  /** Replaces one placed filter line's allow-list (the select-apparatus
-   * tool's filter edit panel). */
-  | { type: 'updateFilter'; id: number; species: number[] }
-  /** Slides a placed filter line by (dx, dy), keeping its length and angle
-   * -- a membrane is one segment with no knees, so this is its only
-   * reshaping. */
-  | { type: 'moveFilter'; id: number; dx: number; dy: number }
-  /** Drags one end of a placed filter line to (x, y), leaving the other
-   * where it is -- the reshaping a membrane has instead of a tube's knees. */
-  | { type: 'moveFilterEndpoint'; id: number; endIndex: 0 | 1; x: number; y: number }
   | { type: 'erase'; x: number; y: number; radius: number }
   | { type: 'setRunning'; running: boolean }
   | { type: 'step' }
@@ -181,58 +207,48 @@ export type MainToWorkerMessage =
   | { type: 'grabStart'; x: number; y: number; radius: number }
   | { type: 'grabMove'; x: number; y: number }
   | { type: 'grabEnd' }
-  | {
-      type: 'placeFunnel';
-      x: number;
-      y: number;
-      facing: FunnelFacing;
-      specId: number;
-      tempC: number;
-      ratePerMinute: number;
-      total: number | null;
-    }
-  | { type: 'updateFunnel'; id: number; specId: number; tempC: number; ratePerMinute: number; total: number | null; facing: FunnelFacing }
-  | { type: 'resetFunnel'; id: number }
-  | { type: 'setFunnelEnabled'; id: number; enabled: boolean }
-  | { type: 'moveFunnel'; id: number; x: number; y: number }
-  | { type: 'placeTube'; points: Point[]; filter: number[] | null }
-  /** Slides a whole placed tube by (dx, dy), every knee together -- the
-   * keyboard nudge, and the only way to move a tube without also reshaping
-   * it (moveTubeSegment drags one segment and lets the outer knees follow). */
-  | { type: 'moveTube'; id: number; dx: number; dy: number }
-  | { type: 'moveTubeKnee'; id: number; kneeIndex: number; x: number; y: number }
-  | { type: 'moveTubeSegment'; id: number; segIndex: number; dx: number; dy: number }
-  | { type: 'updateTube'; id: number; filter: number[] | null }
-  | { type: 'placeFlask'; x: number; y: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
-  /** Re-stamps a placed flask with new settings (see flask.ts's
-   * updateFlaskInstance) -- every field is sent together, same
-   * "settings are a snapshot, not a patch" convention as updateFunnel. */
-  | { type: 'updateFlask'; id: number; facing: FlaskFacing; sizeScale: number; stirred: boolean; kind: FlaskKind }
-  | { type: 'moveFlask'; id: number; x: number; y: number }
-  /** Stamps a one-cell-wide glass polyline through `points` (each pair of
-   * consecutive points joined by a Bresenham line) -- the Glass tool draws
-   * vessel walls as a clicked polygon chain, the same interaction as the
-   * conveyor tube, rather than as a free-draw brush. The chain becomes a
-   * tracked instance (see glass.ts) so the Select tool can pick it back up. */
-  | { type: 'placeGlassPolyline'; points: Point[] }
-  /** Slides a placed glass polygon by (dx, dy), keeping its shape. */
-  | { type: 'moveGlass'; id: number; dx: number; dy: number }
-  /** Turns a placed glass polygon to an absolute rotation step (0..7, 45
-   * degrees each) about its own centroid -- absolute rather than a delta so a
-   * dropped wheel message can't leave the instance a notch off what the UI
-   * is drawing. */
-  | { type: 'rotateGlass'; id: number; rotation: number }
+  /** Puts a new apparatus on the bench. The worker assigns the entityId and
+   * answers with it in the next frame's `entities`; scenario Restrictions
+   * gate each kind the same way the old per-kind messages were gated. */
+  | { type: 'placeEntity'; entity: PlaceEntityWire }
+  /** Slides a whole placed entity by (dx, dy) -- every kind moves this way
+   * (a tube's knees all translate together, a funnel's anchor shifts), so
+   * the pointer drag and the keyboard nudge are the same message. */
+  | { type: 'moveEntity'; entityId: number; dx: number; dy: number }
+  /** Drags one of an entity's handles to the absolute cell (x, y) -- a tube
+   * knee, either end of a filter/radiator line, or a glass polygon corner
+   * (see entity.ts's entityHandles for what each kind exposes and how
+   * handleIds are numbered). Absolute rather than a delta so a dropped
+   * pointermove can't leave the handle displaced from the cursor. */
+  | { type: 'dragEntityHandle'; entityId: number; handleId: number; x: number; y: number }
+  /** Turns an entity to an absolute rotation step: a glass polygon's 0..7
+   * wheel position, or an index into a funnel's/flask's facing cycle
+   * (FUNNEL_FACINGS/FLASK_FACINGS). Absolute rather than a delta so a
+   * dropped or reordered wheel message can't leave the instance a notch off
+   * what the UI is drawing. A no-op for kinds with no rotate capability. */
+  | { type: 'rotateEntity'; entityId: number; rotation: number }
+  /** Replaces one entity's whole settings block (see EntitySettingsWire).
+   * Ignored if the payload's kind doesn't match the entity's -- a stale
+   * message aimed at a deleted-and-outlived id can't misconfigure whatever
+   * kind lives there now (ids are never reused, so this is belt and
+   * braces). */
+  | { type: 'updateEntitySettings'; entityId: number; settings: EntitySettingsWire }
+  /** One-shot verbs (see EntityAction) -- currently all funnel: 'reset'
+   * refills the budget, 'enable'/'disable' switch dripping. No-ops on kinds
+   * without the action. */
+  | { type: 'entityAction'; entityId: number; action: EntityAction }
+  /** Removes one placed apparatus outright. This is the *only* way to take
+   * apparatus off the bench: the eraser is matter-only, since "erase part of
+   * a vessel" was a half-state nothing downstream could represent coherently.
+   * The UI sends it from the Select tool -- Delete/Backspace, or the edit
+   * panel's Delete button. */
+  | { type: 'deleteEntity'; entityId: number }
   /** Draws a collection port line -- a Sink or a Vent, which differ only in
    * which tally they feed (see grid.ts's SinkMaskValue). One message for
-   * both, since the drawn geometry is identical. */
+   * both, since the drawn geometry is identical. Ports are painted terrain
+   * (a mask), not entities -- phase 6e of the overhaul plan may promote
+   * them. */
   | { type: 'paintSinkLine'; x0: number; y0: number; x1: number; y1: number; width: number; port: SinkMaskValue.Sink | SinkMaskValue.Vent }
-  /** Removes one placed apparatus outright. This is the *only* way to take
-   * apparatus off the bench: the eraser is matter-only now, since "erase part
-   * of a vessel" was a half-state nothing downstream could represent
-   * coherently (a tracked instance whose footprint has holes in it, which the
-   * next edit would silently heal anyway). The UI sends it from the Select
-   * tool -- Delete/Backspace, or the edit panel's Delete button. */
-  | { type: 'deleteApparatus'; kind: 'funnel' | 'tube' | 'flask' | 'filter' | 'radiator' | 'glass'; id: number }
   /** Zeroes both the sink and the vent tallies. */
   | { type: 'resetSinkCounts' }
   /** Rebuilds the world at a new grid height (the column count is fixed --

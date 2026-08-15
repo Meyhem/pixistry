@@ -295,11 +295,13 @@ describe('stepMovement', () => {
 
     const grid = new SimGrid(1, 2);
     grid.set(0, 0, iron.specId, iron.phase);
-    grid.filterMask[grid.index(0, 1)] = 1;
+    // A membrane cell is marked purely by ownership: the cell's entityOwner
+    // names a filter whose allow-list is in the per-tick map (see filter.ts).
+    grid.entityOwner[grid.index(0, 1)] = 1;
     const rng = mulberry32(1);
 
-    stepMovement(grid, species, rng, 0);
-    expect(grid.specId[grid.index(0, 0)]).toBe(iron.specId); // no allow-list -- blocked, stayed put
+    stepMovement(grid, species, rng, 0, new Map([[1, new Set([SpeciesId.H2O])]]));
+    expect(grid.specId[grid.index(0, 0)]).toBe(iron.specId); // not on the line's list -- blocked, stayed put
 
     stepMovement(grid, species, rng, 1, new Map([[1, new Set([iron.specId])]]));
     expect(grid.specId[grid.index(0, 1)]).toBe(iron.specId); // now allowed -- passed through
@@ -312,11 +314,11 @@ describe('stepMovement', () => {
 
     const grid = new SimGrid(1, 2);
     grid.set(0, 1, hydrogen.specId, hydrogen.phase);
-    grid.filterMask[grid.index(0, 0)] = 1;
+    grid.entityOwner[grid.index(0, 0)] = 1;
     const rng = mulberry32(2);
 
-    stepMovement(grid, species, rng, 0);
-    expect(grid.specId[grid.index(0, 1)]).toBe(hydrogen.specId); // no allow-list -- blocked
+    stepMovement(grid, species, rng, 0, new Map([[1, new Set([SpeciesId.H2O])]]));
+    expect(grid.specId[grid.index(0, 1)]).toBe(hydrogen.specId); // not on the line's list -- blocked
 
     stepMovement(grid, species, rng, 1, new Map([[1, new Set([hydrogen.specId])]]));
     expect(grid.specId[grid.index(0, 0)]).toBe(hydrogen.specId); // now allowed -- passed through
@@ -332,7 +334,7 @@ describe('stepMovement', () => {
       const grid = new SimGrid(5, 2);
       for (let x = 0; x < 5; x++) grid.set(x, 1, SpeciesId.Fe, PhaseCode.Solid);
       grid.set(2, 0, SpeciesId.H2O, PhaseCode.Liquid);
-      grid.filterMask[grid.index(1, 0)] = 1; // left neighbor is filtered, right neighbor is open
+      grid.entityOwner[grid.index(1, 0)] = 1; // left neighbor is a membrane cell, right neighbor is open
       const rng = mulberry32(42);
       let reachedFiltered = false;
       let reachedOpen = false;
@@ -344,7 +346,7 @@ describe('stepMovement', () => {
       return { reachedFiltered, reachedOpen };
     }
 
-    const blocked = run(undefined);
+    const blocked = run(new Map([[1, new Set([SpeciesId.Fe])]]));
     expect(blocked.reachedFiltered).toBe(false);
     expect(blocked.reachedOpen).toBe(true); // spread still works on the unfiltered side, proving movement wasn't just frozen
 

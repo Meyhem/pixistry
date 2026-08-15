@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PhaseCode, SimGrid } from './grid';
 import { AMBIENT_TEMPERATURE_K, energyForTemperature, massOf } from './heat';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
+import { compositeEntities } from './entity-composite';
 import { placeFunnelInstance } from './funnel';
 import { placeRadiatorInstance } from './radiators';
 import { recordSinkHistory, SinkCounter, stepSinks } from './sink';
@@ -30,14 +30,14 @@ describe('world snapshot/restore', () => {
 
     const funnels = [placeFunnelInstance({ x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 20, ratePerMinute: 60, total: 10 })];
     const tubes = [placeTubeInstance(grid, { points: [{ x: 2, y: 2 }, { x: 6, y: 2 }], filter: null })];
-    compositeEntities(grid, species, { ...NO_ENTITIES, funnels, tubes });
+    compositeEntities(grid, species, [...funnels, ...tubes]);
 
-    const snapshot = captureWorldSnapshot(grid, funnels, tubes, [], [], [], [], sinkCounter, ventCounter, 42);
+    const snapshot = captureWorldSnapshot(grid, [...funnels, ...tubes], sinkCounter, ventCounter, 42);
 
     // Mutate everything after the snapshot -- restore should undo all of it.
     paint(grid, species, 8, 8, SpeciesId.Fe);
     const strayRadiator = [placeRadiatorInstance({ x0: 1, y0: 1, x1: 1, y1: 1, radius: 5, targetK: 500 })];
-    compositeEntities(grid, species, { ...NO_ENTITIES, funnels, tubes, radiators: strayRadiator });
+    compositeEntities(grid, species, [...funnels, ...tubes, ...strayRadiator]);
     expect(grid.radiatorRadius[grid.index(1, 1)]).toBe(5);
     sinkCounter.reset();
     const mutatedFunnels = [...funnels];
@@ -54,8 +54,10 @@ describe('world snapshot/restore', () => {
     expect(grid.radiatorRadius[grid.index(1, 1)]).toBe(0);
     expect(sinkCounter.grandTotal).toBe(1);
     expect(restored.tick).toBe(42);
-    expect(restored.funnels[0]!.remaining).toBe(10);
-    expect(restored.tubes[0]!.filter).toBeNull();
+    const restoredFunnel = restored.entities.find((e) => e.kind === 'funnel');
+    const restoredTube = restored.entities.find((e) => e.kind === 'tube');
+    expect(restoredFunnel?.kind === 'funnel' && restoredFunnel.remaining).toBe(10);
+    expect(restoredTube?.kind === 'tube' ? restoredTube.filter : undefined).toBeNull();
   });
 
   it('round-trips the sink history ring buffer, independent of the live one', () => {
@@ -64,7 +66,7 @@ describe('world snapshot/restore', () => {
     recordSinkHistory(sinkCounter, 60);
     recordSinkHistory(sinkCounter, 120);
 
-    const snapshot = captureWorldSnapshot(grid, [], [], [], [], [], [], sinkCounter, new SinkCounter(), 120);
+    const snapshot = captureWorldSnapshot(grid, [], sinkCounter, new SinkCounter(), 120);
     sinkCounter.reset();
     expect(sinkCounter.history).toHaveLength(0);
 
@@ -77,13 +79,15 @@ describe('world snapshot/restore', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(20, 20);
     const funnels = [placeFunnelInstance({ x: 10, y: 10, facing: 'down', specId: SpeciesId.H2O, tempC: 20, ratePerMinute: 60, total: null })];
-    compositeEntities(grid, species, { ...NO_ENTITIES, funnels });
+    compositeEntities(grid, species, funnels);
     const sinkCounter = new SinkCounter();
 
-    const snapshot = captureWorldSnapshot(grid, funnels, [], [], [], [], [], sinkCounter, new SinkCounter(), 0);
+    const snapshot = captureWorldSnapshot(grid, funnels, sinkCounter, new SinkCounter(), 0);
     const restored = restoreWorldSnapshot(grid, species, sinkCounter, new SinkCounter(), snapshot);
 
-    restored.funnels[0]!.remaining = 999;
+    const restoredFunnel = restored.entities[0];
+    if (restoredFunnel?.kind !== 'funnel') throw new Error('expected the restored entity to be the funnel');
+    restoredFunnel.remaining = 999;
     expect(funnels[0]!.remaining).not.toBe(999);
   });
 

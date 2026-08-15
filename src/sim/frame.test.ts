@@ -10,7 +10,7 @@ import { EMPTY, PhaseCode, SimGrid } from './grid';
 
 function makeFunnel(overrides: Partial<FunnelInstance> = {}): FunnelInstance {
   return {
-    id: 1,
+    kind: 'funnel',
     entityId: 1,
     anchorX: 5,
     anchorY: 5,

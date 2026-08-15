@@ -24,11 +24,11 @@ export interface FlaskConfig {
   readonly facing: FlaskFacing;
   readonly sizeScale: number;
   readonly stirred: boolean;
-  readonly kind: FlaskKind;
+  readonly flaskKind: FlaskKind;
 }
 
 export interface FlaskInstance {
-  readonly id: number;
+  readonly kind: 'flask';
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   x: number;
@@ -36,16 +36,10 @@ export interface FlaskInstance {
   facing: FlaskFacing;
   sizeScale: number;
   stirred: boolean;
-  kind: FlaskKind;
-}
-
-let nextFlaskId = 1;
-
-/** Test-only: makes ids deterministic across test files (each of which gets
- * its own module instance, but a single file placing flasks in several tests
- * would otherwise keep counting up). */
-export function resetFlaskIds(): void {
-  nextFlaskId = 1;
+  /** Which glassware shape (Erlenmeyer/beaker -- see flask-shapes.ts).
+   * Named flaskKind rather than plain kind because `kind` is the entity
+   * discriminant ('flask') shared by every apparatus instance. */
+  flaskKind: FlaskKind;
 }
 
 export interface FlaskFootprint {
@@ -59,7 +53,7 @@ export interface FlaskFootprint {
 }
 
 export function flaskFootprint(instance: FlaskInstance): FlaskFootprint {
-  const shape = flaskShapeFor(instance.facing, instance.sizeScale, instance.kind);
+  const shape = flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind);
   return {
     wallCells: shape.cells.map((cell) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy })),
     reservoirCells: shape.reservoirCells.map((cell) => ({ x: instance.x + cell.dx, y: instance.y + cell.dy })),
@@ -68,25 +62,25 @@ export function flaskFootprint(instance: FlaskInstance): FlaskFootprint {
 
 export function placeFlaskInstance(config: FlaskConfig): FlaskInstance {
   return {
-    id: nextFlaskId++,
+    kind: 'flask',
     entityId: nextEntityId(),
     x: config.x,
     y: config.y,
     facing: config.facing,
     sizeScale: config.sizeScale,
     stirred: config.stirred,
-    kind: config.kind,
+    flaskKind: config.flaskKind,
   };
 }
 
 /** Applies an edit (shape/size/stirred/facing, any subset). The vessel's
  * contents are untouched -- a resize or a move re-derives the glass around
  * (or away from) whatever it was holding rather than deleting it. */
-export function updateFlaskInstance(instance: FlaskInstance, patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'kind'>>): void {
+export function updateFlaskInstance(instance: FlaskInstance, patch: Partial<Pick<FlaskInstance, 'facing' | 'sizeScale' | 'stirred' | 'flaskKind'>>): void {
   if (patch.facing !== undefined) instance.facing = patch.facing;
   if (patch.sizeScale !== undefined) instance.sizeScale = patch.sizeScale;
   if (patch.stirred !== undefined) instance.stirred = patch.stirred;
-  if (patch.kind !== undefined) instance.kind = patch.kind;
+  if (patch.flaskKind !== undefined) instance.flaskKind = patch.flaskKind;
 }
 
 export function moveFlaskInstance(instance: FlaskInstance, x: number, y: number): void {

@@ -83,7 +83,7 @@ interface TubeGeometry {
 }
 
 export interface TubeInstance {
-  readonly id: number;
+  readonly kind: 'tube';
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
   points: Point[];
@@ -91,8 +91,6 @@ export interface TubeInstance {
   filter: Set<number> | null;
   geometry: TubeGeometry;
 }
-
-let nextTubeId = 1;
 
 function idx(grid: SimGrid, p: Point): number | null {
   return grid.inBounds(p.x, p.y) ? grid.index(p.x, p.y) : null;
@@ -230,7 +228,7 @@ export function normalizeTubePoints(points: readonly Point[]): Point[] {
 export function placeTubeInstance(grid: SimGrid, placement: TubePlacement): TubeInstance {
   const points = normalizeTubePoints(placement.points);
   return {
-    id: nextTubeId++,
+    kind: 'tube',
     entityId: nextEntityId(),
     points,
     filter: placement.filter ? new Set(placement.filter) : null,
@@ -311,40 +309,6 @@ export function moveTubeInstance(grid: SimGrid, instance: TubeInstance, dx: numb
     instance,
     instance.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
   );
-}
-
-/** Drags segment (segIndex, segIndex+1) by (dx, dy): both its points
- * translate together (preserving the segment's own direction/length
- * exactly, so no re-snap is needed for the dragged segment itself), while
- * each outer neighbor (segIndex-1 / segIndex+2, if any) stays fixed and
- * pulls its adjoining point back onto a valid octant connection via
- * resolveKneePosition -- the same "connected points move, their other
- * points don't" rule moveTubeKnee applies to a single knee, applied to both
- * ends of the dragged segment in sequence (segIndex first, so segIndex+1
- * resolves against segIndex's already-updated position). */
-export function moveTubeSegment(grid: SimGrid, instance: TubeInstance, segIndex: number, dx: number, dy: number): void {
-  const points = instance.points;
-  const i = segIndex;
-  const j = segIndex + 1;
-  if (i < 0 || j >= points.length) return;
-  const rawI = { x: (points[i] as Point).x + dx, y: (points[i] as Point).y + dy };
-  const rawJ = { x: (points[j] as Point).x + dx, y: (points[j] as Point).y + dy };
-  const outerPrev = points[i - 1];
-  const newI = outerPrev ? resolveKneePosition(outerPrev, points[j] as Point, rawI) : rawI;
-  const outerNext = points[j + 1];
-  // With an outer neighbour past j, resolving against it keeps both of j's
-  // connections valid at once. Without one, j is a free end and simply keeps
-  // the segment: translating it to `rawJ` would leave i wherever the resolve
-  // above put it and j a plain translation away, which is generally not an
-  // octant step apart at all -- the segment stops being a segment.
-  const newJ = outerNext
-    ? resolveKneePosition(newI, outerNext, rawJ)
-    : { x: newI.x + ((points[j] as Point).x - (points[i] as Point).x), y: newI.y + ((points[j] as Point).y - (points[i] as Point).y) };
-  const newPoints = points.slice();
-  newPoints[i] = newI;
-  newPoints[j] = newJ;
-  if (hasDegenerateSegment(newPoints)) return;
-  rebuildTubeGeometry(grid, instance, newPoints);
 }
 
 export interface TubeConfig {

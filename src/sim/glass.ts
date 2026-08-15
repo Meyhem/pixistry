@@ -26,23 +26,16 @@ import type { Point } from './tube-shapes';
 export const GLASS_ROTATION_STEPS = 8;
 
 export interface GlassInstance {
-  readonly id: number;
+  readonly kind: 'glass';
   /** Placement order across every apparatus kind -- see entity-id.ts. */
   readonly entityId: number;
-  /** The corner chain exactly as clicked, before rotation or translation. */
-  readonly basePoints: readonly Point[];
+  /** The corner chain as clicked (or as corner drags have since reshaped it
+   * -- see moveGlassCorner), before rotation or translation. */
+  basePoints: Point[];
   /** 0..GLASS_ROTATION_STEPS-1, about the base chain's centroid. */
   rotation: number;
   dx: number;
   dy: number;
-}
-
-let nextGlassId = 1;
-
-/** Test-only: makes ids deterministic across test files (same reason as
- * flask.ts's resetFlaskIds). */
-export function resetGlassIds(): void {
-  nextGlassId = 1;
 }
 
 function centroidOf(points: readonly Point[]): { x: number; y: number } {
@@ -96,7 +89,7 @@ export function glassCells(instance: GlassInstance): Point[] {
 
 export function placeGlassInstance(points: readonly Point[]): GlassInstance {
   return {
-    id: nextGlassId++,
+    kind: 'glass',
     entityId: nextEntityId(),
     basePoints: points.map((p) => ({ x: p.x, y: p.y })),
     rotation: 0,
@@ -118,5 +111,32 @@ export function moveGlassInstance(instance: GlassInstance, dx: number, dy: numbe
  * the instance a notch away from what the UI is drawing. */
 export function rotateGlassInstance(instance: GlassInstance, rotation: number): void {
   instance.rotation = ((Math.round(rotation) % GLASS_ROTATION_STEPS) + GLASS_ROTATION_STEPS) % GLASS_ROTATION_STEPS;
+}
+
+/** Drags one corner of the polygon to (x, y) -- given in *current* grid
+ * space, where the cursor is -- by inverse-transforming the target back into
+ * base-point space (untranslate, then unrotate about the base centroid) and
+ * replacing that base corner. Storing the result in base space is what keeps
+ * rotation lossless: folding the current-space point in directly would bake
+ * the rotation into the chain and smear the shape a little further on every
+ * subsequent wheel notch.
+ *
+ * Moving a corner shifts the chain's centroid, so when the polygon is
+ * currently rotated its *other* corners can resolve a cell or two differently
+ * afterwards (they turn about the new centroid). That's inherent to keeping
+ * one lossless rotation center rather than per-corner bookkeeping. */
+export function moveGlassCorner(instance: GlassInstance, cornerIndex: number, x: number, y: number): void {
+  if (cornerIndex < 0 || cornerIndex >= instance.basePoints.length) return;
+  const center = centroidOf(instance.basePoints);
+  const angle = (instance.rotation * 2 * Math.PI) / GLASS_ROTATION_STEPS;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const vx = x - instance.dx - center.x;
+  const vy = y - instance.dy - center.y;
+  // Rotate by -angle: the transpose of glassPoints' rotation.
+  instance.basePoints[cornerIndex] = {
+    x: Math.round(center.x + vx * cos + vy * sin),
+    y: Math.round(center.y - vx * sin + vy * cos),
+  };
 }
 

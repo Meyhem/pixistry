@@ -1,21 +1,33 @@
 // Web Worker: owns the SimGrid, runs the tick loop, and talks to the main
 // thread over postMessage. Tick order follows the design doc's movement ->
 // heat -> react. M4 added tools (walls reuse the plain paint/erase messages
-// since SpeciesTable branches transparently on wall specIds; the heater/
-// cooler radiator tool is painted via a separate paintRadiator message into
-// grid.radiatorRadius/grid.radiatorTargetK, a non-physical overlay snapshot
-// taken once at paint time -- see radiators.ts; mixer stirs) and time
-// controls (single-step, speed multiplier). M5 wires the static
+// since SpeciesTable branches transparently on wall specIds; mixer stirs)
+// and time controls (single-step, speed multiplier). M5 wires the static
 // reaction table into the grid (react.ts) -- this is what makes an ionic
 // solid painted next to water actually dissolve into aqueous ions on-grid.
 // Pixistry is just pixels of elements and compounds with a temperature
 // each -- there is no gas pressure model.
 //
 // Wire types live in protocol.ts and frame-building in frame.ts (both pure,
-// independently testable) -- this module is just the live grid/instance
+// independently testable) -- this module is just the live grid/entity
 // state and the tick loop/message dispatch that mutate it.
+//
+// All apparatus lives in ONE `entities` list and speaks one protocol
+// (place/move/dragHandle/rotate/updateSettings/action/delete), dispatched
+// through entity.ts's ENTITY_DEFS -- there are no per-kind message handlers
+// or per-kind instance arrays here anymore.
 import { SimGrid, SinkMaskValue } from './grid';
-import { compositeEntities, type PlacedEntities } from './entity-composite';
+import { compositeEntities } from './entity-composite';
+import {
+  applyEntityAction,
+  applyEntitySettings,
+  dragEntityHandleTo,
+  moveEntityBy,
+  placeEntityFromWire,
+  rotateEntityTo,
+  type AnyEntity,
+  type EntityKind,
+} from './entity';
 import { forEachCellInRadius } from './geometry';
 import { grabDrop, grabPickUp, type GrabState } from './grabber';
 import { buildFrame } from './frame';
@@ -30,15 +42,7 @@ import {
   stepRadiators,
   stepRadiativeLoss,
 } from './heat';
-import {
-  moveFunnelInstance,
-  placeFunnelInstance,
-  resetFunnelInstance,
-  setFunnelEnabledInstance,
-  stepFunnels,
-  updateFunnelInstance,
-  type FunnelInstance,
-} from './funnel';
+import { stepFunnels } from './funnel';
 import { stepMovement } from './movement';
 import { stirRegion } from './mixer';
 import { evaluateGoals } from './objectives';
@@ -51,26 +55,8 @@ import { recordSinkHistory, SinkCounter, sinkLineCells, stepSinks } from './sink
 import { buildPalette, SpeciesTable } from './species';
 import { captureWorldSnapshot, restoreWorldSnapshot, type WorldSnapshot } from './world-snapshot';
 import { stepStirrers } from './stirrer';
-import {
-  moveTubeInstance,
-  moveTubeKnee,
-  moveTubeSegment,
-  normalizeTubePoints,
-  placeTubeInstance,
-  stepTubes,
-  updateTubeInstance,
-  type TubeInstance,
-} from './tube';
-import { moveFlaskInstance, placeFlaskInstance, updateFlaskInstance, type FlaskInstance } from './flask';
-import { filterAllowMap, moveFilterEndpoint, moveFilterInstance, placeFilterInstance, updateFilterInstance, type FilterInstance } from './filter';
-import { moveGlassInstance, placeGlassInstance, rotateGlassInstance, type GlassInstance } from './glass';
-import {
-  moveRadiatorEndpoint,
-  moveRadiatorInstance,
-  placeRadiatorInstance,
-  updateRadiatorInstance,
-  type RadiatorInstance,
-} from './radiators';
+import { filterAllowMap } from './filter';
+import { stepTubes } from './tube';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 
 // The grid's default shape. The column count is fixed -- it sets how coarse
@@ -127,40 +113,12 @@ let grabState: GrabState | null = null;
 // on 'stirEnd' (pointerup).
 let stirState: { x: number; y: number; radius: number } | null = null;
 
-// Placed addition-funnels (see funnel.ts) -- unlike walls or the radiator
-// overlay, a funnel needs per-instance state (species/rate/remaining budget)
-// that isn't representable as a value per grid cell, so it's tracked here as
-// a plain array rather than a SimGrid field.
-let funnels: FunnelInstance[] = [];
-
-// Placed conveyor-tubes (see tube.ts) -- tracked the same way funnels are,
-// for the same reason: knee points/cone size/species filter aren't
-// representable as a value per grid cell.
-let tubes: TubeInstance[] = [];
-
-// Placed glassware (see flask.ts) -- tracked so the select-apparatus tool
-// can pick a flask back up and re-stamp it at a new size/shape/facing.
-// Scenario-authored flasks land here too (scenario.ts's applyFlask): an
-// untracked stamp isn't representable anymore, since the compositor derives
-// every apparatus cell from these lists and clears whatever no live instance
-// claims.
-let flasks: FlaskInstance[] = [];
-
-// Placed filter membranes (see filter.ts) -- tracked like the funnels/tubes/
-// flasks above, and for the same reason: each line carries its own species
-// allow-list, which isn't representable as a value per grid cell. What *is*
-// per-cell is which line owns the cell (grid.filterMask holds the instance
-// id), so movement.ts can look the right allow-list up per filtered cell.
-let filters: FilterInstance[] = [];
-
-// Placed radiator lines (see radiators.ts) and hand-drawn glass polygons (see
-// glass.ts) -- tracked for the same reason as everything above, even though
-// both are fully represented on the grid itself (the radiator by its two
-// per-cell fields, the polygon by plain glass wall cells): the grid says what
-// each cell does, not which drag put it there, so without an instance list
-// neither could be picked back up, moved, rotated or re-configured.
-let radiators: RadiatorInstance[] = [];
-let glassPolys: GlassInstance[] = [];
+// Everything placed on the bench, all kinds together, in placement order
+// (which is also the compositor's z-order, since entityIds ascend). One list
+// because per-instance state (a funnel's budget, a tube's knees, a filter's
+// allow-list) isn't representable as a value per grid cell -- and one list
+// rather than six because every operation on it is now kind-generic.
+let entities: AnyEntity[] = [];
 
 // The Sink apparatus's global tally (see sink.ts) -- one counter shared by
 // every sink line drawn on the grid, not per-instance. The Vent gets a
@@ -208,64 +166,40 @@ function paintCircle(x: number, y: number, radius: number, apply: (px: number, p
   forEachCellInRadius(grid, x, y, radius, apply);
 }
 
-/** Looks up a placed funnel/tube by id and runs `fn` on it if found -- shared
- * guard for every message handler below that edits or moves an existing
- * instance, replacing what used to be a hand-written `find` + `if` at each
- * one. A missing id (the instance was erased between the UI sending the
- * message and the worker processing it) is silently a no-op, same as before. */
-function withFunnel(id: number, fn: (instance: FunnelInstance) => void): void {
-  const instance = funnels.find((f) => f.id === id);
-  if (instance) fn(instance);
+/** The entities of one kind, correctly narrowed -- what the per-tick steps
+ * take, since each still operates on its own kind (stepFunnels drips
+ * funnels, stepTubes conveys tubes). Filtered fresh at each call because
+ * `entities` is rebound, not just mutated, by several handlers. */
+function ofKind<K extends EntityKind>(kind: K): Extract<AnyEntity, { kind: K }>[] {
+  return entities.filter((e): e is Extract<AnyEntity, { kind: K }> => e.kind === kind);
 }
 
-function withTube(id: number, fn: (instance: TubeInstance) => void): void {
-  const instance = tubes.find((t) => t.id === id);
-  if (instance) fn(instance);
-}
-
-function withFilter(id: number, fn: (instance: FilterInstance) => void): void {
-  const instance = filters.find((f) => f.id === id);
-  if (instance) fn(instance);
-}
-
-function withFlask(id: number, fn: (instance: FlaskInstance) => void): void {
-  const instance = flasks.find((f) => f.id === id);
-  if (instance) fn(instance);
-}
-
-function withRadiator(id: number, fn: (instance: RadiatorInstance) => void): void {
-  const instance = radiators.find((r) => r.id === id);
-  if (instance) fn(instance);
-}
-
-function withGlass(id: number, fn: (instance: GlassInstance) => void): void {
-  const instance = glassPolys.find((g) => g.id === id);
-  if (instance) fn(instance);
-}
-
-/** Everything on the bench, read fresh -- the lists are rebound, not just
- * mutated, by several handlers. */
-function placedEntities(): PlacedEntities {
-  return { funnels, tubes, flasks, filters, radiators, glass: glassPolys };
+/** Looks a placed entity up by id and runs `fn` on it if found -- the guard
+ * every message handler that edits an existing instance goes through. A
+ * missing id (the entity was deleted between the UI sending the message and
+ * the worker processing it) is silently a no-op. */
+function withEntity(entityId: number, fn: (entity: AnyEntity) => void): void {
+  const entity = entities.find((e) => e.entityId === entityId);
+  if (entity) fn(entity);
 }
 
 /** Runs an apparatus placement/move/reshape/delete and re-derives the grid
- * from the instance lists afterwards. Every handler that touches an instance
+ * from the entity list afterwards. Every handler that touches an instance
  * goes through this and nothing else writes apparatus state -- see
- * entity-composite.ts for why that single rule replaces the three
+ * entity-composite.ts for why that single rule replaced the three
  * bookkeeping schemes this used to need. */
 function mutateEntities(edit: () => void): void {
   edit();
-  compositeEntities(grid, species, placedEntities());
+  compositeEntities(grid, species, entities);
 }
 
 function runOneTick(): void {
-  stepFunnels(grid, species, funnels);
-  stepMovement(grid, species, rng, tick++, filterAllowMap(filters));
-  stepTubes(grid, tubes);
+  stepFunnels(grid, species, ofKind('funnel'));
+  stepMovement(grid, species, rng, tick++, filterAllowMap(ofKind('filter')));
+  stepTubes(grid, ofKind('tube'));
   if (tick % STIR_INTERVAL_TICKS === 0) {
     if (stirState) stirRegion(grid, rng, stirState.x, stirState.y, stirState.radius);
-    stepStirrers(grid, rng, flasks);
+    stepStirrers(grid, rng, ofKind('flask'));
   }
   stepRadiators(grid, species, TICK_DT_SECONDS);
   stepConduction(grid, species);
@@ -284,12 +218,7 @@ function runOneTick(): void {
 
 function postFrame(): void {
   const frame = buildFrame(grid, species, {
-    funnels,
-    tubes,
-    flasks,
-    filters,
-    radiators,
-    glass: glassPolys,
+    entities,
     grabState,
     sinkCounter,
     ventCounter,
@@ -337,12 +266,37 @@ function runBurstChunk(): void {
   }
 }
 
+/** Whether the active scenario's rules let this placement happen. Every kind
+ * except glass maps 1:1 onto a lockable ToolKind; glass is a paintable wall
+ * material rather than a tool of its own, so it's gated by the same
+ * isPaintAllowed check the free-draw brush goes through. Funnels are
+ * additionally gated on the species they'd dispense. */
+function isPlacementAllowed(entity: Extract<MainToWorkerMessage, { type: 'placeEntity' }>['entity']): boolean {
+  if (entity.kind === 'glass') return isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID);
+  if (!isToolAllowed(activeRestrictions, entity.kind)) return false;
+  if (entity.kind === 'funnel') return isFunnelSpeciesAllowed(activeRestrictions, entity.specId);
+  return true;
+}
+
+/** 'resetWorld'/'resizeWorld'/'loadScenario' share this wipe -- everything
+ * placed, held, drawn or tallied goes; what varies per caller (scenario
+ * state, the snapshot, the grid itself) stays at the call sites. */
+function clearBenchState(): void {
+  entities = [];
+  sinkCounter.reset();
+  ventCounter.reset();
+  grabState = null;
+  stirState = null;
+  tick = 0;
+  maxTempKObserved = 0;
+}
+
 self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
   // While a burst is in flight, the only message that should reach the live
   // world is the one that can stop it -- see runBurstChunk's doc comment on
-  // why nothing else may mutate grid/funnels/tubes/etc concurrently with its
-  // own ticking.
+  // why nothing else may mutate grid/entities concurrently with its own
+  // ticking.
   if (burst && msg.type !== 'cancelBurst') return;
   switch (msg.type) {
     case 'paint': {
@@ -365,35 +319,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       });
       break;
     }
-    case 'paintRadiatorLine': {
-      if (!isToolAllowed(activeRestrictions, 'radiator')) break;
-      // The drawn line becomes a tracked instance carrying the reach/target
-      // the tool was configured with, captured once at placement time -- same
-      // "settings are a snapshot, not a live global" convention as the
-      // funnel's species and the filter line's allow-list.
-      mutateEntities(() =>
-        radiators.push(
-          placeRadiatorInstance({
-            x0: msg.x0,
-            y0: msg.y0,
-            x1: msg.x1,
-            y1: msg.y1,
-            radius: msg.radiationRadius,
-            targetK: celsiusToKelvin(msg.targetTempC),
-          }),
-        ),
-      );
-      break;
-    }
-    case 'updateRadiator':
-      mutateEntities(() => withRadiator(msg.id, (instance) => updateRadiatorInstance(instance, msg.radiationRadius, celsiusToKelvin(msg.targetTempC))));
-      break;
-    case 'moveRadiator':
-      mutateEntities(() => withRadiator(msg.id, (instance) => moveRadiatorInstance(instance, msg.dx, msg.dy)));
-      break;
-    case 'moveRadiatorEndpoint':
-      mutateEntities(() => withRadiator(msg.id, (instance) => moveRadiatorEndpoint(instance, msg.endIndex, msg.x, msg.y)));
-      break;
     case 'paintCatalyst':
       if (!isToolAllowed(activeRestrictions, 'catalyst')) break;
       paintCircle(msg.x, msg.y, msg.radius, (px, py) => {
@@ -406,26 +331,9 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.stirrerMask[grid.index(px, py)] = 1;
       });
       break;
-    case 'paintFilterLine':
-      if (!isToolAllowed(activeRestrictions, 'filter')) break;
-      // The drawn line becomes a tracked instance carrying the allow-list
-      // the tool was configured with, captured once at placement time --
-      // same "settings are a snapshot, not a live global" convention as the
-      // funnel's species and the tube's own filter.
-      mutateEntities(() => placeFilterInstance(filters, msg.x0, msg.y0, msg.x1, msg.y1, msg.species));
-      break;
-    case 'updateFilter':
-      mutateEntities(() => withFilter(msg.id, (filter) => updateFilterInstance(filter, msg.species)));
-      break;
-    case 'moveFilter':
-      mutateEntities(() => withFilter(msg.id, (filter) => moveFilterInstance(filter, msg.dx, msg.dy)));
-      break;
-    case 'moveFilterEndpoint':
-      mutateEntities(() => withFilter(msg.id, (filter) => moveFilterEndpoint(filter, msg.endIndex, msg.x, msg.y)));
-      break;
     case 'erase':
       // Matter and painted terrain only. Apparatus is indestructible: it goes
-      // away through 'deleteApparatus' (the Select tool's Delete) and no
+      // away through 'deleteEntity' (the Select tool's Delete) and no
       // other way, which is what makes "a placed vessel can't be
       // half-destroyed" true by construction rather than by six per-kind
       // conventions about which cell of a footprint counts as its anchor.
@@ -442,28 +350,39 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grid.catalystStrength[idx] = 0;
       });
       break;
-    case 'deleteApparatus':
+    case 'placeEntity':
+      if (!isPlacementAllowed(msg.entity)) break;
       mutateEntities(() => {
-        switch (msg.kind) {
-          case 'funnel':
-            funnels = funnels.filter((f) => f.id !== msg.id);
-            break;
-          case 'tube':
-            tubes = tubes.filter((t) => t.id !== msg.id);
-            break;
-          case 'flask':
-            flasks = flasks.filter((f) => f.id !== msg.id);
-            break;
-          case 'filter':
-            filters = filters.filter((f) => f.id !== msg.id);
-            break;
-          case 'radiator':
-            radiators = radiators.filter((r) => r.id !== msg.id);
-            break;
-          case 'glass':
-            glassPolys = glassPolys.filter((g) => g.id !== msg.id);
-            break;
-        }
+        const placed = placeEntityFromWire(grid, msg.entity);
+        if (placed) entities.push(placed);
+      });
+      break;
+    case 'moveEntity':
+      mutateEntities(() => withEntity(msg.entityId, (entity) => moveEntityBy(grid, entity, msg.dx, msg.dy)));
+      break;
+    case 'dragEntityHandle':
+      mutateEntities(() => withEntity(msg.entityId, (entity) => dragEntityHandleTo(grid, entity, msg.handleId, msg.x, msg.y)));
+      break;
+    case 'rotateEntity':
+      mutateEntities(() => withEntity(msg.entityId, (entity) => rotateEntityTo(entity, msg.rotation)));
+      break;
+    case 'updateEntitySettings':
+      // A funnel's dispensed species stays scenario-gated through edits, not
+      // just at placement -- otherwise a placed funnel would be a loophole in
+      // a scenario's funnelSpecies rule.
+      if (msg.settings.kind === 'funnel' && !isFunnelSpeciesAllowed(activeRestrictions, msg.settings.specId)) break;
+      mutateEntities(() => withEntity(msg.entityId, (entity) => applyEntitySettings(entity, msg.settings)));
+      break;
+    case 'entityAction':
+      // Actions never change a footprint today (funnel reset/enable/disable),
+      // but they go through mutateEntities anyway -- the invariant "every
+      // entity edit composites" is cheaper to keep unconditional than to
+      // reason about per action verb.
+      mutateEntities(() => withEntity(msg.entityId, (entity) => applyEntityAction(entity, msg.action)));
+      break;
+    case 'deleteEntity':
+      mutateEntities(() => {
+        entities = entities.filter((e) => e.entityId !== msg.entityId);
       });
       break;
     case 'setRunning':
@@ -505,110 +424,6 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
         grabState = null;
       }
       break;
-    case 'placeFunnel':
-      if (!isToolAllowed(activeRestrictions, 'funnel') || !isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      mutateEntities(() =>
-        funnels.push(
-          placeFunnelInstance({
-            x: msg.x,
-            y: msg.y,
-            facing: msg.facing,
-            specId: msg.specId,
-            tempC: msg.tempC,
-            ratePerMinute: msg.ratePerMinute,
-            total: msg.total,
-          }),
-        ),
-      );
-      break;
-    case 'updateFunnel':
-      if (!isFunnelSpeciesAllowed(activeRestrictions, msg.specId)) break;
-      mutateEntities(() =>
-        withFunnel(msg.id, (instance) =>
-          updateFunnelInstance(instance, {
-            specId: msg.specId,
-            tempC: msg.tempC,
-            ratePerMinute: msg.ratePerMinute,
-            total: msg.total,
-            facing: msg.facing,
-          }),
-        ),
-      );
-      break;
-    case 'resetFunnel':
-      withFunnel(msg.id, resetFunnelInstance);
-      break;
-    case 'setFunnelEnabled':
-      withFunnel(msg.id, (instance) => setFunnelEnabledInstance(instance, msg.enabled));
-      break;
-    case 'moveFunnel':
-      mutateEntities(() => withFunnel(msg.id, (instance) => moveFunnelInstance(instance, msg.x, msg.y)));
-      break;
-    case 'placeTube': {
-      if (!isToolAllowed(activeRestrictions, 'tube')) break;
-      // A tube whose knees all landed on one cell has no direction of travel
-      // and can never convey anything -- don't put a dead one on the bench
-      // (see tube.ts's normalizeTubePoints).
-      const points = normalizeTubePoints(msg.points);
-      if (points.length < 2) break;
-      mutateEntities(() => tubes.push(placeTubeInstance(grid, { points, filter: msg.filter ? new Set(msg.filter) : null })));
-      break;
-    }
-    case 'moveTube':
-      mutateEntities(() => withTube(msg.id, (instance) => moveTubeInstance(grid, instance, msg.dx, msg.dy)));
-      break;
-    case 'moveTubeKnee':
-      mutateEntities(() => withTube(msg.id, (instance) => moveTubeKnee(grid, instance, msg.kneeIndex, { x: msg.x, y: msg.y })));
-      break;
-    case 'moveTubeSegment':
-      mutateEntities(() => withTube(msg.id, (instance) => moveTubeSegment(grid, instance, msg.segIndex, msg.dx, msg.dy)));
-      break;
-    case 'updateTube':
-      mutateEntities(() => withTube(msg.id, (instance) => updateTubeInstance(instance, { filter: msg.filter ? new Set(msg.filter) : null })));
-      break;
-    case 'placeFlask':
-      if (!isToolAllowed(activeRestrictions, 'flask')) break;
-      mutateEntities(() =>
-        flasks.push(
-          placeFlaskInstance({
-            x: msg.x,
-            y: msg.y,
-            facing: msg.facing,
-            sizeScale: msg.sizeScale,
-            stirred: msg.stirred,
-            kind: msg.kind,
-          }),
-        ),
-      );
-      break;
-    case 'updateFlask':
-      mutateEntities(() =>
-        withFlask(msg.id, (instance) =>
-          updateFlaskInstance(instance, {
-            facing: msg.facing,
-            sizeScale: msg.sizeScale,
-            stirred: msg.stirred,
-            kind: msg.kind,
-          }),
-        ),
-      );
-      break;
-    case 'moveFlask':
-      mutateEntities(() => withFlask(msg.id, (instance) => moveFlaskInstance(instance, msg.x, msg.y)));
-      break;
-    case 'placeGlassPolyline':
-      // Glass is a paintable wall material, not a ToolKind of its own, so
-      // this is gated by the same isPaintAllowed check the free-draw brush
-      // used to go through as an ordinary 'paint' message.
-      if (!isPaintAllowed(activeRestrictions, GLASS_WALL_SPEC_ID)) break;
-      mutateEntities(() => glassPolys.push(placeGlassInstance(msg.points)));
-      break;
-    case 'moveGlass':
-      mutateEntities(() => withGlass(msg.id, (instance) => moveGlassInstance(instance, msg.dx, msg.dy)));
-      break;
-    case 'rotateGlass':
-      mutateEntities(() => withGlass(msg.id, (instance) => rotateGlassInstance(instance, msg.rotation)));
-      break;
     case 'paintSinkLine':
       if (!isToolAllowed(activeRestrictions, msg.port === SinkMaskValue.Vent ? 'vent' : 'sink')) break;
       for (const { x, y } of sinkLineCells(msg.x0, msg.y0, msg.x1, msg.y1, msg.width)) {
@@ -626,70 +441,32 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       const height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(msg.height)));
       if (activeScenario || height === grid.height) break;
       grid = new SimGrid(WIDTH, height);
-      funnels = [];
-      tubes = [];
-      flasks = [];
-      sinkCounter.reset();
-      ventCounter.reset();
-      filters = [];
-      radiators = [];
-      glassPolys = [];
-      grabState = null;
-      stirState = null;
+      clearBenchState();
       // A snapshot of the old shape can't be restored into the new grid.
       worldSnapshot = null;
-      tick = 0;
-      maxTempKObserved = 0;
       post({ type: 'ready', width: grid.width, height: grid.height, palette });
       break;
     }
     case 'resetWorld':
       grid.clearAll();
-      funnels = [];
-      tubes = [];
-      flasks = [];
-      sinkCounter.reset();
-      ventCounter.reset();
-      filters = [];
-      radiators = [];
-      glassPolys = [];
-      grabState = null;
-      stirState = null;
-      tick = 0;
+      clearBenchState();
       activeScenario = null;
       activeRestrictions = null;
-      maxTempKObserved = 0;
       break;
     case 'loadScenario':
       grid.clearAll();
-      funnels = [];
-      tubes = [];
-      flasks = [];
-      sinkCounter.reset();
-      ventCounter.reset();
-      filters = [];
-      radiators = [];
-      glassPolys = [];
-      grabState = null;
-      stirState = null;
-      tick = 0;
-      maxTempKObserved = 0;
+      clearBenchState();
       activeScenario = msg.scenario;
       activeRestrictions = msg.scenario.rules;
-      mutateEntities(() => applyScenarioSetup(grid, species, { funnels, flasks, radiators }, msg.scenario));
+      mutateEntities(() => applyScenarioSetup(grid, species, entities, msg.scenario));
       break;
     case 'snapshotWorld':
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, radiators, glassPolys, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, entities, sinkCounter, ventCounter, tick);
       break;
     case 'restoreWorld': {
       if (!worldSnapshot) break;
       const restored = restoreWorldSnapshot(grid, species, sinkCounter, ventCounter, worldSnapshot);
-      funnels = restored.funnels;
-      tubes = restored.tubes;
-      flasks = restored.flasks;
-      filters = restored.filters;
-      radiators = restored.radiators;
-      glassPolys = restored.glass;
+      entities = restored.entities;
       tick = restored.tick;
       // A restore is also a fresh start for anything mid-drag -- a held
       // grab/stir brush referencing cells that may no longer be what it
@@ -700,7 +477,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
     }
     case 'runBurst': {
       if (burst) break;
-      worldSnapshot = captureWorldSnapshot(grid, funnels, tubes, flasks, filters, radiators, glassPolys, sinkCounter, ventCounter, tick);
+      worldSnapshot = captureWorldSnapshot(grid, entities, sinkCounter, ventCounter, tick);
       sinkCounter.reset();
       ventCounter.reset();
       burst = { ticksTotal: msg.ticks, ticksRemaining: msg.ticks };
@@ -717,12 +494,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
       // world state live.
       if (worldSnapshot) {
         const restored = restoreWorldSnapshot(grid, species, sinkCounter, ventCounter, worldSnapshot);
-        funnels = restored.funnels;
-        tubes = restored.tubes;
-        flasks = restored.flasks;
-        filters = restored.filters;
-        radiators = restored.radiators;
-        glassPolys = restored.glass;
+        entities = restored.entities;
         tick = restored.tick;
         grabState = null;
         stirState = null;

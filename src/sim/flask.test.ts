@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { flaskShapeFor } from './flask-shapes';
-import { compositeEntities, NO_ENTITIES } from './entity-composite';
-import { moveFlaskInstance, placeFlaskInstance, resetFlaskIds, updateFlaskInstance, type FlaskInstance } from './flask';
+import { compositeEntities } from './entity-composite';
+import { moveFlaskInstance, placeFlaskInstance, updateFlaskInstance, type FlaskInstance } from './flask';
+import { resetEntityIds } from './entity-id';
 import { EMPTY, PhaseCode, SimGrid } from './grid';
 import { SpeciesTable } from './species';
 import { SpeciesId } from './species-data';
@@ -14,7 +15,7 @@ const species = new SpeciesTable();
  * puts it on the grid. Every assertion here composites first, exactly like
  * worker.ts's mutateEntities does after each message. */
 function sync(grid: SimGrid, instances: readonly FlaskInstance[]): void {
-  compositeEntities(grid, species, { ...NO_ENTITIES, flasks: instances });
+  compositeEntities(grid, species, instances);
 }
 
 function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskInstance>[0]> = {}): FlaskInstance {
@@ -24,7 +25,7 @@ function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskIns
     facing: 'up',
     sizeScale: 1,
     stirred: false,
-    kind: 'erlenmeyer',
+    flaskKind: 'erlenmeyer',
     ...overrides,
   });
   sync(grid, [instance]);
@@ -32,17 +33,17 @@ function place(grid: SimGrid, overrides: Partial<Parameters<typeof placeFlaskIns
 }
 
 function wallCells(instance: FlaskInstance): { x: number; y: number }[] {
-  return flaskShapeFor(instance.facing, instance.sizeScale, instance.kind).cells.map((c) => ({ x: instance.x + c.dx, y: instance.y + c.dy }));
+  return flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind).cells.map((c) => ({ x: instance.x + c.dx, y: instance.y + c.dy }));
 }
 
 function reservoirCells(instance: FlaskInstance): { x: number; y: number }[] {
-  return flaskShapeFor(instance.facing, instance.sizeScale, instance.kind).reservoirCells.map((c) => ({
+  return flaskShapeFor(instance.facing, instance.sizeScale, instance.flaskKind).reservoirCells.map((c) => ({
     x: instance.x + c.dx,
     y: instance.y + c.dy,
   }));
 }
 
-beforeEach(() => resetFlaskIds());
+beforeEach(() => resetEntityIds());
 
 describe('placeFlaskInstance', () => {
   it('stamps the outline as glass and leaves the interior open', () => {
@@ -77,7 +78,7 @@ describe('placeFlaskInstance', () => {
     // (see entity-composite.ts); a stirred flask is stirred because
     // stepStirrers unions its interior in, not because it marked the grid.
     const grid = new SimGrid(160, 100);
-    const instance = place(grid, { stirred: true, kind: 'beaker' });
+    const instance = place(grid, { stirred: true, flaskKind: 'beaker' });
     for (const { x, y } of reservoirCells(instance)) {
       expect(grid.stirrerMask[grid.index(x, y)]).toBe(0);
     }
@@ -85,7 +86,7 @@ describe('placeFlaskInstance', () => {
 
   it('hands out a distinct id per placement', () => {
     const grid = new SimGrid(160, 100);
-    expect(place(grid).id).not.toBe(place(grid, { x: 100 }).id);
+    expect(place(grid).entityId).not.toBe(place(grid, { x: 100 }).entityId);
   });
 });
 
@@ -129,9 +130,9 @@ describe('updateFlaskInstance', () => {
   it('swaps the shape in place, re-stamping the new outline', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid);
-    updateFlaskInstance(instance, { kind: 'beaker' });
+    updateFlaskInstance(instance, { flaskKind: 'beaker' });
     sync(grid, [instance]);
-    expect(instance.kind).toBe('beaker');
+    expect(instance.flaskKind).toBe('beaker');
     for (const { x, y } of wallCells(instance)) {
       expect(grid.specId[grid.index(x, y)]).toBe(GLASS_WALL_SPEC_ID);
     }
