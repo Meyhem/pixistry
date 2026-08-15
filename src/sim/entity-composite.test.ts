@@ -33,7 +33,6 @@ function derivedState(grid: SimGrid): unknown[] {
     [...grid.u],
     [...grid.tubeMask],
     [...grid.filterMask],
-    [...grid.vesselMask],
     [...grid.radiatorRadius],
     [...grid.radiatorTargetK],
     [...grid.entityOwner],

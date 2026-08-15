@@ -401,38 +401,86 @@ describe('stepMovement', () => {
     expect(allowed.reachedFiltered).toBe(true);
   });
 
-  it('never lets a falling solid diagonally hop from outside a vessel into its masked interior (regression: "falling through glass")', () => {
-    // A solid sitting directly above a wall pixel, with the vessel's open
-    // interior one column over, used to be able to slip in via the diagonal
-    // fallback even though it was never aligned with the vessel's actual
-    // mouth -- see grid.ts's vesselMask and movement.ts's tryDiagonal.
+  it('never lets a falling solid cut the corner of a diagonal wall (regression: "falling through glass")', () => {
+    // The mover is boxed in by two wall pixels meeting at a corner: one
+    // directly below it, one directly beside it. The open cell diagonally
+    // between them is inside the vessel, and a single diagonal step used to
+    // reach it -- matter slipping through a sealed wall without ever passing
+    // its mouth. This is why the flask's vesselMask existed; the corner rule
+    // replaces it and covers hand-drawn diagonal glass too.
     const species = new SpeciesTable();
     const grid = new SimGrid(3, 3);
-    grid.set(0, 1, GLASS_WALL_SPEC_ID, WALL_PHASE);
-    grid.vesselMask[grid.index(1, 1)] = 1; // masked interior, open, one column over
-    grid.set(0, 0, SpeciesId.Fe, PhaseCode.Solid); // sits directly above the wall pixel
+    grid.set(0, 1, GLASS_WALL_SPEC_ID, WALL_PHASE); // below the mover
+    grid.set(1, 0, GLASS_WALL_SPEC_ID, WALL_PHASE); // beside the mover
+    grid.set(0, 0, SpeciesId.Fe, PhaseCode.Solid); // the mover, in the corner's outside
     const rng = mulberry32(1);
 
     for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
 
-    expect(grid.isEmptyAt(grid.index(1, 1))).toBe(true); // never made it into the masked interior
-    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.Fe); // no legal move at all (off-grid to the other side)
+    expect(grid.isEmptyAt(grid.index(1, 1))).toBe(true); // never squeezed through the corner
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.Fe);
   });
 
-  it('still allows diagonal movement between two cells that are both already inside a vessel interior', () => {
-    // 2-wide grid so the down-right diagonal (x=2) is off-grid, leaving
-    // down-left (0,1) as the only candidate regardless of pickDiagonalOrder.
+  it('still lets a grain slide past a wall corner with one open side', () => {
+    // The same geometry minus the second wall pixel: only one of the two
+    // shared orthogonal neighbours is blocked, so this is an ordinary outer
+    // corner and the grain must still slide around it as it piles up.
     const species = new SpeciesTable();
-    const grid = new SimGrid(2, 2);
-    grid.vesselMask[grid.index(1, 0)] = 1; // the mover's own cell, already inside the interior
-    grid.vesselMask[grid.index(0, 1)] = 1; // the diagonal target, also inside the interior
-    grid.set(1, 1, SpeciesId.Fe, PhaseCode.Solid); // blocks the straight-down move
-    grid.set(1, 0, SpeciesId.Fe, PhaseCode.Solid); // the mover
+    const grid = new SimGrid(3, 3);
+    grid.set(0, 1, GLASS_WALL_SPEC_ID, WALL_PHASE); // below the mover; (1,0) stays open
+    grid.set(0, 0, SpeciesId.Fe, PhaseCode.Solid);
     const rng = mulberry32(1);
 
     for (let tick = 0; tick < 20; tick++) stepMovement(grid, species, rng, tick);
 
-    expect(grid.specId[grid.index(0, 1)]).toBe(SpeciesId.Fe); // diagonal move within the interior is unaffected
+    expect(grid.specId[grid.index(0, 0)]).not.toBe(SpeciesId.Fe); // it got past the corner
+  });
+
+  it('holds liquid and gas inside a sealed one-pixel diagonal vessel indefinitely', () => {
+    // A diamond of single-pixel diagonal glass: every wall run is 1px and
+    // every corner is a 45-degree join, which is the shape hand-drawn
+    // glassware makes and the shape that leaked on main (vesselMask only ever
+    // covered stamped flasks, never the Glass tool's own vessels).
+    const species = new SpeciesTable();
+    const grid = new SimGrid(21, 21);
+    const cx = 10;
+    const cy = 10;
+    const r = 7;
+    for (let k = 0; k <= r; k++) {
+      for (const [x, y] of [
+        [cx - r + k, cy - k],
+        [cx + r - k, cy - k],
+        [cx - r + k, cy + k],
+        [cx + r - k, cy + k],
+      ]) {
+        grid.set(x as number, y as number, GLASS_WALL_SPEC_ID, WALL_PHASE);
+      }
+    }
+    const inside: number[] = [];
+    for (let y = cy - 3; y <= cy + 3; y++) {
+      for (let x = cx - 3; x <= cx + 3; x++) inside.push(grid.index(x, y));
+    }
+    for (const idx of inside.slice(0, 24)) grid.setAt(idx, SpeciesId.H2O, PhaseCode.Liquid, 0);
+    for (const idx of inside.slice(24)) grid.setAt(idx, SpeciesId.H2, PhaseCode.Gas, 0);
+    const contained = inside.length;
+    const rng = mulberry32(9);
+
+    for (let tick = 0; tick < 2000; tick++) stepMovement(grid, species, rng, tick);
+
+    let still = 0;
+    for (let i = 0; i < grid.specId.length; i++) {
+      if (grid.specId[i] === SpeciesId.H2O || grid.specId[i] === SpeciesId.H2) still++;
+    }
+    expect(still).toBe(contained); // conservation, and nothing escaped the diamond
+    let outside = 0;
+    for (let y = 0; y < grid.height; y++) {
+      for (let x = 0; x < grid.width; x++) {
+        const i = grid.index(x, y);
+        if (grid.specId[i] !== SpeciesId.H2O && grid.specId[i] !== SpeciesId.H2) continue;
+        if (Math.abs(x - cx) + Math.abs(y - cy) >= r) outside++;
+      }
+    }
+    expect(outside).toBe(0);
   });
 
   it('leaves EMPTY untouched when the grid is all vacuum', () => {

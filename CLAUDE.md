@@ -96,7 +96,7 @@ finite and under `MAX_TEMP_K`) to check, since the runaway only shows up over ma
 ### Apparatus is derived state: the compositor is the only writer
 
 `src/sim/entity-composite.ts` derives *all* apparatus grid state (glass wall cells belonging to a placed
-funnel/tube/flask/glass polygon, `tubeMask`, `filterMask`, `vesselMask`, the radiator fields, and
+funnel/tube/flask/glass polygon, `tubeMask`, `filterMask`, the radiator fields, and
 `entityOwner`) from the instance lists in one pass, on every edit. An edit is "mutate the instance, then
 recomposite" — `worker.ts`'s `mutateEntities`. Nothing else may write those arrays, and nothing
 incrementally unstamps anything. That single rule replaced three coexisting bookkeeping schemes (a "put

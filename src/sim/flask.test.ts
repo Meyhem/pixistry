@@ -45,14 +45,17 @@ function reservoirCells(instance: FlaskInstance): { x: number; y: number }[] {
 beforeEach(() => resetFlaskIds());
 
 describe('placeFlaskInstance', () => {
-  it('stamps the outline as glass and marks the interior as vessel', () => {
+  it('stamps the outline as glass and leaves the interior open', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid);
     for (const { x, y } of wallCells(instance)) {
       expect(grid.specId[grid.index(x, y)]).toBe(GLASS_WALL_SPEC_ID);
     }
+    // The interior is plain empty space -- what keeps matter from hopping
+    // diagonally through the glass is movement.ts's corner rule, not a mask
+    // over the vessel (which only ever protected stamped flasks).
     for (const { x, y } of reservoirCells(instance)) {
-      expect(grid.vesselMask[grid.index(x, y)]).toBe(1);
+      expect(grid.specId[grid.index(x, y)]).not.toBe(GLASS_WALL_SPEC_ID);
     }
   });
 
@@ -87,7 +90,7 @@ describe('placeFlaskInstance', () => {
 });
 
 describe('deleting a flask', () => {
-  it('clears the glass and the vessel mask, leaving the contents alone', () => {
+  it('clears the glass, leaving the contents alone', () => {
     const grid = new SimGrid(160, 100);
     const instance = place(grid, { stirred: true });
     const inside = reservoirCells(instance)[0] as { x: number; y: number };
@@ -98,9 +101,6 @@ describe('deleting a flask', () => {
     for (const { x, y } of wallCells(instance)) {
       expect(grid.specId[grid.index(x, y)]).toBe(EMPTY);
       expect(grid.entityOwner[grid.index(x, y)]).toBe(0);
-    }
-    for (const { x, y } of reservoirCells(instance)) {
-      expect(grid.vesselMask[grid.index(x, y)]).toBe(0);
     }
     // The contents are not the vessel -- removing it takes glass, not matter.
     expect(grid.specId[grid.index(inside.x, inside.y)]).toBe(SpeciesId.H2O);

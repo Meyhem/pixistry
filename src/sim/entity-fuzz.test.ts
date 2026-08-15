@@ -68,10 +68,10 @@ function checkInvariants(grid: SimGrid, bench: Bench, what: string): void {
   // 1. Idempotence: compositing again changes nothing. This is the
   //    load-bearing one -- if it holds, "mutate the instance and
   //    recomposite" is always safe, whatever the edit was.
-  const before = [grid.specId.slice(), grid.tubeMask.slice(), grid.filterMask.slice(), grid.vesselMask.slice(), grid.entityOwner.slice()];
+  const before = [grid.specId.slice(), grid.tubeMask.slice(), grid.filterMask.slice(), grid.entityOwner.slice()];
   compositeEntities(grid, species, bench);
-  const after = [grid.specId, grid.tubeMask, grid.filterMask, grid.vesselMask, grid.entityOwner];
-  const names = ['specId', 'tubeMask', 'filterMask', 'vesselMask', 'entityOwner'];
+  const after = [grid.specId, grid.tubeMask, grid.filterMask, grid.entityOwner];
+  const names = ['specId', 'tubeMask', 'filterMask', 'entityOwner'];
   for (let a = 0; a < before.length; a++) {
     const wasArray = before[a] as ArrayLike<number>;
     const isArray = after[a] as ArrayLike<number>;
@@ -85,14 +85,12 @@ function checkInvariants(grid: SimGrid, bench: Bench, what: string): void {
   const wallByOwner = new Map<number, Set<number>>();
   const lumen = new Set<number>();
   const membrane = new Set<number>();
-  const interior = new Set<number>();
   for (const { entityId, footprint } of entityFootprints(bench)) {
     const walls = new Set<number>();
     for (const cell of footprint.wall ?? []) if (grid.inBounds(cell.x, cell.y)) walls.add(grid.index(cell.x, cell.y));
     wallByOwner.set(entityId, walls);
     for (const cell of footprint.lumen ?? []) if (grid.inBounds(cell.x, cell.y)) lumen.add(grid.index(cell.x, cell.y));
     for (const cell of footprint.membrane?.cells ?? []) if (grid.inBounds(cell.x, cell.y)) membrane.add(grid.index(cell.x, cell.y));
-    for (const cell of footprint.interior ?? []) if (grid.inBounds(cell.x, cell.y)) interior.add(grid.index(cell.x, cell.y));
   }
 
   for (let i = 0; i < grid.entityOwner.length; i++) {
@@ -115,7 +113,6 @@ function checkInvariants(grid: SimGrid, bench: Bench, what: string): void {
       if (isWallSpecId(grid.specId[i] as number)) fail('lumen plugged with wall matter', i);
     }
     if ((grid.filterMask[i] as number) !== 0 && !membrane.has(i)) fail('orphan filter mask', i);
-    if ((grid.vesselMask[i] as number) !== 0 && !interior.has(i)) fail('orphan vessel mask', i);
 
     // 4. Nothing left behind: glass on an unowned cell would be the player's
     //    paint, and this fuzz never paints -- so any is an entity's leak.

@@ -64,7 +64,7 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   conduction read/write it directly rather than re-deriving it from the species table each time. There is
   no pressure/mole-count field: a gas cell is just a cell with `PhaseCode.Gas`, same as any other phase.
   Alongside those three, a set of overlay arrays: `radiatorRadius`/`radiatorTargetK`, `tubeMask`,
-  `filterMask`, `vesselMask` and `entityOwner` are all *derived* from the apparatus instance lists (see
+  `filterMask` and `entityOwner` are all *derived* from the apparatus instance lists (see
   `entity-composite.ts`), while `stirrerMask`, `sinkMask` and `catalystStrength` are painted terrain the
   player owns and nothing derives.
 - **`entity-composite.ts`** / **`entity-id.ts`** — the one place apparatus becomes grid state. Every
@@ -101,7 +101,13 @@ of random activity) and `entity-fuzz.test.ts` (apparatus overlap — see `entity
   the two ionic solids `NaCl`/`AgCl`, so dissolution (see `react.ts`) has something to demo both ways.
 - **`movement.ts`** — `stepMovement`: bottom-up falling-sand scan with alternating horizontal parity,
   per the design doc. Reads `grid.phase[idx]` (not the species' nominal phase) so a cell that has melted
-  or frozen this tick immediately obeys its new phase's movement rule.
+  or frozen this tick immediately obeys its new phase's movement rule. `tryDiagonal` carries the standard
+  anti-corner-cut rule: a diagonal step is refused when *both* orthogonal neighbours it squeezes between
+  are solid-blocking (wall matter, a tube's lumen, or a membrane this species can't pass). An outer corner
+  has only one blocked, so a grain still slides past it as it piles up; a one-pixel diagonal wall has
+  both, so nothing tunnels through it. That replaced a `vesselMask` overlay covering the interiors of
+  *stamped* flasks only — hand-drawn diagonal glass was tunnelable, which is why the Glass tool's sealed
+  vessels leaked.
 - **`heat.ts`** (M3) — `stepConduction`: internal energy `U` is the state variable; temperature is
   *derived* piecewise via `temperatureOf`, with flat plateaus of width `mass * heatOfFusion` /
   `mass * heatOfVaporization` around the melt/boil points, giving latent heat and phase change with no

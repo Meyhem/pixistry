@@ -125,6 +125,18 @@ function commitSwap(grid: SimGrid, moved: Uint8Array, a: number, b: number): tru
   return true;
 }
 
+/** Whether a cell is solid enough to be a corner of a wall, for the
+ * anti-corner-cut rule below: real wall matter, a tube's lumen (which is a
+ * sealed channel to everything but its own transport), or a filter membrane
+ * this particular species can't pass. Ordinary matter deliberately doesn't
+ * count -- grains should still be able to squeeze diagonally between two
+ * settled grains. */
+function isCornerBlocking(grid: SimGrid, idx: number, fromSpecId: number, filterAllow: FilterAllow): boolean {
+  if ((grid.tubeMask[idx] as TubeMaskValue) === TubeMaskValue.Lumen) return true;
+  if (!canEnterFiltered(grid, filterAllow, idx, fromSpecId)) return true;
+  return !grid.isEmptyAt(idx) && isWallSpecId(grid.specId[idx] as number);
+}
+
 /** Tries each of the two diagonal targets at row `targetY` (order randomized
  * per pickDiagonalOrder), swapping into the first one where `canMove` holds
  * and a DIAGONAL_P roll succeeds. Shared by the down/up diagonal-fallback
@@ -135,31 +147,38 @@ function commitSwap(grid: SimGrid, moved: Uint8Array, a: number, b: number): tru
  *
  * A single diagonal step is otherwise enough to cut through the corner of
  * any one-pixel-thick wall -- fine (desired, even) for a grain sliding past
- * a wall's outer corner as it piles up, but not for a cell sitting directly
- * outside a placed flask's glass: the interior is open right up against the
- * inner face of that same wall pixel, so the same corner-cut lets matter
- * hop straight from "just outside the vessel" to "inside it" without ever
- * passing through the mouth -- see grid.ts's vesselMask. Blocking a diagonal
- * move whenever it would cross from outside a vessel into its interior
- * closes that off, while leaving straight-line movement through the actual
- * mouth (never diagonal, since the mouth's interior columns have open sky
- * directly above them) and diagonal movement anywhere else entirely alone. */
+ * a wall's outer corner as it piles up, but not for a cell outside a vessel
+ * whose glass runs diagonally: the interior is open right up against the
+ * inner face of that same wall pixel, so the corner-cut lets matter hop
+ * straight from "just outside" to "inside" without ever passing through the
+ * mouth. The standard falling-sand rule fixes it: a diagonal move is refused
+ * when *both* cells it squeezes between -- the two orthogonal neighbours it
+ * shares with its target -- are solid-blocking. An outer corner has only one
+ * of those blocked, so a grain still slides past it; a 1px diagonal wall has
+ * both, so nothing tunnels through it.
+ *
+ * This replaced a vesselMask overlay that only protected the interiors of
+ * *stamped* flasks. Hand-drawn diagonal glass was tunnelable on main, which
+ * is the whole reason the Glass tool's sealed vessels leaked. */
 function tryDiagonal(
   grid: SimGrid,
   moved: Uint8Array,
   idx: number,
   x: number,
+  y: number,
   targetY: number,
+  fromSpecId: number,
+  filterAllow: FilterAllow,
   rng: Rng,
   canMove: (targetIdx: number) => boolean,
 ): boolean {
-  const fromInsideVessel = (grid.vesselMask[idx] as number) !== 0;
   for (const dx of pickDiagonalOrder(rng)) {
     const nx = x + dx;
     if (!grid.inBounds(nx, targetY)) continue;
     const nIdx = grid.index(nx, targetY);
     if (moved[nIdx]) continue;
-    if (!fromInsideVessel && (grid.vesselMask[nIdx] as number) !== 0) continue;
+    const sideBlocked = grid.inBounds(nx, y) && isCornerBlocking(grid, grid.index(nx, y), fromSpecId, filterAllow);
+    if (sideBlocked && isCornerBlocking(grid, grid.index(x, targetY), fromSpecId, filterAllow)) continue;
     if (canMove(nIdx) && rng() < DIAGONAL_P) return commitSwap(grid, moved, idx, nIdx);
   }
   return false;
@@ -185,7 +204,8 @@ function moveFalling(
       commitSwap(grid, moved, idx, belowIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, belowY, rng, (t) => canDisplace(grid, species, idx, specId, fromPhase, t, 'down', filterAllow))) return;
+    if (tryDiagonal(grid, moved, idx, x, y, belowY, specId, filterAllow, rng, (t) => canDisplace(grid, species, idx, specId, fromPhase, t, 'down', filterAllow)))
+      return;
   }
 
   if (!canSpreadHorizontally) return;
@@ -200,7 +220,8 @@ function moveFalling(
       commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canRiseThroughLiquid(grid, species, idx, specId, fromPhase, t, filterAllow))) return;
+    if (tryDiagonal(grid, moved, idx, x, y, aboveY, specId, filterAllow, rng, (t) => canRiseThroughLiquid(grid, species, idx, specId, fromPhase, t, filterAllow)))
+      return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {
@@ -250,7 +271,8 @@ function moveRising(
       commitSwap(grid, moved, idx, aboveIdx);
       return;
     }
-    if (tryDiagonal(grid, moved, idx, x, aboveY, rng, (t) => canDisplace(grid, species, idx, specId, PhaseCode.Gas, t, 'up', filterAllow))) return;
+    if (tryDiagonal(grid, moved, idx, x, y, aboveY, specId, filterAllow, rng, (t) => canDisplace(grid, species, idx, specId, PhaseCode.Gas, t, 'up', filterAllow)))
+      return;
   }
 
   for (const dx of pickDiagonalOrder(rng)) {

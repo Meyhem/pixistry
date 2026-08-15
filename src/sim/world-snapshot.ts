@@ -12,7 +12,7 @@
 // change) for the worker's whole lifetime.
 //
 // Only matter and painted terrain are stored. Everything apparatus-derived
-// (tubeMask, filterMask, vesselMask, the radiator fields, entityOwner) is
+// (tubeMask, filterMask, the radiator fields, entityOwner) is
 // left out and rebuilt by compositing the restored instance lists -- storing
 // both would be storing the same fact twice, and the copy that drifted would
 // win.

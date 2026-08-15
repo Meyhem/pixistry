@@ -117,6 +117,23 @@ describe('fuzz: long random-activity run stays numerically stable', () => {
         const { x, y } = randomCell();
         grid.clear(x, y);
       }
+      // Occasional short diagonal glass run. Movement's anti-corner-cut rule
+      // (see movement.ts's tryDiagonal) reads the two cells a diagonal step
+      // squeezes between, so a bench with 45-degree walls on it exercises a
+      // branch a bench of only axis-aligned paint never reaches -- and the
+      // pinched pockets those runs make are where matter is most likely to
+      // end up wedged against something hot with nowhere to go.
+      if (rng() < 0.08) {
+        const { x, y } = randomCell();
+        const sx = rng() < 0.5 ? 1 : -1;
+        const sy = rng() < 0.5 ? 1 : -1;
+        const wall = pick(walls).specId;
+        for (let k = 0; k < 4; k++) {
+          const px = x + sx * k;
+          const py = y + sy * k;
+          if (grid.inBounds(px, py)) paintAt(px, py, wall, randomTempK());
+        }
+      }
       // Occasional radiator placement -- grid.radiatorRadius/radiatorTargetK
       // are a plain overlay (see grid.ts), painted the same way worker.ts's
       // 'paintRadiatorLine' handler does: direct field writes, no dedicated

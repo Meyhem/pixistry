@@ -78,17 +78,6 @@ export class SimGrid {
    * like a wall otherwise. Unlike tubeMask there's no "kind" distinction --
    * every filtered cell behaves the same regardless of what's drawn there. */
   readonly filterMask: Uint8Array;
-  /** Placed-flask interior overlay -- same "fixed background field, not
-   * matter" convention as the masks above: painted once at placement time
-   * over every cell inside a flask's glass (see worker.ts's 'placeFlask'
-   * handler and flask-shapes.ts's reservoirCells), left untouched by set/
-   * clear/swap. Read only by movement.ts's diagonal fallback, to block a
-   * cell from hopping diagonally from outside a vessel straight into its
-   * interior past a single-pixel wall corner ("falling through glass") --
-   * see tryDiagonal's doc comment. Straight-line movement through the
-   * vessel's actual mouth never consults this, so ordinary pouring is
-   * unaffected. */
-  readonly vesselMask: Uint8Array;
   /** Sink/Vent apparatus overlay -- same "fixed background field, not matter"
    * convention as the masks above: painted once by a drawn sink or vent line
    * (see worker.ts's 'paintSinkLine' handler), left untouched by
@@ -117,13 +106,13 @@ export class SimGrid {
   /** Which placed apparatus owns each cell -- 0 = nobody, otherwise the
    * owning instance's `entityId` (see entity-id.ts). This is the bookkeeping
    * that makes apparatus overlap safe: every cell an entity's footprint
-   * covers (its glass, its lumen, its membrane, a vessel's interior) is
+   * covers (its glass, its lumen, its membrane) is
    * marked with that entity's id, so entity-composite.ts can clear *exactly*
    * the apparatus-derived state on the grid and re-derive all of it from the
    * instance list, without touching a single cell the player painted.
    *
    * The rule that makes it work: the compositor is the only code that writes
-   * this array, apparatus glass, tubeMask, filterMask, vesselMask or the
+   * this array, apparatus glass, tubeMask, filterMask or the
    * radiator fields. Nothing incrementally unstamps anything anymore -- the
    * three separate schemes that used to reconstruct overlap correctness
    * (a "put back what went empty" repair pass, per-kind crossing rules, and
@@ -143,7 +132,6 @@ export class SimGrid {
     this.stirrerMask = new Uint8Array(size);
     this.tubeMask = new Uint8Array(size);
     this.filterMask = new Uint8Array(size);
-    this.vesselMask = new Uint8Array(size);
     this.sinkMask = new Uint8Array(size);
     this.catalystStrength = new Uint8Array(size);
     this.entityOwner = new Uint32Array(size);
@@ -183,7 +171,7 @@ export class SimGrid {
 
   /** Wipes every field back to its constructor-time state, in place --
    * `specId`/`phase`/`u` themselves plus every overlay (radiator/stirrer/
-   * tube/filter/vessel/sink/catalyst masks and the entity-owner mask). Used by worker.ts's 'resetWorld'
+   * tube/filter/sink/catalyst masks and the entity-owner mask). Used by worker.ts's 'resetWorld'
    * handler ("start fresh" -- not the same as restoreWorldSnapshot's
    * "rewind to a saved point", see world-snapshot.ts) so the grid stays one
    * stable instance for the worker's whole lifetime rather than being
@@ -197,7 +185,6 @@ export class SimGrid {
     this.stirrerMask.fill(0);
     this.tubeMask.fill(0);
     this.filterMask.fill(0);
-    this.vesselMask.fill(0);
     this.sinkMask.fill(0);
     this.catalystStrength.fill(0);
     this.entityOwner.fill(0);

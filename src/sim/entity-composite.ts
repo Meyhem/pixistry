@@ -2,7 +2,7 @@
 //
 // Every placed apparatus (funnel, tube, flask, filter, radiator, glass
 // polygon) declares a Footprint -- which cells are its glass, its lumen, its
-// membrane, a vessel's interior, its radiating cells -- and this module
+// membrane, its radiating cells -- and this module
 // derives ALL of that grid state from the instance list in one pass: wipe the
 // derived arrays, then stamp every entity in placement order. An edit is
 // "mutate the instance, then recomposite"; there is no incremental unstamp
@@ -37,8 +37,8 @@ import type { Point } from './tube-shapes';
 import { GLASS_WALL_SPEC_ID, isWallSpecId } from './walls';
 
 /** What one entity puts on the grid. Every field is optional; a kind fills in
- * only the roles it has (a filter is nothing but a membrane, a flask is walls
- * plus an interior, a tube is walls plus a lumen plus a suction cone). */
+ * only the roles it has (a filter is nothing but a membrane, a flask is just
+ * walls, a tube is walls plus a lumen plus a suction cone). */
 export interface Footprint {
   /** Real glass wall matter in specId. Claims the cell (grid.entityOwner). */
   readonly wall?: readonly Point[];
@@ -51,9 +51,6 @@ export interface Footprint {
   /** Filter membrane cells; `maskValue` is the owning line's per-cell id, the
    * one movement.ts looks an allow-list up by (see filter.ts). */
   readonly membrane?: { readonly cells: readonly Point[]; readonly maskValue: number };
-  /** Inside a vessel's glass -- vesselMask for movement.ts's diagonal rule,
-   * and what stirrer.ts agitates for a stirred flask. */
-  readonly interior?: readonly Point[];
   /** Cells that radiate, and how far/toward what (see radiators.ts). */
   readonly radiator?: { readonly cells: readonly Point[]; readonly radius: number; readonly targetK: number };
 }
@@ -81,10 +78,7 @@ export function entityFootprints(placed: PlacedEntities): { entityId: number; fo
   for (const t of placed.tubes) {
     out.push({ entityId: t.entityId, footprint: { wall: tubeGlassCells(t), lumen: tubeLumenCells(t), cone: tubeConeIndices(t) } });
   }
-  for (const f of placed.flasks) {
-    const { wallCells, reservoirCells } = flaskFootprint(f);
-    out.push({ entityId: f.entityId, footprint: { wall: wallCells, interior: reservoirCells } });
-  }
+  for (const f of placed.flasks) out.push({ entityId: f.entityId, footprint: { wall: flaskFootprint(f).wallCells } });
   for (const f of placed.filters) {
     out.push({ entityId: f.entityId, footprint: { membrane: { cells: filterLineCells(f), maskValue: f.id } } });
   }
@@ -110,7 +104,6 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
   // a tube that no longer exists" bug, made unrepresentable).
   grid.tubeMask.fill(0);
   grid.filterMask.fill(0);
-  grid.vesselMask.fill(0);
   grid.radiatorRadius.fill(0);
   grid.radiatorTargetK.fill(0);
 
@@ -157,10 +150,6 @@ export function compositeEntities(grid: SimGrid, species: SpeciesTable, placed: 
         const i = indexOf(grid, cell);
         if (i !== null) grid.filterMask[i] = membrane.maskValue;
       }
-    }
-    for (const cell of footprint.interior ?? []) {
-      const i = indexOf(grid, cell);
-      if (i !== null) grid.vesselMask[i] = 1;
     }
     const radiator = footprint.radiator;
     if (radiator) {

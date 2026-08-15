@@ -158,6 +158,10 @@ next recomposite (its cells are owned).
   fails on main today); pouring through a flask mouth still works; a grain still slides past an
   outer corner; extend `fuzz.test.ts` benches with diagonal glass lines.
 
+**Landed.** The `interior` footprint role went away entirely rather than being kept for stirred flasks:
+`stepStirrers` already derives those interiors from the flask instances themselves (phase 1), so nothing
+was left reading it.
+
 ## Phase 3 — One entity model, one protocol, one selection path
 
 Split into two commits.
@@ -298,7 +302,7 @@ monotonicity); extend the fuzz suite with tube ops.
 
 - [x] Phase 1: compositor + `entityOwner`; eraser matter-only; Delete key/button; snapshot slimming;
       repair/crossing/prune machinery deleted; composite + fuzz tests green
-- [ ] Phase 2: diagonal corner rule; `vesselMask` deleted; diagonal-vessel containment test
+- [x] Phase 2: diagonal corner rule; `vesselMask` deleted; diagonal-vessel containment test
 - [ ] Phase 3a: `AnyEntity` + registry; generic protocol; `filterMask` retired
 - [ ] Phase 3b: one selection/drag/hit-test path; generic handles overlay
 - [ ] Phase 4: schema-driven panel; Delete/Duplicate buttons; per-kind panel enums deleted
