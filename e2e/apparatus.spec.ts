@@ -148,8 +148,14 @@ test('a Sink drag places a port, and Select deletes it', async ({ page }) => {
   await selectTool(page, 'Select');
   await clickCell(page, mid, y);
   await page.keyboard.press('Delete');
-  await hoverCell(page, mid, y);
-  await expect(inspectorText(page)).not.toContainText('Sink');
+  // Deletion is a worker round trip (mutateEntities -> recomposite -> a new
+  // frame back to the main thread); settle()'s fixed wait after clickCell
+  // isn't pinned to that round trip specifically, so a hover taken right
+  // after Delete can read a frame from before the recomposite landed and
+  // then never update again since the bench is paused. Poll the entity
+  // list -- the same state the compositor derives sinkMask from -- instead
+  // of asserting on a single hover snapshot.
+  await expect.poll(async () => (await entities(page)).some((e) => e.kind === 'sink')).toBe(false);
 });
 
 test('a single click places one flask, however much the hand wobbles', async ({ page }) => {
