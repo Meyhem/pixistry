@@ -5,5 +5,7 @@ hand-authored `reactants -> products` table checked against neighboring cells ea
 
 **Live demo:** https://meyhem.github.io/pixistry/
 
+![Pixistry screenshot](screenshop.png)
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the per-layer breakdown and `CLAUDE.md` for
 development commands and conventions.
