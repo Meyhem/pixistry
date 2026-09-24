@@ -38,6 +38,32 @@ describe('stepReactions', () => {
     expect(grid.specId[j]).toBe(EMPTY);
   });
 
+  it('neutralizes a Zn(OH)2 precipitate with sulfuric acid into ZnSO4(aq)', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+
+    paint(grid, species, 0, 0, SpeciesId.H2SO4Aq);
+    paint(grid, species, 1, 0, SpeciesId.ZnOH2);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.ZnSO4Aq);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.H2O);
+  });
+
+  it('leaves Zn(OH)2 alone next to undiluted H2SO4, which has to hydrate first', () => {
+    const species = new SpeciesTable();
+    const grid = new SimGrid(2, 1);
+
+    paint(grid, species, 0, 0, SpeciesId.H2SO4);
+    paint(grid, species, 1, 0, SpeciesId.ZnOH2);
+
+    stepReactions(grid, species, alwaysFire);
+
+    expect(grid.specId[grid.index(0, 0)]).toBe(SpeciesId.H2SO4);
+    expect(grid.specId[grid.index(1, 0)]).toBe(SpeciesId.ZnOH2);
+  });
+
   it('leaves insoluble AgCl next to water untouched (no dissolution rule for it)', () => {
     const species = new SpeciesTable();
     const grid = new SimGrid(2, 1);

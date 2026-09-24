@@ -4,7 +4,7 @@
 // react.test.ts covers individual reaction *behavior*; this file covers
 // the table's internal consistency.
 import { describe, expect, it } from 'vitest';
-import { REACTIONS } from './reactions';
+import { findReaction, REACTIONS } from './reactions';
 import { SPECIES, SpeciesId } from './species-data';
 
 describe('REACTIONS table invariants', () => {
@@ -116,5 +116,139 @@ describe('REACTIONS table invariants', () => {
         expect(produced.has(id), `${sp.name} (id ${id}) is aqueous but no rule produces it`).toBe(true);
       }
     });
+  });
+
+  // Acid-base completeness: every aqueous acid paired with every base the
+  // table carries (aqueous hydroxide, solid hydroxide, metal oxide,
+  // carbonate) needs a rule -- *provided the resulting salt is itself a
+  // species*. Zn(OH)2 + H2SO4(aq) sitting inert was the bug that motivated
+  // this check: Zn(OH)2 was only ever a precipitation product, with nothing
+  // in the table consuming it, even though ZnSO4(aq) existed all along.
+  //
+  // The "provided the salt exists" clause is the same absence-encodes-
+  // chemistry convention AgCl's missing dissolution rule uses. Salts that
+  // aren't in SPECIES are skipped here rather than listed as exemptions,
+  // which covers three distinct reasons at once: the species genuinely
+  // can't form (CuI2 and FeI3 are redox-unstable), the anion family isn't
+  // modeled at all (no sulfite exists, so H2SO3(aq) reacts with nothing),
+  // or it's simply not in the curated table yet (Zn(NO3)2, Al2(SO4)3).
+  // Adding any such salt to SPECIES makes this test start demanding its
+  // rules, which is the intended pressure.
+  const aqueousAcids = [
+    { id: 'HClAq', anion: 'Cl', anionCharge: 1 },
+    { id: 'H2SO4Aq', anion: 'SO4', anionCharge: 2 },
+    { id: 'HNO3Aq', anion: 'NO3', anionCharge: 1 },
+    { id: 'HBrAq', anion: 'Br', anionCharge: 1 },
+    { id: 'HIAq', anion: 'I', anionCharge: 1 },
+    { id: 'H2CO3Aq', anion: 'CO3', anionCharge: 2 },
+    { id: 'H2SO3Aq', anion: 'SO3', anionCharge: 2 },
+  ] as const;
+
+  const bases = [
+    { id: 'NaOHAq', cation: 'Na', cationCharge: 1 },
+    { id: 'KOHAq', cation: 'K', cationCharge: 1 },
+    { id: 'CaOH2Aq', cation: 'Ca', cationCharge: 2 },
+    { id: 'BaOH2Aq', cation: 'Ba', cationCharge: 2 },
+    { id: 'NH3Aq', cation: 'NH4', cationCharge: 1 },
+    { id: 'NaOH', cation: 'Na', cationCharge: 1 },
+    { id: 'KOH', cation: 'K', cationCharge: 1 },
+    { id: 'CaOH2', cation: 'Ca', cationCharge: 2 },
+    { id: 'BaOH2', cation: 'Ba', cationCharge: 2 },
+    { id: 'MgOH2', cation: 'Mg', cationCharge: 2 },
+    { id: 'CuOH2', cation: 'Cu', cationCharge: 2 },
+    { id: 'FeOH2', cation: 'Fe', cationCharge: 2 },
+    { id: 'FeOH3', cation: 'Fe', cationCharge: 3 },
+    { id: 'AlOH3', cation: 'Al', cationCharge: 3 },
+    { id: 'ZnOH2', cation: 'Zn', cationCharge: 2 },
+    { id: 'MgO', cation: 'Mg', cationCharge: 2 },
+    { id: 'CaO', cation: 'Ca', cationCharge: 2 },
+    { id: 'BaO', cation: 'Ba', cationCharge: 2 },
+    { id: 'Na2O', cation: 'Na', cationCharge: 1 },
+    { id: 'K2O', cation: 'K', cationCharge: 1 },
+    { id: 'PbO', cation: 'Pb', cationCharge: 2 },
+    { id: 'Ag2O', cation: 'Ag', cationCharge: 1 },
+    { id: 'Fe2O3', cation: 'Fe', cationCharge: 3 },
+    { id: 'Al2O3', cation: 'Al', cationCharge: 3 },
+    { id: 'CuO', cation: 'Cu', cationCharge: 2 },
+    { id: 'ZnO', cation: 'Zn', cationCharge: 2 },
+    { id: 'Na2CO3', cation: 'Na', cationCharge: 1 },
+    { id: 'K2CO3', cation: 'K', cationCharge: 1 },
+    { id: 'CaCO3', cation: 'Ca', cationCharge: 2 },
+    { id: 'BaCO3', cation: 'Ba', cationCharge: 2 },
+    { id: 'CuCO3', cation: 'Cu', cationCharge: 2 },
+  ] as const;
+
+  /** Builds the salt's formula the same way species-data.ts spells it, so
+   * the lookup below is a plain name match: subscripts from the
+   * charge-balance LCM, parentheses around any multi-atom group that takes
+   * a subscript (Ca(NO3)2, but CaCl2 and Na2SO4 bare). */
+  function saltFormula(cation: string, cationCharge: number, anion: string, anionCharge: number): string {
+    const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+    const lcm = (cationCharge * anionCharge) / gcd(cationCharge, anionCharge);
+    const group = (sym: string, count: number) =>
+      count === 1 ? sym : sym.length > 2 ? `(${sym})${count}` : `${sym}${count}`;
+    return group(cation, lcm / cationCharge) + group(anion, lcm / anionCharge);
+  }
+
+  it('has a rule for every acid-base pair whose salt exists in SPECIES', () => {
+    const S = SpeciesId as unknown as Record<string, number | undefined>;
+    const named = new Set(SPECIES.map((sp) => sp.name));
+    const missing: string[] = [];
+
+    for (const base of bases) {
+      const baseId = S[base.id];
+      expect(baseId, `${base.id} missing from SpeciesId`).toBeDefined();
+      for (const acid of aqueousAcids) {
+        const acidId = S[acid.id];
+        expect(acidId, `${acid.id} missing from SpeciesId`).toBeDefined();
+        // Carbonic acid on a carbonate would make a bicarbonate, an anion
+        // family the table doesn't model.
+        if (acid.anion === 'CO3' && base.id.includes('CO3')) continue;
+        const salt = saltFormula(base.cation, base.cationCharge, acid.anion, acid.anionCharge);
+        if (!named.has(salt) && !named.has(`${salt}(aq)`)) continue;
+        if (!findReaction(acidId as number, baseId as number)) {
+          missing.push(`${base.id} + ${acid.id} -> ${salt}`);
+        }
+      }
+    }
+
+    expect(missing, `${missing.length} acid-base pairs have no rule`).toEqual([]);
+  });
+
+  // The same completeness idea for metal + acid -> salt + H2. Only metals
+  // above hydrogen in the reactivity series belong here; Cu/Ag/Pb sit below
+  // it and are excluded by construction, which is why Cu's only acid rule
+  // is the oxidizing-acid HNO3(aq) one. Iron dissolves to Fe(II), not
+  // Fe(III), so its salts are looked up at charge 2.
+  const activeMetals = [
+    { id: 'Mg', cation: 'Mg', cationCharge: 2 },
+    { id: 'Al', cation: 'Al', cationCharge: 3 },
+    { id: 'Ca', cation: 'Ca', cationCharge: 2 },
+    { id: 'Fe', cation: 'Fe', cationCharge: 2 },
+    { id: 'Zn', cation: 'Zn', cationCharge: 2 },
+  ] as const;
+
+  it('has a rule for every active-metal + acid pair whose salt exists in SPECIES', () => {
+    const S = SpeciesId as unknown as Record<string, number | undefined>;
+    const named = new Set(SPECIES.map((sp) => sp.name));
+    const missing: string[] = [];
+
+    for (const metal of activeMetals) {
+      const metalId = S[metal.id];
+      expect(metalId, `${metal.id} missing from SpeciesId`).toBeDefined();
+      for (const acid of aqueousAcids) {
+        // Carbonic and sulfurous acid are too weak to displace hydrogen
+        // from a metal, so they are not expected to have rules here.
+        if (acid.anion === 'CO3' || acid.anion === 'SO3') continue;
+        const acidId = S[acid.id];
+        const salt = saltFormula(metal.cation, metal.cationCharge, acid.anion, acid.anionCharge);
+        if (!named.has(salt) && !named.has(`${salt}(aq)`)) continue;
+        if (!findReaction(acidId as number, metalId as number)) {
+          missing.push(`${metal.id} + ${acid.id} -> ${salt}`);
+        }
+      }
+    }
+
+    expect(missing, `${missing.length} metal-acid pairs have no rule`).toEqual([]);
   });
 });

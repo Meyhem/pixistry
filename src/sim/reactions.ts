@@ -130,9 +130,93 @@ export const REACTIONS: readonly ReactionRule[] = [
   { reactants: [S.HNO3Aq, S.KOHAq], products: [S.KNO3Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
   { reactants: [S.HNO3Aq, S.CaOH2Aq], products: [S.CaNO32Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
   { reactants: [S.HNO3Aq, S.BaOH2Aq], products: [S.BaNO32Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  // HBr(aq)/HI(aq) are strong acids too, so they neutralize at the same
+  // -57.3 kJ/mol as HCl/HNO3/H2SO4 -- that value is the heat of
+  // neutralization of H+ with OH-, which is the only bond-making step for
+  // any fully-ionized acid, so it doesn't vary by which acid supplied it.
+  { reactants: [S.HBrAq, S.NaOHAq], products: [S.NaBrAq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HIAq, S.NaOHAq], products: [S.NaIAq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HBrAq, S.KOHAq], products: [S.KBrAq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HIAq, S.KOHAq], products: [S.KIAq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HBrAq, S.CaOH2Aq], products: [S.CaBr2Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HIAq, S.CaOH2Aq], products: [S.CaI2Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HBrAq, S.BaOH2Aq], products: [S.BaBr2Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  { reactants: [S.HIAq, S.BaOH2Aq], products: [S.BaI2Aq, S.H2O], deltaH: -57.3, probability: 0.6 },
+  // Carbonic acid is the table's one weak acid: barely ionized, so it
+  // neutralizes far less exothermically and far more slowly than the strong
+  // acids above. With limewater/baryta water it's the same milky carbonate
+  // the CO2 rule below produces, just reached from dissolved CO2 instead.
+  { reactants: [S.H2CO3Aq, S.NaOHAq], products: [S.Na2CO3Aq, S.H2O], deltaH: -12, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.KOHAq], products: [S.K2CO3Aq, S.H2O], deltaH: -12, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.CaOH2Aq], products: [S.CaCO3, S.H2O], deltaH: -12, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.BaOH2Aq], products: [S.BaCO3, S.H2O], deltaH: -12, probability: 0.25 },
+  // Ammonia is a base without a hydroxide: it takes the acid's proton
+  // directly onto N, so unlike every neutralization above this makes no
+  // water -- the single product means react.ts clears the second reactant
+  // cell. Only the chloride exists as a species, so it's the only pairing.
+  { reactants: [S.HClAq, S.NH3Aq], products: [S.NH4ClAq], deltaH: -52, probability: 0.6 },
   // The classic "white smoke" demo -- two gases combining directly into a
   // solid smoke/salt, no water involved at all.
   { reactants: [S.NH3, S.HCl], products: [S.NH4Cl], deltaH: -176, probability: 0.5 },
+
+  // Solid hydroxide + acid. The soluble four (NaOH/KOH/Ca(OH)2/Ba(OH)2)
+  // could also reach this via their dissolution rules, but the six
+  // precipitate hydroxides below have no aqueous form by design, so a
+  // direct solid rule is the *only* way anything consumes them -- without
+  // it Zn(OH)2 and friends were write-only, produced by precipitation and
+  // then inert forever. deltaH is held constant per hydroxide across the
+  // strong acids (same reasoning as the -57.3 above) and is larger in
+  // magnitude than the aqueous case because it also pays out the solid's
+  // lattice energy.
+  { reactants: [S.HClAq, S.NaOH], products: [S.NaClAq, S.H2O], deltaH: -100, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.NaOH], products: [S.Na2SO4Aq, S.H2O], deltaH: -100, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.NaOH], products: [S.NaNO3Aq, S.H2O], deltaH: -100, probability: 0.5 },
+  { reactants: [S.HBrAq, S.NaOH], products: [S.NaBrAq, S.H2O], deltaH: -100, probability: 0.5 },
+  { reactants: [S.HIAq, S.NaOH], products: [S.NaIAq, S.H2O], deltaH: -100, probability: 0.5 },
+  { reactants: [S.H2CO3Aq, S.NaOH], products: [S.Na2CO3Aq, S.H2O], deltaH: -55, probability: 0.25 },
+  { reactants: [S.HClAq, S.KOH], products: [S.KClAq, S.H2O], deltaH: -115, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.KOH], products: [S.K2SO4Aq, S.H2O], deltaH: -115, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.KOH], products: [S.KNO3Aq, S.H2O], deltaH: -115, probability: 0.5 },
+  { reactants: [S.HBrAq, S.KOH], products: [S.KBrAq, S.H2O], deltaH: -115, probability: 0.5 },
+  { reactants: [S.HIAq, S.KOH], products: [S.KIAq, S.H2O], deltaH: -115, probability: 0.5 },
+  { reactants: [S.H2CO3Aq, S.KOH], products: [S.K2CO3Aq, S.H2O], deltaH: -70, probability: 0.25 },
+  { reactants: [S.HClAq, S.CaOH2], products: [S.CaCl2Aq, S.H2O], deltaH: -75, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.CaOH2], products: [S.CaSO4, S.H2O], deltaH: -75, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.CaOH2], products: [S.CaNO32Aq, S.H2O], deltaH: -75, probability: 0.5 },
+  { reactants: [S.HBrAq, S.CaOH2], products: [S.CaBr2Aq, S.H2O], deltaH: -75, probability: 0.5 },
+  { reactants: [S.HIAq, S.CaOH2], products: [S.CaI2Aq, S.H2O], deltaH: -75, probability: 0.5 },
+  { reactants: [S.H2CO3Aq, S.CaOH2], products: [S.CaCO3, S.H2O], deltaH: -30, probability: 0.25 },
+  { reactants: [S.HClAq, S.BaOH2], products: [S.BaCl2Aq, S.H2O], deltaH: -110, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.BaOH2], products: [S.BaSO4, S.H2O], deltaH: -110, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.BaOH2], products: [S.BaNO32Aq, S.H2O], deltaH: -110, probability: 0.5 },
+  { reactants: [S.HBrAq, S.BaOH2], products: [S.BaBr2Aq, S.H2O], deltaH: -110, probability: 0.5 },
+  { reactants: [S.HIAq, S.BaOH2], products: [S.BaI2Aq, S.H2O], deltaH: -110, probability: 0.5 },
+  { reactants: [S.H2CO3Aq, S.BaOH2], products: [S.BaCO3, S.H2O], deltaH: -65, probability: 0.25 },
+  // The precipitate hydroxides. Gaps here are product gaps, not chemistry
+  // gaps: Mg/Zn/Al/Fe(II) nitrates and Al/Fe(III) sulfates simply aren't
+  // species yet, so those pairings stay inert until they are.
+  { reactants: [S.HClAq, S.MgOH2], products: [S.MgCl2Aq, S.H2O], deltaH: -95, probability: 0.45 },
+  { reactants: [S.H2SO4Aq, S.MgOH2], products: [S.MgSO4Aq, S.H2O], deltaH: -95, probability: 0.45 },
+  { reactants: [S.HBrAq, S.MgOH2], products: [S.MgBr2Aq, S.H2O], deltaH: -95, probability: 0.45 },
+  { reactants: [S.HIAq, S.MgOH2], products: [S.MgI2Aq, S.H2O], deltaH: -95, probability: 0.45 },
+  { reactants: [S.HClAq, S.CuOH2], products: [S.CuCl2Aq, S.H2O], deltaH: -65, probability: 0.45 },
+  { reactants: [S.H2SO4Aq, S.CuOH2], products: [S.CuSO4Aq, S.H2O], deltaH: -65, probability: 0.45 },
+  { reactants: [S.HNO3Aq, S.CuOH2], products: [S.CuNO32Aq, S.H2O], deltaH: -65, probability: 0.45 },
+  { reactants: [S.HBrAq, S.CuOH2], products: [S.CuBr2Aq, S.H2O], deltaH: -65, probability: 0.45 },
+  { reactants: [S.H2CO3Aq, S.CuOH2], products: [S.CuCO3, S.H2O], deltaH: -20, probability: 0.25 },
+  { reactants: [S.HClAq, S.FeOH2], products: [S.FeCl2Aq, S.H2O], deltaH: -70, probability: 0.45 },
+  { reactants: [S.H2SO4Aq, S.FeOH2], products: [S.FeSO4Aq, S.H2O], deltaH: -70, probability: 0.45 },
+  { reactants: [S.HIAq, S.FeOH2], products: [S.FeI2Aq, S.H2O], deltaH: -70, probability: 0.45 },
+  { reactants: [S.HClAq, S.FeOH3], products: [S.FeCl3Aq, S.H2O], deltaH: -55, probability: 0.4 },
+  { reactants: [S.HNO3Aq, S.FeOH3], products: [S.FeNO33Aq, S.H2O], deltaH: -55, probability: 0.4 },
+  { reactants: [S.HBrAq, S.FeOH3], products: [S.FeBr3Aq, S.H2O], deltaH: -55, probability: 0.4 },
+  { reactants: [S.HClAq, S.AlOH3], products: [S.AlCl3Aq, S.H2O], deltaH: -70, probability: 0.4 },
+  { reactants: [S.HBrAq, S.AlOH3], products: [S.AlBr3Aq, S.H2O], deltaH: -70, probability: 0.4 },
+  { reactants: [S.HIAq, S.AlOH3], products: [S.AlI3Aq, S.H2O], deltaH: -70, probability: 0.4 },
+  { reactants: [S.HClAq, S.ZnOH2], products: [S.ZnCl2Aq, S.H2O], deltaH: -75, probability: 0.45 },
+  { reactants: [S.H2SO4Aq, S.ZnOH2], products: [S.ZnSO4Aq, S.H2O], deltaH: -75, probability: 0.45 },
+  { reactants: [S.HBrAq, S.ZnOH2], products: [S.ZnBr2Aq, S.H2O], deltaH: -75, probability: 0.45 },
+  { reactants: [S.HIAq, S.ZnOH2], products: [S.ZnI2Aq, S.H2O], deltaH: -75, probability: 0.45 },
 
   { reactants: [S.HClAq, S.MgO], products: [S.MgCl2Aq, S.H2O], deltaH: -150, probability: 0.5 },
   { reactants: [S.HClAq, S.CaO], products: [S.CaCl2Aq, S.H2O], deltaH: -186, probability: 0.5 },
@@ -144,12 +228,87 @@ export const REACTIONS: readonly ReactionRule[] = [
   { reactants: [S.H2SO4Aq, S.MgO], products: [S.MgSO4Aq, S.H2O], deltaH: -150, probability: 0.5 },
   { reactants: [S.HNO3Aq, S.CuO], products: [S.CuNO32Aq, S.H2O], deltaH: -85, probability: 0.5 },
   { reactants: [S.HNO3Aq, S.Ag2O], products: [S.AgNO3Aq, S.H2O], deltaH: -60, probability: 0.5 },
+  { reactants: [S.HBrAq, S.MgO], products: [S.MgBr2Aq, S.H2O], deltaH: -150, probability: 0.5 },
+  { reactants: [S.HIAq, S.MgO], products: [S.MgI2Aq, S.H2O], deltaH: -150, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.CaO], products: [S.CaSO4, S.H2O], deltaH: -186, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.CaO], products: [S.CaNO32Aq, S.H2O], deltaH: -186, probability: 0.5 },
+  { reactants: [S.HBrAq, S.CaO], products: [S.CaBr2Aq, S.H2O], deltaH: -186, probability: 0.5 },
+  { reactants: [S.HIAq, S.CaO], products: [S.CaI2Aq, S.H2O], deltaH: -186, probability: 0.5 },
+  { reactants: [S.HClAq, S.BaO], products: [S.BaCl2Aq, S.H2O], deltaH: -190, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.BaO], products: [S.BaSO4, S.H2O], deltaH: -190, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.BaO], products: [S.BaNO32Aq, S.H2O], deltaH: -190, probability: 0.5 },
+  { reactants: [S.HBrAq, S.BaO], products: [S.BaBr2Aq, S.H2O], deltaH: -190, probability: 0.5 },
+  { reactants: [S.HIAq, S.BaO], products: [S.BaI2Aq, S.H2O], deltaH: -190, probability: 0.5 },
+  // The alkali-metal oxides are the most violent of the set -- they'd react
+  // with the water in the acid even if the acid weren't there (see the
+  // Na2O/K2O hydrolysis rules below), so the acid rule releases both.
+  { reactants: [S.HClAq, S.Na2O], products: [S.NaClAq, S.H2O], deltaH: -230, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.Na2O], products: [S.Na2SO4Aq, S.H2O], deltaH: -230, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.Na2O], products: [S.NaNO3Aq, S.H2O], deltaH: -230, probability: 0.5 },
+  { reactants: [S.HBrAq, S.Na2O], products: [S.NaBrAq, S.H2O], deltaH: -230, probability: 0.5 },
+  { reactants: [S.HIAq, S.Na2O], products: [S.NaIAq, S.H2O], deltaH: -230, probability: 0.5 },
+  { reactants: [S.HClAq, S.K2O], products: [S.KClAq, S.H2O], deltaH: -215, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.K2O], products: [S.K2SO4Aq, S.H2O], deltaH: -215, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.K2O], products: [S.KNO3Aq, S.H2O], deltaH: -215, probability: 0.5 },
+  { reactants: [S.HBrAq, S.K2O], products: [S.KBrAq, S.H2O], deltaH: -215, probability: 0.5 },
+  { reactants: [S.HIAq, S.K2O], products: [S.KIAq, S.H2O], deltaH: -215, probability: 0.5 },
+  // PbO and Ag2O mostly make their own insoluble salt back, so these read
+  // as "the oxide turns into a precipitate" rather than "it dissolves" --
+  // Pb(NO3)2 and AgNO3 are the only soluble products either one has.
+  { reactants: [S.HClAq, S.PbO], products: [S.PbCl2, S.H2O], deltaH: -65, probability: 0.4 },
+  { reactants: [S.H2SO4Aq, S.PbO], products: [S.PbSO4, S.H2O], deltaH: -65, probability: 0.4 },
+  { reactants: [S.HNO3Aq, S.PbO], products: [S.PbNO32Aq, S.H2O], deltaH: -65, probability: 0.4 },
+  { reactants: [S.HBrAq, S.PbO], products: [S.PbBr2, S.H2O], deltaH: -65, probability: 0.4 },
+  { reactants: [S.HIAq, S.PbO], products: [S.PbI2, S.H2O], deltaH: -65, probability: 0.4 },
+  { reactants: [S.HClAq, S.Ag2O], products: [S.AgCl, S.H2O], deltaH: -60, probability: 0.5 },
+  { reactants: [S.HBrAq, S.Ag2O], products: [S.AgBr, S.H2O], deltaH: -60, probability: 0.5 },
+  { reactants: [S.HIAq, S.Ag2O], products: [S.AgI, S.H2O], deltaH: -60, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.Fe2O3], products: [S.FeNO33Aq, S.H2O], deltaH: -130, probability: 0.4 },
+  { reactants: [S.HBrAq, S.Fe2O3], products: [S.FeBr3Aq, S.H2O], deltaH: -130, probability: 0.4 },
+  // Al2O3 is the stubborn one -- the passivating layer that makes aluminium
+  // look unreactive. It needs hot acid, hence the only minTempK in this
+  // section, and even then it goes slowly.
+  { reactants: [S.HClAq, S.Al2O3], products: [S.AlCl3Aq, S.H2O], deltaH: -80, minTempK: 350, probability: 0.2 },
+  { reactants: [S.HBrAq, S.Al2O3], products: [S.AlBr3Aq, S.H2O], deltaH: -80, minTempK: 350, probability: 0.2 },
+  { reactants: [S.HIAq, S.Al2O3], products: [S.AlI3Aq, S.H2O], deltaH: -80, minTempK: 350, probability: 0.2 },
+  { reactants: [S.HBrAq, S.CuO], products: [S.CuBr2Aq, S.H2O], deltaH: -85, probability: 0.5 },
+  { reactants: [S.HBrAq, S.ZnO], products: [S.ZnBr2Aq, S.H2O], deltaH: -142, probability: 0.5 },
+  { reactants: [S.HIAq, S.ZnO], products: [S.ZnI2Aq, S.H2O], deltaH: -142, probability: 0.5 },
+  // Carbonic acid on a basic oxide goes straight to the carbonate -- this
+  // is what weathers limestone statues and patinas copper roofs.
+  { reactants: [S.H2CO3Aq, S.CaO], products: [S.CaCO3, S.H2O], deltaH: -140, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.BaO], products: [S.BaCO3, S.H2O], deltaH: -145, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.Na2O], products: [S.Na2CO3Aq, S.H2O], deltaH: -185, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.K2O], products: [S.K2CO3Aq, S.H2O], deltaH: -170, probability: 0.25 },
+  { reactants: [S.H2CO3Aq, S.CuO], products: [S.CuCO3, S.H2O], deltaH: -40, probability: 0.25 },
 
   { reactants: [S.HClAq, S.CaCO3], products: [S.CaCl2Aq, S.H2O, S.CO2], deltaH: -17, probability: 0.5 },
   { reactants: [S.HClAq, S.Na2CO3], products: [S.NaClAq, S.H2O, S.CO2], deltaH: -33, probability: 0.5 },
   { reactants: [S.HClAq, S.CuCO3], products: [S.CuCl2Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
   { reactants: [S.H2SO4Aq, S.Na2CO3], products: [S.Na2SO4Aq, S.H2O, S.CO2], deltaH: -33, probability: 0.5 },
   { reactants: [S.HNO3Aq, S.CaCO3], products: [S.CaNO32Aq, S.H2O, S.CO2], deltaH: -17, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.Na2CO3], products: [S.NaNO3Aq, S.H2O, S.CO2], deltaH: -33, probability: 0.5 },
+  { reactants: [S.HBrAq, S.Na2CO3], products: [S.NaBrAq, S.H2O, S.CO2], deltaH: -33, probability: 0.5 },
+  { reactants: [S.HIAq, S.Na2CO3], products: [S.NaIAq, S.H2O, S.CO2], deltaH: -33, probability: 0.5 },
+  { reactants: [S.HClAq, S.K2CO3], products: [S.KClAq, S.H2O, S.CO2], deltaH: -35, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.K2CO3], products: [S.K2SO4Aq, S.H2O, S.CO2], deltaH: -35, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.K2CO3], products: [S.KNO3Aq, S.H2O, S.CO2], deltaH: -35, probability: 0.5 },
+  { reactants: [S.HBrAq, S.K2CO3], products: [S.KBrAq, S.H2O, S.CO2], deltaH: -35, probability: 0.5 },
+  { reactants: [S.HIAq, S.K2CO3], products: [S.KIAq, S.H2O, S.CO2], deltaH: -35, probability: 0.5 },
+  { reactants: [S.HBrAq, S.CaCO3], products: [S.CaBr2Aq, S.H2O, S.CO2], deltaH: -17, probability: 0.5 },
+  { reactants: [S.HIAq, S.CaCO3], products: [S.CaI2Aq, S.H2O, S.CO2], deltaH: -17, probability: 0.5 },
+  { reactants: [S.HClAq, S.BaCO3], products: [S.BaCl2Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.BaCO3], products: [S.BaNO32Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.HBrAq, S.BaCO3], products: [S.BaBr2Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.HIAq, S.BaCO3], products: [S.BaI2Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.CuCO3], products: [S.CuSO4Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.HNO3Aq, S.CuCO3], products: [S.CuNO32Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  { reactants: [S.HBrAq, S.CuCO3], products: [S.CuBr2Aq, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
+  // Sulfuric acid on a carbonate whose sulfate is insoluble self-limits in
+  // reality (the CaSO4/BaSO4 crust seals the solid off); the sim has no
+  // surface-passivation model, so these just run to completion.
+  { reactants: [S.H2SO4Aq, S.CaCO3], products: [S.CaSO4, S.H2O, S.CO2], deltaH: -17, probability: 0.5 },
+  { reactants: [S.H2SO4Aq, S.BaCO3], products: [S.BaSO4, S.H2O, S.CO2], deltaH: -20, probability: 0.5 },
 
   { reactants: [S.HClAq, S.Mg], products: [S.MgCl2Aq, S.H2], deltaH: -462, probability: 0.35 },
   { reactants: [S.HClAq, S.Zn], products: [S.ZnCl2Aq, S.H2], deltaH: -153, probability: 0.3 },
@@ -159,6 +318,19 @@ export const REACTIONS: readonly ReactionRule[] = [
   { reactants: [S.H2SO4Aq, S.Mg], products: [S.MgSO4Aq, S.H2], deltaH: -462, probability: 0.35 },
   { reactants: [S.H2SO4Aq, S.Zn], products: [S.ZnSO4Aq, S.H2], deltaH: -153, probability: 0.3 },
   { reactants: [S.H2SO4Aq, S.Fe], products: [S.FeSO4Aq, S.H2], deltaH: -88, probability: 0.25 },
+  { reactants: [S.HBrAq, S.Mg], products: [S.MgBr2Aq, S.H2], deltaH: -462, probability: 0.35 },
+  { reactants: [S.HIAq, S.Mg], products: [S.MgI2Aq, S.H2], deltaH: -462, probability: 0.35 },
+  { reactants: [S.HBrAq, S.Zn], products: [S.ZnBr2Aq, S.H2], deltaH: -153, probability: 0.3 },
+  { reactants: [S.HIAq, S.Zn], products: [S.ZnI2Aq, S.H2], deltaH: -153, probability: 0.3 },
+  { reactants: [S.HBrAq, S.Al], products: [S.AlBr3Aq, S.H2], deltaH: -531, probability: 0.3 },
+  { reactants: [S.HIAq, S.Al], products: [S.AlI3Aq, S.H2], deltaH: -531, probability: 0.3 },
+  { reactants: [S.HBrAq, S.Ca], products: [S.CaBr2Aq, S.H2], deltaH: -543, probability: 0.4 },
+  { reactants: [S.HIAq, S.Ca], products: [S.CaI2Aq, S.H2], deltaH: -543, probability: 0.4 },
+  { reactants: [S.HNO3Aq, S.Ca], products: [S.CaNO32Aq, S.H2], deltaH: -543, probability: 0.4 },
+  { reactants: [S.H2SO4Aq, S.Ca], products: [S.CaSO4, S.H2], deltaH: -543, probability: 0.4 },
+  // Iron dissolves to Fe(II), never Fe(III) -- the Fe(III) salts are only
+  // reachable by oxidizing the metal first (Fe2O3) or via Fe(OH)3.
+  { reactants: [S.HIAq, S.Fe], products: [S.FeI2Aq, S.H2], deltaH: -88, probability: 0.25 },
   // Copper dissolving in nitric acid -- the classic brown-fumes demo,
   // reachable only via the oxidizing acid (no HCl(aq)/H2SO4(aq) rule for
   // Cu exists above, matching its real place in the activity series).
