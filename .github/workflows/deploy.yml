@@ -26,17 +26,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      # The browser suite (e2e/) drives the real app against the dev server;
-      # Playwright starts and stops it itself. Chromium only, and only the one
-      # browser gets downloaded.
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
+      # No npm run test:e2e here on purpose, matching CLAUDE.md: typecheck +
+      # unit tests are the real gate, e2e is a manual pre-landing check, not
+      # a CI gate. It's also not viable as one on this shared 2-core runner
+      # -- headless Chromium + SwiftShader software WebGL + the sim's worker
+      # thread starves for CPU here, so the exact same suite that's a solid
+      # ~30s locally takes 9-13 minutes and times out across most of
+      # apparatus.spec.ts on every single run this repo has ever pushed.
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
